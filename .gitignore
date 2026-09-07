@@ -22,3 +22,29 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# --- DiscoveryHub ---
+
+# Build output
+target/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+
+# Frontend
+node_modules/
+dist/
+.angular/
+
+# Local secrets. Never commit one; infra credentials are dev-only and live in
+# infra/docker-compose.yml deliberately.
+.env
+.env.local
+
+# Corpus regenerated outside fixtures/ — the committed fixture is the one that counts.
+/corpus-out/
