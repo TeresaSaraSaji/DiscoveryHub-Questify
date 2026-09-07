@@ -45,15 +45,19 @@ echo "buckets"
 docker exec dh-minio mc alias set smoke http://localhost:9000 minioadmin minioadmin >/dev/null 2>&1
 docker exec dh-minio mc ls smoke 2>/dev/null | awk '{printf "  %s\n", $NF}'
 
-# Round trip a message through the broker from the host's perspective. This is the check that
-# catches a misconfigured advertised.listeners, which is the failure everyone hits and nobody
-# diagnoses quickly.
+# Round trip a message through the broker. This is the check that catches a misconfigured
+# advertised.listeners, which is the failure everyone hits and nobody diagnoses quickly.
+#
+# On a throwaway topic, never on a real one. A plain-text probe sitting in audit.events would be
+# the first thing P5's deserializer chokes on, and the last place anyone would look.
 echo
 echo "kafka round trip"
+docker exec dh-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
+  --create --if-not-exists --topic smoke.probe --partitions 1 --replication-factor 1 >/dev/null 2>&1
 docker exec dh-kafka bash -c \
-  'echo "smoke-$$" | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic audit.events >/dev/null 2>&1'
+  'echo "smoke-$$" | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic smoke.probe >/dev/null 2>&1'
 got=$(docker exec dh-kafka timeout 20 /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 --topic audit.events --from-beginning --max-messages 1 2>/dev/null | head -1)
+  --bootstrap-server localhost:9092 --topic smoke.probe --from-beginning --max-messages 1 2>/dev/null | head -1)
 if [ -n "$got" ]; then
   printf "  \033[32mok\033[0m    produced and consumed (%s)\n" "$got"; pass=$((pass+1))
 else
