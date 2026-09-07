@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: ingestion
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 500ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Boot 4 ships Jackson 3 (tools.jackson). The older JsonSerializer is Jackson 2 based and
+      # fails at first send with NoClassDefFoundError on com.fasterxml.jackson.databind.JavaType.
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      acks: all
+      retries: 5
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 15000
+        request.timeout.ms: 5000
+    properties:
+      spring.json.add.type.headers: false
+
+server:
+  port: ${SERVER_PORT:8081}
+
+discoveryhub:
+  ingestion:
+    dedupe-ttl: P7D
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+  health:
+    redis:
+      enabled: true
+
+logging:
+  level:
+    com.discoveryhub: INFO
