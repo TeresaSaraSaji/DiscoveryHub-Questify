@@ -118,7 +118,7 @@ public class IngestService {
         if (m.type() == MessageType.EMAIL && isBlank(m.subject())) {
             return "subject is required on EMAIL";
         }
-        return null;
+        return AttachmentIntegrity.check(m);
     }
 
     /**

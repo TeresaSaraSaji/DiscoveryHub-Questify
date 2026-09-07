@@ -47,7 +47,8 @@ class IngestServiceTest {
                 null, "EXCH-att", "EXCHANGE", MessageType.EMAIL, "alice", "alice@firm.test",
                 List.of("bob@firm.test"), List.of(), "Q2 numbers", "see attached",
                 Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null,
-                List.of(new Attachment(null, "q2.xlsx", "application/vnd.ms-excel", 1024, "abc123", "AAAA")),
+                List.of(new Attachment(null, "q2.xlsx", "application/vnd.ms-excel", 3,
+                        "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c", "AAAA")),
                 List.of());
 
         service.ingest(List.of(withAttachment));

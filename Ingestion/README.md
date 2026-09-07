@@ -53,6 +53,15 @@ or rejected on its own, and the response reports per-item outcomes plus totals.
 | `REJECTED` | Failed validation, with a `reason` | 200 |
 | `FAILED` | Infrastructure failure; retry the message | 503 |
 
+An oversized batch (more than `max-batch-size`, default 1000) or an oversized body (more than
+`max-request-bytes`, default 16 MB) is refused whole with 413 — never partially ingested, because
+a client given a partial result has no way to tell which messages were dropped.
+
+Attachments are verified at the boundary: `sha256` is recomputed from `contentBase64` and
+`sizeBytes` is checked against the decoded length. A mismatch is a per-item `REJECTED` with the
+computed hash in the reason. FR-6.5 anchors the chain of custody on that value, so trusting the
+client's copy of it would surface much later as a failed export verification.
+
 Design points worth knowing:
 
 - **Two identifiers.** `externalId` is the source system's key and the only thing dedupe operates
@@ -130,11 +139,30 @@ These are unit tests against in-memory fakes, so they stay green even if the Kaf
 broken. The real path is only covered by the manual checks above; Testcontainers would close that
 gap.
 
+## Measured against the full corpus
+
+Loading all 12,025 fixture messages (`--batch-size 250`) with empty dedupe state:
+
+| | |
+|---|---|
+| Accepted | 12,000 |
+| Deduped | 25 (the deliberate re-sends) |
+| Rejected / failed | 0 / 0 |
+| Throughput | ~151 msg/s (80 s) |
+
+Posting the identical file a second time published **zero** new messages — `messages.ingested`
+did not move and all 12,025 became `message.deduped`. That is FR-1.6 demonstrated at scale.
+
+The second run took 1.9 s rather than 80 s, which locates the first-run bottleneck precisely:
+`publishIngested` blocks on the broker ack for every message, and the dedupe short-circuit skips
+that entirely. Batching or pipelining the sends is the obvious optimisation if 151 msg/s ever
+matters; it does not yet, since a full load is a one-off.
+
+Zero rejections also means all 1,304 attachments in the corpus passed hash and size verification,
+so the generator and P1 agree on `sha256`.
+
 ## Known gaps
 
-- `sha256` on attachments is accepted on trust — P1 does not recompute it from `contentBase64`,
-  even though FR-6.5 anchors the whole chain of custody on that value.
-- Batch size is unbounded; a large array is held in memory.
 - No Dockerfile, so NFR-4 (single-command startup) is not met yet.
 - No JaCoCo, so there is no coverage report for deliverable 3.
 - Dedupe keys carry a 7-day TTL, so re-loading the same corpus after a week re-publishes it. P2's

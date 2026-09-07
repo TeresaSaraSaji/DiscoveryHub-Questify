@@ -29,6 +29,8 @@ server:
 discoveryhub:
   ingestion:
     dedupe-ttl: P7D
+    max-batch-size: 1000
+    max-request-bytes: 16777216
 
 management:
   endpoints:

@@ -2,6 +2,7 @@ package com.discoveryhub.ingestion.api;
 
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.ingestion.service.IngestService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,15 +17,26 @@ import java.util.List;
 public class IngestController {
 
     private final IngestService ingestService;
+    private final int maxBatchSize;
 
-    public IngestController(IngestService ingestService) {
+    public IngestController(IngestService ingestService,
+                            @Value("${discoveryhub.ingestion.max-batch-size:1000}") int maxBatchSize) {
         this.ingestService = ingestService;
+        this.maxBatchSize = maxBatchSize;
     }
 
     @PostMapping
     public ResponseEntity<IngestResponse> ingest(@RequestBody List<Message> batch) {
         if (batch == null || batch.isEmpty()) {
             return ResponseEntity.badRequest().body(IngestResponse.of(List.of()));
+        }
+        if (batch.size() > maxBatchSize) {
+            // Refused whole rather than truncated: a client that gets a partial result for an
+            // oversized batch has no way to tell which messages were dropped.
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body(IngestResponse.of(List.of(IngestResult.rejected(null,
+                            "batch of " + batch.size() + " exceeds the limit of " + maxBatchSize
+                                    + "; post smaller batches"))));
         }
         IngestResponse response = ingestService.ingest(batch);
         // Duplicates and validation rejections are reported per item on a 2xx; only an
