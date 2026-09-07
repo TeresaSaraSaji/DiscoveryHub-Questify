@@ -40,9 +40,20 @@ management:
   endpoint:
     health:
       show-details: always
+      group:
+        # What a load balancer should ask about: can this instance accept a message right now?
+        # Kafka can stop that, Redis cannot -- see DedupeStoreHealthIndicator.
+        readiness:
+          include: readinessState,kafka
+        # Liveness must not depend on anything remote, or a broker blip restarts every pod.
+        liveness:
+          include: livenessState
   health:
+    # Replaced by DedupeStoreHealthIndicator. The stock contributor reports DOWN when Redis is
+    # unreachable, which contradicts RedisDedupeStore failing open and would have a probe evict an
+    # instance that is deliberately still serving.
     redis:
-      enabled: true
+      enabled: false
 
 logging:
   level:

@@ -5,6 +5,7 @@ import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.ingestion.api.IngestResponse;
 import com.discoveryhub.ingestion.api.IngestResult;
+import com.discoveryhub.ingestion.api.MessageBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,22 +39,28 @@ public class IngestService {
      * repeated entry cannot reject the other 199. Every audit event from one call shares a
      * correlation id so P5 can reconstruct the batch.
      */
-    public IngestResponse ingest(List<Message> batch) {
+    public IngestResponse ingest(MessageBatch batch) {
         String correlationId = UUID.randomUUID().toString();
         List<IngestResult> results = new ArrayList<>(batch.size());
-        for (Message incoming : batch) {
-            results.add(ingestOne(incoming, correlationId));
+        for (MessageBatch.Entry entry : batch.entries()) {
+            // An element that never decoded is rejected exactly like one that failed validation:
+            // it is that message's problem, and the rest of the batch carries on.
+            results.add(entry.rejection() == null
+                    ? ingestOne(entry.message(), correlationId)
+                    : reject(entry.externalId(), entry.rejection(), correlationId));
         }
         return IngestResponse.of(results);
+    }
+
+    /** Convenience for callers that already hold decoded messages, such as tests. */
+    public IngestResponse ingest(List<Message> batch) {
+        return ingest(MessageBatch.of(batch));
     }
 
     private IngestResult ingestOne(Message incoming, String correlationId) {
         String rejection = validate(incoming);
         if (rejection != null) {
-            String externalId = incoming == null ? null : incoming.externalId();
-            audit("message.rejected", externalId, AuditEvent.Outcome.REFUSED, correlationId,
-                    Map.of("reason", rejection));
-            return IngestResult.rejected(externalId, rejection);
+            return reject(incoming == null ? null : incoming.externalId(), rejection, correlationId);
         }
 
         Message message = MessageIds.withDerivedIds(incoming);
@@ -85,6 +92,12 @@ public class IngestService {
                         "type", message.type().name(),
                         "attachmentCount", String.valueOf(message.attachments().size())));
         return IngestResult.accepted(externalId, messageId);
+    }
+
+    private IngestResult reject(String externalId, String rejection, String correlationId) {
+        audit("message.rejected", externalId, AuditEvent.Outcome.REFUSED, correlationId,
+                Map.of("reason", rejection));
+        return IngestResult.rejected(externalId, rejection);
     }
 
     private String validate(Message m) {

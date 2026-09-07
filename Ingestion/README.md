@@ -22,7 +22,14 @@ Ingestion/
         ├── api/
         │   ├── IngestController.java     POST /messages
         │   ├── IngestResponse.java       batch totals
-        │   └── IngestResult.java         per-message outcome
+        │   ├── IngestResult.java         per-message outcome
+        │   ├── MessageBatch.java         a body decoded element by element
+        │   ├── MessageBatchDecoder.java  raw JSON → MessageBatch
+        │   ├── IngestExceptionHandler.java  keeps every response an IngestResponse
+        │   └── RequestSizeFilter.java    body size cap, enforced by counting
+        ├── health/
+        │   ├── KafkaHealthIndicator.java       the dependency that can fail P1
+        │   └── DedupeStoreHealthIndicator.java the one that cannot
         └── service/
             ├── IngestService.java        validate → derive ids → dedupe → publish → audit
             ├── MessageIds.java           assigns messageId / attachmentIds from externalId
@@ -55,7 +62,15 @@ or rejected on its own, and the response reports per-item outcomes plus totals.
 
 An oversized batch (more than `max-batch-size`, default 1000) or an oversized body (more than
 `max-request-bytes`, default 16 MB) is refused whole with 413 — never partially ingested, because
-a client given a partial result has no way to tell which messages were dropped.
+a client given a partial result has no way to tell which messages were dropped. The body cap is
+enforced on `Content-Length` when there is one and by counting bytes when there is not, since a
+chunked request declares no length and a cap that only reads the header is no cap at all.
+
+"Not atomic" includes messages that never decoded. An element Jackson cannot convert — an unknown
+`type`, a null inside `to` — is one `REJECTED` with the offending field in its `reason`, not a
+failed batch, and its `externalId` is recovered from the raw JSON so a loader knows what to fix.
+Every response to `POST /messages` is an `IngestResponse`, including 400s and 413s, so a client has
+one shape to parse.
 
 Attachments are verified at the boundary: `sha256` is recomputed from `contentBase64` and
 `sizeBytes` is checked against the decoded length. A mismatch is a per-item `REJECTED` with the
@@ -97,6 +112,18 @@ curl -s localhost:8081/actuator/health
 Configuration is in `service/src/main/resources/application.yml`, overridable by environment:
 `SERVER_PORT` (8081), `KAFKA_BOOTSTRAP` (localhost:9092), `REDIS_HOST`, `REDIS_PORT`.
 
+### What health means here
+
+Point probes at `/actuator/health/readiness`, not `/actuator/health`.
+
+Only Kafka can make P1 unready. `publishIngested` blocks on the broker ack before the API says
+ACCEPTED, so an unreachable broker means no request can succeed — and Boot ships no Kafka
+contributor, so `KafkaHealthIndicator` provides one. Redis deliberately cannot: `RedisDedupeStore`
+fails open, so `DedupeStoreHealthIndicator` stays UP and reports `dedupe: degraded` in the details
+instead. Boot's stock `redis` contributor is disabled because it does the opposite, and a probe
+reading it would evict the instance that failing open exists to keep serving. `liveness` depends on
+nothing remote, so a broker blip cannot restart every pod.
+
 ### Load the corpus through it
 
 ```bash
@@ -130,14 +157,19 @@ docker exec dh-redis redis-cli --scan --pattern 'dh:ingest:extid:*' \
 cd .. && mvn -pl Ingestion/contracts,Ingestion/service test
 ```
 
-12 tests: `IdsTest` pins deterministic id derivation, `IngestServiceTest` covers dedupe, the
-two-mailbox case, per-item rejection, the CHAT/EMAIL subject asymmetry, and claim release on
-publish failure. One test injects a broker failure and **logs a `broker down` stack trace on
-purpose** — read the `Tests run:` line, not the stack trace.
+Both modules, always — `contracts` is not installed to the local repo, so `-pl Ingestion/service`
+on its own fails to resolve it.
 
-These are unit tests against in-memory fakes, so they stay green even if the Kafka wiring is
-broken. The real path is only covered by the manual checks above; Testcontainers would close that
-gap.
+34 tests. `IdsTest` pins deterministic id derivation. `IngestServiceTest` covers dedupe, the
+two-mailbox case, per-item rejection, the CHAT/EMAIL subject asymmetry, and claim release on
+publish failure. `IngestControllerTest` hands the controller raw JSON rather than `Message` records,
+because binding is where a batch can stop being per-item and a test built from records cannot see
+that. `RequestSizeFilterTest` covers the undeclared-length body. `HealthIndicatorTest` pins which
+dependency is allowed to fail the service. One test injects a broker failure and **logs a
+`broker down` stack trace on purpose** — read the `Tests run:` line, not the stack trace.
+
+Publishing is still faked, so the Kafka wiring itself is only covered by the manual checks above;
+Testcontainers would close that gap.
 
 ## Measured against the full corpus
 
