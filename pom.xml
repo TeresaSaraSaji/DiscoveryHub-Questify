@@ -11,8 +11,9 @@
   <name>DiscoveryHub</name>
 
   <modules>
-    <module>contracts</module>
-    <module>services/ingestion</module>
+    <module>Ingestion/contracts</module>
+    <module>Ingestion/service</module>
+    <module>Corpus/corpus-generator</module>
   </modules>
 
   <properties>
@@ -58,6 +59,11 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.2.5</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>3.5.3</version>
         </plugin>
       </plugins>
     </pluginManagement>

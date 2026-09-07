@@ -1,0 +1,20 @@
+{
+  "seed" : 20240906,
+  "uniqueMessages" : 12000,
+  "duplicateMessages" : 25,
+  "custodians" : 24,
+  "messagesSha256" : "8e35f5b96f550b10d6290f137dd13b59a581c3d0452e71e91d054a1d9731493a",
+  "emails" : 7199,
+  "chats" : 4801,
+  "withAttachments" : 1304,
+  "attachmentRatePct" : 10.87,
+  "attachmentBytes" : 1778727,
+  "distinctThreads" : 2880,
+  "earliestSentAt" : "2017-01-03T08:31:50Z",
+  "latestSentAt" : "2026-09-04T00:22:46Z",
+  "pastRetentionDefault" : 2115,
+  "privilegedMessages" : 5,
+  "halyardMentions" : 8,
+  "minMessagesPerCustodian" : 337,
+  "maxMessagesPerCustodian" : 879
+}
