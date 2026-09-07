@@ -5,11 +5,13 @@ FR-1.2 and FR-1.3 require us to build one: at least 10,000 messages across at le
 with at least 5% carrying attachments. This folder is that generator plus the committed output it
 produces.
 
+This file consolidates the generator author's original notes, which previously lived in a second
+README inside `corpus-generator/`.
+
 ```
 Corpus/
 ├── corpus-generator/          Java CLI that generates the corpus
 │   ├── pom.xml
-│   ├── README.md              the original notes from the generator's author
 │   └── src/main/java/com/discoveryhub/tools/corpus/
 │       ├── CorpusGenerator.java   entry point: parse options, generate, write or POST
 │       ├── Options.java           command line parsing and defaults
@@ -123,6 +125,8 @@ From `fixtures/manifest.json`, verified by re-running `--stats`:
 | Privileged messages | 5 |
 
 Comfortably clears the FR-1.2 floor (10,000 / 20) and doubles the FR-1.3 attachment floor (5%).
+
+Type is held constant within a thread — an email thread never turns into a chat halfway through.
 
 The 60/40 email-chat split is **steered, not sampled**: chat threads run longer than email
 threads, so a fixed per-thread probability lands nowhere near a target expressed in messages. Each
