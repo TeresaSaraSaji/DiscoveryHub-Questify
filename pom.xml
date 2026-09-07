@@ -13,28 +13,35 @@
   <modules>
     <module>contracts</module>
     <module>tools/corpus-generator</module>
+    <module>services/ingestion</module>
+    <module>services/archive</module>
+    <module>services/search</module>
+    <module>services/cases</module>
+    <module>services/evidence</module>
   </modules>
 
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <jackson.version>2.17.2</jackson.version>
-    <junit.version>5.10.3</junit.version>
+    <spring-boot.version>4.1.1</spring-boot.version>
+    <awssdk.version>2.39.0</awssdk.version>
   </properties>
 
   <dependencyManagement>
     <dependencies>
+      <!-- Imported first so Boot governs Jackson, JUnit, Kafka and the rest. One version of
+           everything across five services is worth more than any individual pin. -->
       <dependency>
-        <groupId>com.fasterxml.jackson</groupId>
-        <artifactId>jackson-bom</artifactId>
-        <version>${jackson.version}</version>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
       <dependency>
-        <groupId>org.junit</groupId>
-        <artifactId>junit-bom</artifactId>
-        <version>${junit.version}</version>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${awssdk.version}</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -49,6 +56,22 @@
   <build>
     <pluginManagement>
       <plugins>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring-boot.version}</version>
+          <!-- We inherit from our own parent rather than spring-boot-starter-parent, so the
+               repackage goal is not bound for us. Without this the jars build fine and fail at
+               run time with "no main manifest attribute". -->
+          <executions>
+            <execution>
+              <id>repackage</id>
+              <goals>
+                <goal>repackage</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>

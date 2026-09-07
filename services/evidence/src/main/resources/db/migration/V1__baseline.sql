@@ -1,0 +1,10 @@
+-- P5 Evidence and Audit — baseline. Owner: D.
+--
+-- Intentionally empty. Add V2__audit.sql and V3__exports.sql with your schema.
+--
+-- Append-only is a requirement (FR-7.3), and enforcing it only in application code is not
+-- enforcing it. Once the audit table exists, revoke the ability to change it:
+--
+--   REVOKE UPDATE, DELETE ON audit_events FROM audit;
+--
+-- Then a bug cannot rewrite history, and you can say so in the demo and mean it.

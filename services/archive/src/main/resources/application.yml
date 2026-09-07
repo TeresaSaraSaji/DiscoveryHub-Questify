@@ -1,0 +1,69 @@
+spring:
+  application:
+    name: archive
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/archive
+    username: archive
+    password: archive
+
+  jpa:
+    # Schema comes from Flyway, never from Hibernate. validate fails loudly on drift instead of
+    # quietly altering the system of record.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: p2-archive
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Wrapped so one malformed record cannot wedge the consumer in a permanent retry loop.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: com.discoveryhub.contracts
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+
+discoveryhub:
+  s3:
+    endpoint: http://localhost:9000
+    region: us-east-1
+    access-key: minioadmin
+    secret-key: minioadmin
+    bucket: archive-attachments
+    # MinIO needs path-style; virtual-host style would resolve bucket.localhost.
+    path-style-access: true
+  retention:
+    # FR-5 default. Anything inside an active hold is exempt, checked synchronously against P4.
+    default-period: P2555D
+
+server:
+  port: 8082
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG

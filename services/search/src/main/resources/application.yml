@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: search
+
+  elasticsearch:
+    uris: http://localhost:9200
+    connection-timeout: 2s
+    # NFR-3 gives the whole query two seconds. A socket read allowed to run longer than that is
+    # already a failed request holding a thread.
+    socket-timeout: 2s
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: p3-search
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: com.discoveryhub.contracts
+      # Indexing one document per round trip will not hold FR-1.7 across 12,000 messages.
+      # Batch and use the bulk API.
+      max-poll-records: 500
+    listener:
+      type: batch
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+discoveryhub:
+  index:
+    name: messages
+
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG

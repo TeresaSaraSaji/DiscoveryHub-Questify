@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: ingestion
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # Redis is an optimisation, not the guarantee. The unique constraint on externalId in P2 is
+      # what actually prevents duplicates, so a flushed cache costs throughput, not correctness.
+      timeout: 2s
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      # Ingestion accepts a message and promises it is safe. That promise is only true once the
+      # broker has it durably, so this path does not trade durability for latency.
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG

@@ -1,0 +1,8 @@
+-- P4 Case and Hold — baseline. Owner: C.
+--
+-- Intentionally empty. Add V2__cases.sql with your schema.
+--
+-- The modelling decision that decides whether hold propagation works: a message can be covered by
+-- more than one hold at a time, and it is released only when the last one is lifted. Model holds
+-- and their coverage as separate rows rather than putting a boolean on the message. A flag cannot
+-- answer "is anything still holding this?" and you will discover that on Day 3.
