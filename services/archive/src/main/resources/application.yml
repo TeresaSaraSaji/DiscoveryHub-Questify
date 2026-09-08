@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: archive
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/archive
+    username: archive
+    password: archive
+
+  jpa:
+    # Schema comes from Flyway, never from Hibernate. validate fails loudly on drift instead of
+    # quietly altering the system of record.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: p2-archive
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Spring Kafka's JsonDeserializer/JsonSerializer are built against Jackson 2, but Boot 4.1
+      # ships Jackson 3 on the classpath. Rather than carry two Jackson majors just for Kafka
+      # serdes, we use plain String serdes and parse/serialise JSON in the listeners and publisher
+      # with the Jackson 3 ObjectMapper that Boot auto-configures. Malformed records are caught in
+      # the listener and logged, so one bad message cannot wedge the consumer.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+
+discoveryhub:
+  archive:
+    # P4 Case & Hold base URL, for the synchronous disposition guard (architecture decision 4).
+    hold-check-base-url: http://localhost:8084
+    hold-check-timeout: 5s
+  retention:
+    # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
+    # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.
+    default-period: P2555D
+    per-type:
+      EMAIL: P2555D
+      CHAT: P1095D
+    schedule:
+      enabled: true
+      # Every 5 minutes by default. With minute-scale retention this gives the demo a visible
+      # sweep; with day-scale retention it is an off-peak check that is usually a no-op.
+      cron: "0 */5 * * * *"
+
+server:
+  port: 8082
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG
