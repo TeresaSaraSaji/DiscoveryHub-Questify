@@ -52,6 +52,23 @@ services:
       # with one partition that nothing ever produces to.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+      # 10 MiB, up from the 1,048,588 byte default, because messages carry their attachments as
+      # base64 and base64 inflates by a third — the default rejects any attachment over ~750 KB,
+      # which is an ordinary scanned invoice. The corpus never exposed this: its attachments are
+      # 200 bytes to 3 KB.
+      #
+      # This is a ceiling, not a solution. Kafka is not a blob store, and every consumer now has
+      # to be willing to fetch 10 MiB records. If real-world attachments start exceeding this,
+      # move to a claim check — P1 writes bytes to MinIO and publishes only a reference — rather
+      # than raising the number again.
+      #
+      # Four settings have to agree, and a missing one fails at a different layer each time:
+      # broker (here), topic (create-topics.sh), producer max.request.size, consumer
+      # max.partition.fetch.bytes.
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
+      KAFKA_MAX_REQUEST_SIZE: 10485760
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:

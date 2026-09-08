@@ -23,6 +23,11 @@ TOPICS=(
   "audit.events:6"
 )
 
+# Must match KAFKA_MESSAGE_MAX_BYTES on the broker. A topic silently keeps the 1 MiB default
+# otherwise, so the broker accepts the setting, the producer is configured for it, and the write
+# still fails — at the topic, which is the last place anyone looks.
+MAX_MESSAGE_BYTES=10485760
+
 echo "waiting for broker at ${BOOTSTRAP}"
 until "${CLI}" --bootstrap-server "${BOOTSTRAP}" --list >/dev/null 2>&1; do
   sleep 2
@@ -35,8 +40,15 @@ for entry in "${TOPICS[@]}"; do
     --create --if-not-exists \
     --topic "${name}" \
     --partitions "${partitions}" \
-    --replication-factor 1
-  echo "  ${name} (${partitions} partitions)"
+    --replication-factor 1 \
+    --config "max.message.bytes=${MAX_MESSAGE_BYTES}"
+  # --create is a no-op on an existing topic, so apply the limit separately too. Without this, a
+  # topic created before this setting existed keeps the 1 MiB default forever and the failure
+  # only appears for whoever first sends a large attachment.
+  /opt/kafka/bin/kafka-configs.sh --bootstrap-server "${BOOTSTRAP}" \
+    --alter --entity-type topics --entity-name "${name}" \
+    --add-config "max.message.bytes=${MAX_MESSAGE_BYTES}" >/dev/null
+  echo "  ${name} (${partitions} partitions, max ${MAX_MESSAGE_BYTES} bytes)"
 done
 
 echo
