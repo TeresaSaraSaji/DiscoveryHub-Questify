@@ -30,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -187,5 +188,146 @@ class CaseServiceTest {
                 .isInstanceOf(CaseReadOnlyException.class);
 
         verify(evidence, never()).deleteByCaseIdAndMessageId(any(), any());
+    }
+
+    @Test
+    void updateCaseAppliesProvidedFields() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(cases.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        CaseEntity result = service.updateCase("case-1",
+                new CaseRequest("new name", "new desc", MatterType.LITIGATION, "new owner"));
+
+        assertThat(result.getName()).isEqualTo("new name");
+        assertThat(result.getDescription()).isEqualTo("new desc");
+        assertThat(result.getMatterType()).isEqualTo(MatterType.LITIGATION);
+        assertThat(result.getOwner()).isEqualTo("new owner");
+        assertThat(result.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void updateCaseOnClosedCaseIsRefused() {
+        CaseEntity entity = new CaseEntity("case-1", "n", "d", MatterType.LITIGATION, "o",
+                CaseStatus.CLOSED, Instant.now());
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+
+        assertThatThrownBy(() -> service.updateCase("case-1",
+                new CaseRequest("x", null, null, null)))
+                .isInstanceOf(CaseReadOnlyException.class);
+
+        verify(cases, never()).save(any());
+    }
+
+    @Test
+    void updateCaseBlankDescriptionBecomesNull() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(cases.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        CaseEntity result = service.updateCase("case-1",
+                new CaseRequest(null, "   ", null, null));
+
+        assertThat(result.getDescription()).isNull();
+    }
+
+    @Test
+    void getCaseThrowsNotFoundWhenMissing() {
+        when(cases.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getCase("missing"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(ex -> {
+                    org.springframework.web.server.ResponseStatusException rse =
+                            (org.springframework.web.server.ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode().value()).isEqualTo(404);
+                });
+    }
+
+    @Test
+    void removeEvidenceThrowsNotFoundWhenNotOnCase() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(evidence.existsByCaseIdAndMessageId("case-1", "msg-99")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.removeEvidence("case-1", "msg-99"))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+    }
+
+    @Test
+    void addCustodianWithBlankIdThrowsBadRequest() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+
+        assertThatThrownBy(() -> service.addCustodian("case-1", new AddCustodianRequest("  ")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(ex -> {
+                    org.springframework.web.server.ResponseStatusException rse =
+                            (org.springframework.web.server.ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode().value()).isEqualTo(400);
+                });
+    }
+
+    @Test
+    void addEvidenceWithBlankMessageIdThrowsBadRequest() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+
+        assertThatThrownBy(() -> service.addEvidence("case-1", new AddEvidenceRequest("  ", null, null)))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(ex -> {
+                    org.springframework.web.server.ResponseStatusException rse =
+                            (org.springframework.web.server.ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode().value()).isEqualTo(400);
+                });
+    }
+
+    @Test
+    void addEvidenceBatchWithEmptyListReturnsZeros() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+
+        BulkEvidenceResult result = service.addEvidenceBatch("case-1",
+                new AddEvidenceBatchRequest(List.of(), null, null));
+
+        assertThat(result.requested()).isZero();
+        assertThat(result.added()).isZero();
+        assertThat(result.alreadyPresent()).isZero();
+    }
+
+    @Test
+    void addEvidenceBatchSkipsBlankMessageIds() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(evidence.findMessageIdsByCaseId("case-1")).thenReturn(List.of());
+        when(evidence.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        BulkEvidenceResult result = service.addEvidenceBatch("case-1",
+                new AddEvidenceBatchRequest(java.util.Arrays.asList("msg-1", "  ", "msg-2"), EvidenceSource.SEARCH, null));
+
+        assertThat(result.added()).isEqualTo(2);
+    }
+
+    @Test
+    void statsReturnsCorrectCounts() {
+        when(cases.count()).thenReturn(10L);
+        when(cases.countByStatus(CaseStatus.ACTIVE)).thenReturn(3L);
+        when(cases.countByStatus(CaseStatus.UNDER_REVIEW)).thenReturn(2L);
+        when(cases.countByStatus(CaseStatus.CLOSED)).thenReturn(5L);
+
+        Map<String, Object> stats = service.stats();
+
+        assertThat(stats).containsEntry("totalCases", 10L);
+        assertThat(stats).containsEntry("activeCases", 5L);
+        assertThat(stats).containsEntry("closedCases", 5L);
+    }
+
+    @Test
+    void custodianIdsForReturnsIdsFromRepository() {
+        when(custodians.findCustodianIdsByCaseId("case-1")).thenReturn(List.of("cust-1", "cust-2"));
+
+        List<String> ids = service.custodianIdsFor("case-1");
+
+        assertThat(ids).containsExactly("cust-1", "cust-2");
     }
 }

@@ -132,4 +132,89 @@ class HoldServiceTest {
 
         assertThat(count).isEqualTo(8);
     }
+
+    @Test
+    void getHoldThrowsNotFoundWhenMissing() {
+        when(holds.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getHold("missing"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(404));
+    }
+
+    @Test
+    void releaseNonExistentHoldThrowsNotFound() {
+        when(holds.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.releaseHold("missing", "reason"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(404));
+    }
+
+    @Test
+    void releaseHoldWithNullReasonDefaultsToManualRelease() {
+        HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findById("hold-1")).thenReturn(Optional.of(hold));
+        when(coverage.findMessageIdsByHoldId("hold-1")).thenReturn(List.of());
+        when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        HoldEntity result = service.releaseHold("hold-1", null);
+
+        assertThat(result.getReleasedReason()).isEqualTo("manual release");
+    }
+
+    @Test
+    void listHoldsForCaseDelegatesToRepository() {
+        HoldEntity h = new HoldEntity("h1", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findByCaseIdOrderByPlacedAtDesc("case-1")).thenReturn(List.of(h));
+
+        List<HoldEntity> result = service.listHoldsForCase("case-1");
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getHoldId()).isEqualTo("h1");
+    }
+
+    @Test
+    void listHoldsByStatusDelegatesToRepository() {
+        when(holds.findByStatus(HoldStatus.FAILED)).thenReturn(List.of());
+
+        List<HoldEntity> result = service.listHoldsByStatus(HoldStatus.FAILED);
+
+        assertThat(result).isEmpty();
+        verify(holds).findByStatus(HoldStatus.FAILED);
+    }
+
+    @Test
+    void heldMessageCountForCaseWithNoActiveHoldsReturnsZero() {
+        when(holds.findByCaseIdAndStatus("case-1", HoldStatus.ACTIVE)).thenReturn(List.of());
+
+        long count = service.heldMessageCountForCase("case-1");
+
+        assertThat(count).isZero();
+    }
+
+    @Test
+    void statsReturnsCountsForEachStatus() {
+        when(holds.countByStatus(HoldStatus.ACTIVE)).thenReturn(3L);
+        when(holds.countByStatus(HoldStatus.RESOLVING)).thenReturn(1L);
+        when(holds.countByStatus(HoldStatus.RELEASED)).thenReturn(2L);
+        when(holds.countByStatus(HoldStatus.FAILED)).thenReturn(0L);
+
+        java.util.Map<String, Object> stats = service.stats();
+
+        assertThat(stats).containsEntry("activeHolds", 3L);
+        assertThat(stats).containsEntry("resolvingHolds", 1L);
+        assertThat(stats).containsEntry("releasedHolds", 2L);
+        assertThat(stats).containsEntry("failedHolds", 0L);
+    }
+
+    @Test
+    void placeHoldWithNoCustodiansThrowsViaBuilder() {
+        when(caseStatus.isCaseClosed("case-1")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.placeHold("case-1",
+                new HoldScope(List.of(), null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least one custodian");
+    }
 }
