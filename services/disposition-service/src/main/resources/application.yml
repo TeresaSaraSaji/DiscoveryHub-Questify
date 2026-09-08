@@ -1,0 +1,122 @@
+spring:
+  application:
+    name: disposition
+
+  # This service's own database (NFR-1). Flyway and JPA bind here because the bean is @Primary;
+  # see config/DataSourceConfig for why both datasources have to be declared by hand.
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5436/disposition}
+    username: ${DB_USER:disposition}
+    password: ${DB_PASSWORD:disposition}
+
+  jpa:
+    # Schema comes from Flyway, never from Hibernate. validate fails loudly on drift.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Plain String serdes, with JSON done by hand in DispositionKafkaPublisher: Spring Kafka's
+      # JsonSerializer is built against Jackson 2 and Boot 4.1 ships Jackson 3. Same call P1 and P2
+      # made — one Jackson major in the build.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+
+discoveryhub:
+  retention:
+    # Seed values only. Written to `retention_policies` for any type missing a row on startup;
+    # after that the table is authoritative and changes go through
+    # PUT /retention/policies/{type}. So editing these does not change a running system — that is
+    # deliberate, see run/RetentionPolicyService.
+    defaults:
+      fallback: P2555D
+      per-type:
+        EMAIL: P2555D   # seven years
+        CHAT: P1095D    # three years
+
+  disposition:
+    # ARCHIVE_DB deletes from P2's database directly; KAFKA publishes to disposition.commands and
+    # lets P2 own the write. KAFKA is the intended destination and needs one consumer on P2's side
+    # — see DISPOSITION.md. Switching is this line and nothing else.
+    delete-mode: ARCHIVE_DB
+
+    # Candidates per run, oldest first. The corpus is 10,000+ messages (NFR-3); a bounded sweep
+    # keeps memory flat and progress monotonic, and the cron picks up the remainder.
+    batch-size: 500
+
+    hold-check:
+      # The synchronous guard against P4 before anything is deleted (FR-4.2, FR-5.2).
+      enabled: true
+
+      # Fail closed: an unreachable P4 means a candidate's hold status cannot be verified, and an
+      # unverified message is never deleted. While P4 does not exist this makes every sweep a
+      # no-op that skips all its candidates — which looks like the service doing nothing and is in
+      # fact the service doing the single most important thing it does.
+      #
+      # Do not default this to false to make a demo produce deletions. The corpus contains mail
+      # older than the seven-year default and chats older than the three-year one, so a sweep with
+      # `required: false` and P4 down deletes real corpus messages, batch-size at a time, every
+      # time the cron fires. To demo deletion, set it false explicitly and deliberately for the
+      # length of the demo:
+      #
+      #   --discoveryhub.disposition.hold-check.required=false
+      #
+      # and prefer POST /disposition/runs?dryRun=true first to see the blast radius.
+      required: true
+      timeout: 5s
+
+    schedule:
+      enabled: true
+      # Every five minutes. With minute-scale retention that gives the demo a visible sweep; with
+      # year-scale retention it is a cheap check that is almost always a no-op.
+      cron: "0 */5 * * * *"
+
+    archive:
+      # P4 Case & Hold, for the hold check.
+      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
+
+      # P2's archive database. Read for the eligibility query; written only by the single guarded
+      # DELETE in archive/JdbcMessageDeleter, and only in ARCHIVE_DB delete mode. No Flyway and no
+      # entities point here — adding a second migration history to P2's database would break P2 on
+      # startup under ddl-auto: validate.
+      datasource:
+        url: ${ARCHIVE_DB_URL:jdbc:postgresql://localhost:5433/archive}
+        username: ${ARCHIVE_DB_USER:archive}
+        password: ${ARCHIVE_DB_PASSWORD:archive}
+        hikari:
+          # Small: this pool serves a periodic batch job, not request traffic, and it is borrowing
+          # connections from another service's database.
+          maximum-pool-size: 4
+          pool-name: archive-readwrite
+
+server:
+  port: ${SERVER_PORT:8086}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.discoveryhub: DEBUG
