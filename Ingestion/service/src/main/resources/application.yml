@@ -20,8 +20,24 @@ spring:
         max.in.flight.requests.per.connection: 5
         delivery.timeout.ms: 15000
         request.timeout.ms: 5000
+        # Must match max.message.bytes on the broker and on the topic. Attachments travel as
+        # base64, which inflates by a third, so the 1 MiB default rejects any attachment over
+        # roughly 750 KB. Configure one layer and not the others and the send still fails, just
+        # further away from the setting you changed.
+        max.request.size: 10485760
+        # Has to be at least max.request.size or the producer cannot buffer a single large record.
+        buffer.memory: 67108864
     properties:
       spring.json.add.type.headers: false
+
+  servlet:
+    multipart:
+      # Upload limits, separate from the JSON body cap below. 64 MiB accommodates the 10.7 MB
+      # corpus fixture with room to spare; Spring's defaults are 1 MB per file and 10 MB per
+      # request, which reject it outright.
+      max-file-size: 64MB
+      max-request-size: 64MB
+      file-size-threshold: 1MB
 
 server:
   port: ${SERVER_PORT:8081}
@@ -31,6 +47,14 @@ discoveryhub:
     dedupe-ttl: P7D
     max-batch-size: 1000
     max-request-bytes: 16777216
+    upload:
+      # Uploads are chunked through the same ingest path rather than held whole in memory, so a
+      # file may carry far more messages than a single API batch is allowed to.
+      chunk-size: 200
+      max-messages: 50000
+      # A 12,000-message file would otherwise return a 12,000-entry result array. Counts are
+      # always exact; only the per-item detail is capped.
+      max-reported-problems: 50
 
 management:
   endpoints:
