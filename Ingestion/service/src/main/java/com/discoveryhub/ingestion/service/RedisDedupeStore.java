@@ -46,6 +46,19 @@ public class RedisDedupeStore implements DedupeStore {
         }
     }
 
+    @Override
+    public boolean isClaimed(String namespace, String key) {
+        try {
+            return Boolean.TRUE.equals(redis.hasKey(redisKey(namespace, key)));
+        } catch (RuntimeException e) {
+            // Fails closed, unlike claim(). "I cannot tell you" must not be reported as "yes, it
+            // was ingested" — a caller checking whether a message arrived would be told it had
+            // when nobody knows.
+            log.warn("dedupe lookup unavailable for {}={}", namespace, key, e);
+            return false;
+        }
+    }
+
     private static String redisKey(String namespace, String key) {
         return PREFIX + namespace + ":" + key;
     }

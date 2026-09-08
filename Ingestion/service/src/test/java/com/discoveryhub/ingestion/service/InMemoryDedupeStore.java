@@ -17,7 +17,12 @@ class InMemoryDedupeStore implements DedupeStore {
         seen.remove(namespace + ":" + key);
     }
 
-    boolean hasClaim(String namespace, String key) {
+    @Override
+    public boolean isClaimed(String namespace, String key) {
         return seen.contains(namespace + ":" + key);
+    }
+
+    boolean hasClaim(String namespace, String key) {
+        return isClaimed(namespace, key);
     }
 }

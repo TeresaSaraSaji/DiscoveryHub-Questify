@@ -167,6 +167,11 @@ class IngestControllerTest {
             public void release(String namespace, String key) {
                 seen.remove(namespace + ":" + key);
             }
+
+            @Override
+            public boolean isClaimed(String namespace, String key) {
+                return seen.contains(namespace + ":" + key);
+            }
         };
     }
 

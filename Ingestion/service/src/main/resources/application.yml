@@ -55,6 +55,18 @@ discoveryhub:
       # A 12,000-message file would otherwise return a 12,000-entry result array. Counts are
       # always exact; only the per-item detail is capped.
       max-reported-problems: 50
+      # Concurrent async uploads. Each holds a chunk in memory, so this is small on purpose and
+      # excess requests are refused rather than queued into an out-of-memory error.
+      workers: 2
+      max-tracked-jobs: 200
+      job-retention: PT2H
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
 
 management:
   endpoints:

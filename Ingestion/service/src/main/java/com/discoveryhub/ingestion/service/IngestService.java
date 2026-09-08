@@ -12,10 +12,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class IngestService {
@@ -29,10 +31,29 @@ public class IngestService {
     private final EventPublisher publisher;
     private final Clock clock;
 
+    // Per-instance and reset on restart, which is exactly what they claim to be. P1 stores no
+    // messages, so it has no basis for a durable total — the archive's count is P2's to report.
+    private final AtomicLong acceptedCount = new AtomicLong();
+    private final AtomicLong duplicateCount = new AtomicLong();
+    private final AtomicLong rejectedCount = new AtomicLong();
+    private final AtomicLong failedCount = new AtomicLong();
+    private final Instant startedAt;
+
     public IngestService(DedupeStore dedupe, EventPublisher publisher, Clock clock) {
         this.dedupe = dedupe;
         this.publisher = publisher;
         this.clock = clock;
+        this.startedAt = clock.instant();
+    }
+
+    /** Whether an {@code externalId} has already been ingested by this deployment. */
+    public boolean hasIngested(String externalId) {
+        return dedupe.isClaimed(DedupeStore.EXTERNAL_ID, externalId);
+    }
+
+    public IngestStats stats() {
+        return new IngestStats(startedAt, acceptedCount.get(), duplicateCount.get(),
+                rejectedCount.get(), failedCount.get());
     }
 
     /**
@@ -50,7 +71,12 @@ public class IngestService {
                     ? ingestOne(entry.message(), correlationId)
                     : reject(entry.externalId(), entry.rejection(), correlationId));
         }
-        return IngestResponse.of(results);
+        IngestResponse response = IngestResponse.of(results);
+        acceptedCount.addAndGet(response.accepted());
+        duplicateCount.addAndGet(response.duplicates());
+        rejectedCount.addAndGet(response.rejected());
+        failedCount.addAndGet(response.failed());
+        return response;
     }
 
     /** Convenience for callers that already hold decoded messages, such as tests. */

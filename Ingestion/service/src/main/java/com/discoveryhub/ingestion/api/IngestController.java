@@ -1,6 +1,8 @@
 package com.discoveryhub.ingestion.api;
 
 import com.discoveryhub.ingestion.service.IngestService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +14,7 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 
+@Tag(name = "Ingestion", description = "Accept messages into DiscoveryHub")
 @RestController
 @RequestMapping("/messages")
 public class IngestController {
@@ -31,6 +34,14 @@ public class IngestController {
      * The body is taken as raw JSON rather than {@code List<Message>} so that converting an element
      * is a per-item concern. See {@link MessageBatch}.
      */
+    @Operation(summary = "Submit a batch of messages",
+            description = """
+                    Takes a JSON array. The batch is not atomic: each message is accepted, deduped
+                    or rejected on its own, and the response reports per-item outcomes, so one bad
+                    message cannot lose the other 999.
+
+                    A duplicate is a 2xx outcome, not an error — a source system re-sending is
+                    normal. Only an infrastructure failure returns a retryable status.""")
     @PostMapping
     public ResponseEntity<IngestResponse> ingest(@RequestBody List<JsonNode> body) {
         if (body == null || body.isEmpty()) {

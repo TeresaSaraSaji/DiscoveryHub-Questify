@@ -30,4 +30,11 @@ public interface DedupeStore {
      * and the message would be dropped on re-send.
      */
     void release(String namespace, String key);
+
+    /**
+     * Whether a key has been seen, without claiming it. Read-only: a lookup must never have the
+     * side effect of marking something as ingested, or checking a message would prevent it from
+     * ever being accepted.
+     */
+    boolean isClaimed(String namespace, String key);
 }

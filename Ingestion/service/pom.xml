@@ -62,6 +62,14 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- The 3.x line targets Spring Framework 7 / Boot 4; 2.x is for Boot 3 and will not start
+         here. Not managed by the Boot BOM, so the version is pinned deliberately. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+      <version>${springdoc.version}</version>
+    </dependency>
+
     <!-- Restarts the app when the classpath changes. Note that a restart re-joins the Kafka
          consumer group, so expect a rebalance pause on every save once P1 consumes anything. -->
     <dependency>

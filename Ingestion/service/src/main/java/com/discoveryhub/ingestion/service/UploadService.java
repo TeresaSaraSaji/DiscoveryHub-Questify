@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongConsumer;
 
 /**
  * Ingests an uploaded file by streaming it through the same {@link IngestService} the HTTP API
@@ -63,6 +64,15 @@ public class UploadService {
     }
 
     public UploadResponse ingest(String filename, InputStream in) throws IOException {
+        return ingest(filename, in, processed -> { });
+    }
+
+    /**
+     * @param onProgress called after each chunk with the running count, so an asynchronous caller
+     *                   can report progress instead of presenting a black box
+     */
+    public UploadResponse ingest(String filename, InputStream in, LongConsumer onProgress)
+            throws IOException {
         Tally tally = new Tally();
         long started = System.currentTimeMillis();
 
@@ -70,6 +80,7 @@ public class UploadService {
             MessageBatch decoded = decoder.decode(chunk);
             IngestResponse response = ingestService.ingest(hydrate(decoded));
             tally.add(response);
+            onProgress.accept(tally.processed());
         });
 
         log.info("upload {}: {} messages, {} accepted, {} duplicates, {} rejected, {} failed in {} ms",
@@ -98,6 +109,10 @@ public class UploadService {
         private int failed;
         private boolean truncated;
         private final List<IngestResult> problems = new ArrayList<>();
+
+        long processed() {
+            return (long) accepted + duplicates + rejected + failed;
+        }
 
         void add(IngestResponse response) {
             accepted += response.accepted();
