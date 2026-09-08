@@ -94,20 +94,34 @@ infrastructure failure returns a retryable status.
 
 Retention and disposition (FR-5) is its own service on **8086**, with its own database. It owns the
 retention policy, the scheduled sweep, and the ledger of what each sweep deleted or skipped.
-Details, and the one Kafka consumer P2 needs to take the delete path off P2.2's hands, are in
-`services/disposition-service/DISPOSITION.md`.
+Details are in `services/disposition-service/DISPOSITION.md`.
+
+It does not write to P2's tables. The sweep publishes a `DeleteCommand` to `disposition.commands`,
+P2's `DispositionCommandListener` applies it under P2's own hold guard, and P2 answers on
+`disposition.results` with a `DeleteReceipt` that settles P2.2's ledger to what actually happened.
+One owner per datastore (NFR-1), and with P2 down the commands queue on the topic and apply when it
+returns (NFR-2).
 
 Two things to know before running it:
 
-- It deletes from P2's archive directly in the default `ARCHIVE_DB` mode, because P2's API is
-  read-only. That is a deliberate, documented seam, not an oversight — read DISPOSITION.md before
-  judging it, and switch `delete-mode: KAFKA` once P2 has a consumer.
 - **The corpus is mostly past retention.** With the real defaults (seven years for email, three for
   chat), ~500 fixture messages are eligible on any given day. So the scheduled sweep ships
   **disabled** — trigger one with `POST /disposition/runs`, ideally `?dryRun=true` first. Enabling
   the cron on this corpus deletes real fixture data every tick; that is correct FR-5 behaviour and
   still not what you want by accident. The hold check also fails closed, so nothing is deleted
   while P4 is down — do not "fix" that by setting `hold-check.required: false` in committed config.
+- **A sweep that skipped everything is not proof that holds work.** Both services fail closed when
+  P4 is unreachable, and the result looks identical to holds doing their job: every message
+  skipped, refusals throughout the audit trail, no errors anywhere. If a sweep deletes nothing,
+  check `CASES_BASE_URL` and P2's logs for `hold check failed` before believing it.
+
+The sweep is bounded by `batch-size` and makes one call to P4 per candidate, so for the UI trigger
+it asynchronously and watch it rather than holding the request open (NFR-3):
+
+```bash
+curl -X POST "localhost:8086/disposition/runs?async=true"   # 202 + a QUEUED run id
+curl -N localhost:8086/disposition/runs/stream              # progress, then the stream closes
+```
 
 It needs three endpoints from **P4**, all specified in DISPOSITION.md:
 
@@ -125,6 +139,7 @@ It needs three endpoints from **P4**, all specified in DISPOSITION.md:
 | Port | What | Owner |
 |---|---|---|
 | 8081 | P1 Ingestion | A |
+| 8082 | P2 Archive | A |
 | 8086 | P2.2 Disposition | Saketh |
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
