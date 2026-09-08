@@ -84,13 +84,24 @@ public class DispositionProgress {
     }
 
     /**
-     * Watch the current run. The latest snapshot is sent immediately so a client that connects
-     * mid-sweep — or just after one finished — sees state rather than an empty stream until the
-     * next candidate happens to be decided.
+     * Watch the sweep. The latest snapshot is sent immediately, so a client that connects
+     * mid-sweep sees state rather than an empty stream until the next candidate is decided, and
+     * one that connects between runs sees how the last one ended.
+     *
+     * <p>The stream then stays open until a run finishes, <b>including when the snapshot it was
+     * handed is already terminal</b>. Closing on a terminal snapshot looks tidier and is wrong:
+     * the normal sequence in the UI is open the stream, then click Run, and a stream that
+     * disconnects the instant it is opened means the client watches nothing and the run it was
+     * opened for is invisible. Observed exactly that way in an end-to-end run — the stream
+     * delivered the *previous* sweep's totals and hung up before the new one started.
+     *
+     * <p>So the contract is "you will see the end of the next run", which covers both connecting
+     * during a sweep and connecting just before one. A client that attaches and never triggers
+     * anything holds an idle connection, which is what SSE is for.
      */
     public SseEmitter watch() {
         // No timeout: a sweep over a full batch can outlast any default, and the emitter is
-        // completed explicitly when the run ends.
+        // completed explicitly when a run ends.
         SseEmitter emitter = new SseEmitter(0L);
         emitter.onCompletion(() -> watchers.remove(emitter));
         emitter.onTimeout(() -> watchers.remove(emitter));
@@ -98,11 +109,6 @@ public class DispositionProgress {
 
         RunProgress snapshot = current.get();
         if (snapshot != null && !send(emitter, snapshot)) {
-            return emitter;
-        }
-        if (snapshot != null && snapshot.terminal()) {
-            // Nothing further will ever be published for this run; do not leave the client hanging.
-            emitter.complete();
             return emitter;
         }
         watchers.add(emitter);

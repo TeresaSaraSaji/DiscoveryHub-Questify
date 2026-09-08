@@ -31,6 +31,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -139,21 +141,56 @@ class RunProgressIntegrationTest {
     }
 
     /**
-     * The stream is the UI's live view. A client attaching after the run has finished must still
-     * get the final snapshot and then a closed stream, rather than an empty connection that hangs
-     * until the browser gives up. This test would simply never return if the stream were left
-     * open.
+     * The flow the UI actually performs: open the stream, <i>then</i> start a sweep, and watch it
+     * from beginning to end.
+     *
+     * <p>This is here because the first version of the stream failed exactly this sequence. It
+     * closed as soon as the snapshot it had on hand was terminal, which is the state between runs
+     * — so a client that connected and then clicked Run was disconnected before the run started
+     * and saw the previous sweep's totals instead. An end-to-end run against the compose stack
+     * showed it; no unit test would have.
      */
     @Test
-    void theStreamSendsTheCurrentSnapshotAndThenCloses() {
+    void theStreamStaysOpenAcrossTheStartOfTheNextRunAndClosesWhenItEnds() throws Exception {
+        // A finished run first, so `current` is terminal when the stream connects — the exact
+        // condition that used to hang up on the client.
+        insert(1);
+        disposition.run(TriggerSource.MANUAL, false, "warm-up");
+
+        insert(3);
+        CompletableFuture<HttpResponse<String>> stream = http.sendAsync(
+                HttpRequest.newBuilder(uri("/disposition/runs/stream")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        // Give the emitter time to register before the run it is supposed to observe begins.
+        Thread.sleep(500);
+        disposition.run(TriggerSource.MANUAL, false, "watched");
+
+        // Returns only because the server closes the stream when the run ends.
+        String body = stream.get(30, TimeUnit.SECONDS).body();
+        assertThat(body).contains("event:progress");
+        assertThat(body).contains("\"status\":\"RUNNING\"");
+        assertThat(body).contains("\"terminal\":true");
+        // The run it watched, not the warm-up: three candidates, not one.
+        assertThat(body).contains("\"total\":3");
+    }
+
+    /** A client attaching between runs is told how the last one ended, immediately. */
+    @Test
+    void theStreamSendsTheLastRunsSnapshotOnConnect() throws Exception {
         insert(2);
         disposition.run(TriggerSource.MANUAL, false, "test");
 
-        HttpResponse<String> stream = get("/disposition/runs/stream");
+        CompletableFuture<HttpResponse<String>> stream = http.sendAsync(
+                HttpRequest.newBuilder(uri("/disposition/runs/stream")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        Thread.sleep(500);
+        // Nothing else will run, so close the stream from this side to read what was buffered.
+        disposition.run(TriggerSource.MANUAL, false, "closer");
 
-        assertThat(stream.statusCode()).isEqualTo(200);
-        assertThat(stream.body()).contains("event:progress");
-        assertThat(stream.body()).contains("\"status\":\"COMPLETED\"");
+        assertThat(stream.get(30, TimeUnit.SECONDS).body())
+                .contains("\"deleted\":2")
+                .contains("\"status\":\"COMPLETED\"");
     }
 
     /** Two sweeps would race on the same rows, so the second is refused rather than queued. */
