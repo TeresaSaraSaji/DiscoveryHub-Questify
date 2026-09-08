@@ -80,6 +80,25 @@
       <artifactId>spring-kafka-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- The delete path is a Kafka consumer that writes to PostgreSQL under a hold guard, and its
+         most important behaviour is refusing. Neither half is provable with mocks: a real broker
+         is what shows the receipt actually goes back to P2.2, and a real Postgres is what shows a
+         held message is still there afterwards. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

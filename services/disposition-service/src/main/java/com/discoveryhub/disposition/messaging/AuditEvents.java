@@ -132,6 +132,28 @@ public final class AuditEvents {
                 "message", candidate.messageId(), runId, SYSTEM_ACTOR, detail);
     }
 
+    /**
+     * P2 refused a delete this service had already cleared (topic {@code disposition.results}).
+     *
+     * <p>The rarest and most reassuring event in the system: a hold was placed in the window
+     * between the sweep checking and P2 acting, and P2's own guard caught what this service could
+     * not have known. Attributed to P2 in the detail, because the value of the redundancy is that
+     * the two guards are independent — an audit trail that credited both refusals to P2.2 would
+     * hide the fact that the second one fired at all.
+     */
+    public AuditEvent refusedByArchive(String runId, String messageId, String externalId, String reason) {
+        Map<String, String> detail = new LinkedHashMap<>();
+        detail.put("runId", runId);
+        if (externalId != null) {
+            detail.put("externalId", externalId);
+        }
+        detail.put("blockedBy", "archive-hold-guard");
+        detail.put("refusedBy", "P2");
+        detail.put("reason", reason == null ? "archive refused the delete" : reason);
+        return event("disposition.refused", AuditEvent.Outcome.REFUSED,
+                "message", messageId, runId, SYSTEM_ACTOR, detail);
+    }
+
     /** A retention period changed (FR-5.1) — it alters what the next sweep destroys, so it is audited. */
     public AuditEvent retentionPolicyChanged(MessageType type, Duration from, Duration to, String actor) {
         Map<String, String> detail = new LinkedHashMap<>();

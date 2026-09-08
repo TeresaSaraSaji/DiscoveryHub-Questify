@@ -42,21 +42,16 @@ spring:
 
 discoveryhub:
   archive:
-    # P4 Case & Hold base URL, for the synchronous disposition guard (architecture decision 4).
+    # P4 Case & Hold base URL. The hold guard this service applies to every delete command it
+    # receives on disposition.commands — unreachable counts as held, so an absent P4 makes P2
+    # refuse deletions rather than perform unverified ones (architecture decision 4).
     hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
     hold-check-timeout: 5s
-  retention:
-    # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
-    # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.
-    default-period: P2555D
-    per-type:
-      EMAIL: P2555D
-      CHAT: P1095D
-    schedule:
-      enabled: true
-      # Every 5 minutes by default. With minute-scale retention this gives the demo a visible
-      # sweep; with day-scale retention it is an off-peak check that is usually a no-op.
-      cron: "0 */5 * * * *"
+
+# No retention policy here. P2.2 owns it (retention_policies, configurable at runtime) and P2
+# applies its decisions through DispositionCommandListener. One policy, one owner: two services
+# each holding their own copy of "email lives seven years" is how the two quietly diverge and a
+# corpus gets swept twice on two different cutoffs.
 
 server:
   port: ${SERVER_PORT:8082}

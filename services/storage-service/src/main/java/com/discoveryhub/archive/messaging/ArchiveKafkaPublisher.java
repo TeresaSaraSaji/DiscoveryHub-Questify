@@ -1,6 +1,7 @@
 package com.discoveryhub.archive.messaging;
 
 import com.discoveryhub.contracts.AuditEvent;
+import com.discoveryhub.contracts.DeleteReceipt;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.Topics;
 import org.slf4j.Logger;
@@ -42,6 +43,23 @@ public class ArchiveKafkaPublisher {
 
     public void publishAudit(AuditEvent event) {
         send(Topics.AUDIT_EVENTS, event.eventId(), toJson(event));
+    }
+
+    /**
+     * Answers P2.2's delete command (topic {@code disposition.results}).
+     *
+     * <p>Blocks on the broker acknowledging it, unlike the two sends above. A dropped receipt
+     * leaves P2.2's ledger stuck at {@code DELETE_REQUESTED} for a message that this service has
+     * actually destroyed — the ledger would then be wrong about the one thing it exists to record,
+     * and no later event would correct it, because the message is gone and no future sweep will
+     * ever consider it again. Worth the latency.
+     *
+     * @throws org.springframework.kafka.KafkaException if the broker does not accept the record.
+     *         Thrown deliberately: the listener is transactional, so failing here rolls the delete
+     *         back and leaves the offset uncommitted, and the command is redelivered.
+     */
+    public void publishDeleteReceipt(DeleteReceipt receipt) {
+        kafka.send(Topics.DISPOSITION_RESULTS, receipt.messageId(), toJson(receipt)).join();
     }
 
     private void send(String topic, String key, String value) {

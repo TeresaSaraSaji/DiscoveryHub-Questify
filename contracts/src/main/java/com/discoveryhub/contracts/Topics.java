@@ -28,6 +28,13 @@ public final class Topics {
      */
     public static final String DISPOSITION_COMMANDS = "disposition.commands";
 
+    /**
+     * P2 back to P2.2. What actually became of a {@link DeleteCommand}: deleted, refused because a
+     * hold was in force, already gone, or failed. Without this the ledger stops at
+     * {@code DELETE_REQUESTED} and can never say whether the message was destroyed.
+     */
+    public static final String DISPOSITION_RESULTS = "disposition.results";
+
     /** P5 to its own workers. One export job to build. */
     public static final String EXPORT_JOBS = "export.jobs";
 
