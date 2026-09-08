@@ -85,8 +85,10 @@ class DispositionServiceTest {
                 MessageType.EMAIL, Instant.now().minus(Duration.ofMinutes(2))));
         // Default: P4 answered and nothing is under hold. Tests that care override this.
         when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(), Map.of()));
+        // A real progress tracker rather than a mock: it has no collaborators, and stubbing the
+        // calls the sweep makes into it would only assert that the sweep calls them.
         return new DispositionService(archive, deleter, holdCheck, caseHolds, retention, runs, items,
-                props, publisher, audit);
+                props, publisher, audit, new DispositionProgress());
     }
 
     @Test

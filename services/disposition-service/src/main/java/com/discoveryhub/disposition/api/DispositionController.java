@@ -6,10 +6,13 @@ import com.discoveryhub.disposition.domain.DispositionRunEntity;
 import com.discoveryhub.disposition.domain.TriggerSource;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
 import com.discoveryhub.disposition.repository.DispositionRunRepository;
+import com.discoveryhub.disposition.run.DispositionProgress;
 import com.discoveryhub.disposition.run.DispositionService;
+import com.discoveryhub.disposition.run.RunProgress;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -35,12 +39,14 @@ public class DispositionController {
     private final DispositionService disposition;
     private final DispositionRunRepository runs;
     private final DispositionItemRepository items;
+    private final DispositionProgress progressStream;
 
     public DispositionController(DispositionService disposition, DispositionRunRepository runs,
-                                 DispositionItemRepository items) {
+                                 DispositionItemRepository items, DispositionProgress progressStream) {
         this.disposition = disposition;
         this.runs = runs;
         this.items = items;
+        this.progressStream = progressStream;
     }
 
     /**
@@ -52,8 +58,13 @@ public class DispositionController {
     @PostMapping("/runs")
     public ResponseEntity<DispositionRunEntity> trigger(
             @RequestParam(name = "dryRun", defaultValue = "false") boolean dryRun,
+            @RequestParam(name = "async", defaultValue = "false") boolean async,
             @RequestParam(name = "actor", defaultValue = "investigator") String actor) {
         try {
+            if (async) {
+                DispositionRunEntity queued = disposition.runAsync(TriggerSource.MANUAL, dryRun, actor);
+                return ResponseEntity.accepted().body(queued);
+            }
             DispositionRunEntity run = disposition.run(TriggerSource.MANUAL, dryRun, actor);
             return ResponseEntity.status(HttpStatus.CREATED).body(run);
         } catch (DispositionService.DispositionRunInProgressException ex) {
@@ -61,6 +72,33 @@ public class DispositionController {
             // should know their run did not happen.
             throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage());
         }
+    }
+
+    /**
+     * Progress of the sweep in flight, or of the last one to finish.
+     *
+     * <p>A poll-once companion to the stream below, for a client that wants a number rather than a
+     * connection — and the answer to "is a sweep running right now?", which the run list cannot
+     * give without a scan.
+     */
+    @GetMapping("/runs/progress")
+    public RunProgress progress() {
+        return disposition.progress().orElseThrow(() ->
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "no sweep has run since startup"));
+    }
+
+    /**
+     * Live progress as server-sent events (FR-8.1).
+     *
+     * <p>Push rather than poll, because the interesting part of a sweep is the middle: a client
+     * polling every second either misses the shape of the run or hammers the service through it.
+     * The current snapshot is sent on connect, so a client that attaches late sees state
+     * immediately, and the stream is closed when the run reaches a terminal state rather than
+     * being left open for a browser to time out.
+     */
+    @GetMapping(path = "/runs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream() {
+        return progressStream.watch();
     }
 
     @GetMapping("/runs")

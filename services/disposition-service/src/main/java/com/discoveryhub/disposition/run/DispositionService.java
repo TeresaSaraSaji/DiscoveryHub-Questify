@@ -19,6 +19,7 @@ import com.discoveryhub.disposition.messaging.AuditEvents;
 import com.discoveryhub.disposition.messaging.DispositionKafkaPublisher;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
 import com.discoveryhub.disposition.repository.DispositionRunRepository;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -96,12 +99,25 @@ public class DispositionService {
     private final DispositionProperties props;
     private final DispositionKafkaPublisher publisher;
     private final AuditEvents audit;
+    private final DispositionProgress progress;
+
+    /**
+     * Runs asynchronous sweeps. Single-threaded on purpose: only one sweep may be in flight at a
+     * time anyway, so a pool would only allow a queue of runs that the {@code running} guard would
+     * then reject one by one. A daemon thread, so a queued sweep cannot keep the JVM alive on
+     * shutdown.
+     */
+    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "disposition-sweep");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public DispositionService(ArchiveGateway archive, MessageDeleter deleter, HoldCheckClient holdCheck,
                               CaseHoldClient caseHolds, RetentionPolicyService retention,
                               DispositionRunRepository runs, DispositionItemRepository items,
                               DispositionProperties props, DispositionKafkaPublisher publisher,
-                              AuditEvents audit) {
+                              AuditEvents audit, DispositionProgress progress) {
         this.archive = archive;
         this.deleter = deleter;
         this.holdCheck = holdCheck;
@@ -112,6 +128,12 @@ public class DispositionService {
         this.props = props;
         this.publisher = publisher;
         this.audit = audit;
+        this.progress = progress;
+    }
+
+    @PreDestroy
+    void shutdown() {
+        executor.shutdownNow();
     }
 
     /**
@@ -137,10 +159,64 @@ public class DispositionService {
         }
     }
 
-    private DispositionRunEntity sweep(TriggerSource source, boolean dryRun, String actor) {
+    /**
+     * Start a sweep in the background and return the {@code QUEUED} run row immediately.
+     *
+     * <p>For the UI. A sweep makes one call to P4 per candidate and considers up to
+     * {@code batch-size} of them, so holding an HTTP connection open for the duration is how the
+     * browser times out on the bulk operation NFR-3 says must not time out. The caller gets a run
+     * id straight away and follows {@code GET /disposition/runs/{runId}/stream} for progress.
+     *
+     * <p>The run row is written here, before the executor is handed anything, so that a service
+     * that dies in between leaves evidence that a sweep was ordered and never ran. The concurrency
+     * guard is taken here too rather than on the sweep thread — otherwise this would answer 202 to
+     * a request that is about to be rejected, and the caller would wait on a stream that never
+     * moves.
+     *
+     * @return the run in {@link DispositionStatus#QUEUED}
+     */
+    public DispositionRunEntity runAsync(TriggerSource source, boolean dryRun, String actor) {
+        if (!running.compareAndSet(false, true)) {
+            throw new DispositionRunInProgressException();
+        }
         String runId = UUID.randomUUID().toString();
-        DispositionRunEntity run = runs.save(
+        DispositionRunEntity queued = new DispositionRunEntity(runId, Instant.now(), source, dryRun);
+        queued.setStatus(DispositionStatus.QUEUED);
+        runs.save(queued);
+        progress.queued(runId, dryRun);
+
+        executor.execute(() -> {
+            try {
+                sweep(runId, source, dryRun, actor);
+            } catch (Exception ex) {
+                // sweep() records its own failures; this is the last resort that stops an
+                // exception from killing the executor thread and ending all future async runs.
+                log.error("async disposition sweep {} threw: {}", runId, ex.toString(), ex);
+            } finally {
+                running.set(false);
+            }
+        });
+        return queued;
+    }
+
+    /** The sweep in flight, or the last one to finish. */
+    public Optional<RunProgress> progress() {
+        return progress.current();
+    }
+
+    private DispositionRunEntity sweep(TriggerSource source, boolean dryRun, String actor) {
+        return sweep(UUID.randomUUID().toString(), source, dryRun, actor);
+    }
+
+    /**
+     * @param runId allocated by the caller, so an async trigger can persist a {@code QUEUED} row
+     *              and hand the same id to the UI before the sweep begins
+     */
+    private DispositionRunEntity sweep(String runId, TriggerSource source, boolean dryRun, String actor) {
+        DispositionRunEntity run = runs.findById(runId).orElseGet(() ->
                 new DispositionRunEntity(runId, Instant.now(), source, dryRun));
+        run.setStatus(DispositionStatus.RUNNING);
+        runs.save(run);
 
         int deleted = 0;
         int skippedHold = 0;
@@ -167,6 +243,8 @@ public class DispositionService {
                     holdContext.available() ? "" : " [HOLD CONTEXT UNAVAILABLE — failing closed]",
                     dryRun, cutoffs);
             publisher.publishAudit(audit.runStarted(runId, candidates.size(), dryRun, actor));
+            progress.started(runId, dryRun, candidates.size(),
+                    holdContext.activeHoldCount(), holdContext.available());
 
             List<DispositionItemEntity> ledger = new ArrayList<>(candidates.size());
             for (ArchiveCandidate candidate : candidates) {
@@ -179,6 +257,7 @@ public class DispositionService {
                     case FAILED -> failed++;
                     case WOULD_DELETE -> { /* dry run: counted as neither deleted nor failed */ }
                 }
+                progress.advanced(decision.outcome());
             }
             items.saveAll(ledger);
 
@@ -192,6 +271,7 @@ public class DispositionService {
             log.info("disposition run {} completed: deleted={}, skippedHold={}, failed={}",
                     runId, deleted, skippedHold, failed);
             publisher.publishAudit(audit.runCompleted(runId, deleted, skippedHold, failed, dryRun));
+            progress.finished(run);
             return run;
         } catch (Exception ex) {
             log.error("disposition run {} failed: {}", runId, ex.toString(), ex);
@@ -203,6 +283,7 @@ public class DispositionService {
             run.setError(truncate(ex.toString()));
             runs.save(run);
             publisher.publishAudit(audit.runFailed(runId, truncate(ex.toString())));
+            progress.finished(run);
             return run;
         }
     }
