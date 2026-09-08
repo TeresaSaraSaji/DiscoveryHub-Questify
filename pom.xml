@@ -13,6 +13,7 @@
   <modules>
     <module>Ingestion/contracts</module>
     <module>Ingestion/service</module>
+    <module>services/archive</module>
     <module>Corpus/corpus-generator</module>
   </modules>
 
