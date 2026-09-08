@@ -306,6 +306,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  export-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/export-service/Dockerfile
+    container_name: discoveryhub-export
+    ports:
+      - "8085:8085"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-audit:5432/audit
+      ARCHIVE_BASE_URL: http://storage-service:8082
+      MINIO_ENDPOINT: http://minio:9000
+      SERVER_PORT: 8085
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-audit:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:

@@ -21,6 +21,7 @@ COPY pom.xml .
 COPY contracts/pom.xml contracts/
 COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
+COPY services/export-service/pom.xml services/export-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
 RUN mvn -B -q dependency:go-offline -pl contracts,services/ingestion-service -am || true
 

@@ -50,7 +50,11 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── storage-service/            P2  system of record, retention    :8082
+│   ├── storage-service/             P2  system of record, retention    :8082
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── export-service/             P5  evidence export, audit trail   :8085
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
@@ -86,11 +90,26 @@ Browsable at **http://localhost:8081/swagger-ui.html** once P1 is running.
 A duplicate is a **2xx outcome, not an error** — a source system re-sending is normal. Only an
 infrastructure failure returns a retryable status.
 
+## P5 Evidence Export & Audit API
+
+Full write-up in `services/export-service/EXPORT.md`.
+
+| | |
+|---|---|
+| `POST /exports` | Scope by `messageIds` or `custodianId`+date range. 202 with a job id. |
+| `GET /exports/{jobId}` | Poll status: `QUEUED` → `RUNNING` → `COMPLETED` / `FAILED`. |
+| `POST /exports/{jobId}/retry` | Rebuild a `FAILED` job from scratch. |
+| `GET /exports/{jobId}/download` | An expiring MinIO link, not the bytes directly. |
+| `GET /exports/{jobId}/verify` | Re-derives every checksum from the package's own bytes. |
+| `GET /audit` | Filterable chain-of-custody read API. No write endpoints exist, anywhere. |
+
 ## Ports
 
 | Port | What | Owner |
 |---|---|---|
 | 8081 | P1 Ingestion | A |
+| 8082 | P2 Archive | A |
+| 8085 | P5 Evidence Export & Audit | E |
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
@@ -102,7 +121,7 @@ infrastructure failure returns a retryable status.
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8082** P2, **8083** P3, **8084** P4, **8085** P5, **4200** frontend.
+Remaining application ports: **8083** P3, **8084** P4, **4200** frontend.
 
 ## Conventions
 
