@@ -1,8 +1,8 @@
-# P1 Ingestion.
+# P3 Search.
 #
 # Built from the repository root, not from this directory:
 #
-#   docker build -f services/ingestion-service/Dockerfile -t discoveryhub/ingestion-service .
+#   docker build -f services/search-service/Dockerfile -t discoveryhub/search-service .
 #
 # The build context has to be the root because this module depends on contracts/ and inherits the
 # parent POM. docker-compose.yml sets that context; if you build by hand from here, Maven will not
@@ -23,32 +23,32 @@ COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
 COPY services/search-service/pom.xml services/search-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
-RUN mvn -B -q dependency:go-offline -pl contracts,services/ingestion-service -am || true
+RUN mvn -B -q dependency:go-offline -pl contracts,services/search-service -am || true
 
 COPY contracts/src contracts/src
-COPY services/ingestion-service/src services/ingestion-service/src
-RUN mvn -B -q -DskipTests package -pl services/ingestion-service -am
+COPY services/search-service/src services/search-service/src
+RUN mvn -B -q -DskipTests package -pl services/search-service -am
 
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
 # Not root. A container that only needs to read a jar and open a port has no reason to be able to
 # write to its own filesystem as a privileged user.
-RUN useradd --system --uid 10001 --create-home appuser
+RUN useradd --system --uid 10003 --create-home appuser
 USER appuser
 
-COPY --from=build --chown=appuser /build/services/ingestion-service/target/ingestion-service-*.jar app.jar
+COPY --from=build --chown=appuser /build/services/search-service/target/search-service-*.jar app.jar
 
-EXPOSE 8081
+EXPOSE 8083
 
-# Container defaults. These are overridden by compose, and they differ from application.yml
-# because inside the network the hostnames are service names, not localhost.
+# Container defaults. These are overridden by compose, and they differ from application.yml because
+# inside the network the hostnames are service names, not localhost.
 ENV KAFKA_BOOTSTRAP=kafka:19092 \
-    REDIS_HOST=redis \
-    SERVER_PORT=8081 \
+    ES_URIS=http://elasticsearch:9200 \
+    SERVER_PORT=8083 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=5 \
-  CMD ["sh", "-c", "curl -sf http://localhost:8081/actuator/health | grep -q '\"status\":\"UP\"'"]
+  CMD ["sh", "-c", "curl -sf http://localhost:8083/actuator/health | grep -q '\"status\":\"UP\"'"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

@@ -306,6 +306,27 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  search-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/search-service/Dockerfile
+    container_name: discoveryhub-search
+    ports:
+      - "8083:8083"
+    environment:
+      # P3 owns Elasticsearch, so it depends on the elasticsearch container (service name, not
+      # localhost) and on Kafka for the messages.archived and holds.events consumers.
+      KAFKA_BOOTSTRAP: kafka:19092
+      ES_URIS: http://elasticsearch:9200
+      SERVER_PORT: 8083
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:

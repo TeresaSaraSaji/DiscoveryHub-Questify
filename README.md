@@ -15,6 +15,7 @@ docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 3x 
 mvn -q package                # build every module
 java -jar services/ingestion-service/target/ingestion-service-0.1.0-SNAPSHOT.jar
 java -jar services/storage-service/target/storage-service-0.1.0-SNAPSHOT.jar
+java -jar services/search-service/target/search-service-0.1.0-SNAPSHOT.jar
 ```
 
 Or run the services in Docker too — one command, nothing installed but Docker:
@@ -50,7 +51,11 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── storage-service/            P2  system of record, retention    :8082
+│   ├── storage-service/            P2  system of record, retention    :8082
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── search-service/             P3  index, full-text search        :8083
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
