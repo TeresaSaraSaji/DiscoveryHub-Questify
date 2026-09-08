@@ -7,7 +7,7 @@ import com.discoveryhub.disposition.domain.ArchiveCandidate;
 import com.discoveryhub.disposition.domain.DispositionOutcome;
 import com.discoveryhub.disposition.domain.DispositionRunEntity;
 import com.discoveryhub.disposition.hold.CaseHoldClient;
-import com.discoveryhub.disposition.hold.HoldScopeSnapshot;
+import com.discoveryhub.disposition.hold.HoldContext;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
 import com.discoveryhub.disposition.repository.DispositionRunRepository;
 import com.discoveryhub.disposition.run.RetentionPolicyService;
@@ -83,7 +83,7 @@ public class StatsController {
     public Map<String, Object> candidates() {
         Map<MessageType, Instant> cutoffs = retention.cutoffs(Instant.now());
         List<ArchiveCandidate> candidates = archive.findCandidates(cutoffs, props.batchSize());
-        HoldScopeSnapshot scope = caseHolds.activeHolds();
+        HoldContext holds = caseHolds.contextFor(candidates);
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("batchSize", props.batchSize());
@@ -92,16 +92,24 @@ public class StatsController {
         cutoffs.forEach((type, cutoff) -> asStrings.put(type.name(), cutoff.toString()));
         body.put("cutoffs", asStrings);
 
-        // The number that matters before you let a sweep run: of the candidates, how many a hold
-        // on a case would save, and how many would actually be destroyed.
-        body.put("activeHolds", scope.size());
-        body.put("holdScopeAvailable", scope.available());
-        long protectedByHold = candidates.stream()
-                .filter(c -> c.onHold() || scope.coveringHold(c).isPresent())
+        // The numbers that matter before you let a sweep run: of the candidates, how many a hold
+        // would save and by which mechanism, and how many would actually be destroyed.
+        body.put("activeHolds", holds.activeHoldCount());
+        body.put("holdScopeAvailable", holds.available());
+        long byScope = candidates.stream()
+                .filter(c -> !c.onHold() && holds.coveringHold(c).isPresent())
                 .count();
-        body.put("protectedByHold", protectedByHold);
-        body.put("wouldBeDeleted", scope.available() || !props.holdCheck().required()
-                ? candidates.size() - protectedByHold
+        long byEvidence = candidates.stream()
+                .filter(c -> !c.onHold() && holds.coveringHold(c).isEmpty()
+                        && holds.evidenceHold(c).isPresent())
+                .count();
+        long byFlag = candidates.stream().filter(ArchiveCandidate::onHold).count();
+        body.put("protectedByHoldFlag", byFlag);
+        body.put("protectedByHoldScope", byScope);
+        body.put("protectedByCaseEvidence", byEvidence);
+        body.put("protectedByHold", byFlag + byScope + byEvidence);
+        body.put("wouldBeDeleted", holds.available() || !props.holdCheck().required()
+                ? candidates.size() - (byFlag + byScope + byEvidence)
                 : 0);
         return body;
     }

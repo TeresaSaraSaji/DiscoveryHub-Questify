@@ -4,6 +4,7 @@ import com.discoveryhub.contracts.AuditEvent;
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.disposition.domain.ArchiveCandidate;
 import com.discoveryhub.disposition.hold.ActiveHold;
+import com.discoveryhub.disposition.hold.EvidenceHold;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -101,7 +102,32 @@ public final class AuditEvents {
             detail.put("caseName", hold.caseName());
         }
         detail.put("scopeApproximate", String.valueOf(hold.isScopeApproximate()));
+        detail.put("blockedBy", "hold-scope");
         detail.put("reason", hold.describe());
+        return event("disposition.refused", AuditEvent.Outcome.REFUSED,
+                "message", candidate.messageId(), runId, SYSTEM_ACTOR, detail);
+    }
+
+    /**
+     * A deletion blocked because the message is an evidence item in a held case (FR-2.4).
+     *
+     * <p>Recorded distinctly from a scope match, via {@code blockedBy}, because the two answer
+     * different questions in review. "It matched the hold's custodian and date range" is a rule
+     * firing; "an investigator put this message in this matter" is a human decision, and a
+     * deletion overriding that is a materially worse failure.
+     */
+    public AuditEvent refusedByCaseEvidence(String runId, ArchiveCandidate candidate, EvidenceHold evidence) {
+        Map<String, String> detail = new LinkedHashMap<>();
+        detail.put("runId", runId);
+        detail.put("externalId", candidate.externalId());
+        detail.put("custodianId", candidate.custodianId());
+        detail.put("holdId", evidence.holdId());
+        detail.put("caseId", evidence.caseId());
+        if (evidence.caseName() != null) {
+            detail.put("caseName", evidence.caseName());
+        }
+        detail.put("blockedBy", "case-evidence");
+        detail.put("reason", evidence.describe());
         return event("disposition.refused", AuditEvent.Outcome.REFUSED,
                 "message", candidate.messageId(), runId, SYSTEM_ACTOR, detail);
     }

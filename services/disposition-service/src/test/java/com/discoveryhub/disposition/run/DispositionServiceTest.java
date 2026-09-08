@@ -13,7 +13,8 @@ import com.discoveryhub.disposition.domain.TriggerSource;
 import com.discoveryhub.disposition.hold.ActiveHold;
 import com.discoveryhub.disposition.hold.CaseHoldClient;
 import com.discoveryhub.disposition.hold.HoldCheckClient;
-import com.discoveryhub.disposition.hold.HoldScopeSnapshot;
+import com.discoveryhub.disposition.hold.EvidenceHold;
+import com.discoveryhub.disposition.hold.HoldContext;
 import com.discoveryhub.disposition.messaging.AuditEvents;
 import com.discoveryhub.disposition.messaging.DispositionKafkaPublisher;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
@@ -83,7 +84,7 @@ class DispositionServiceTest {
         when(retention.cutoffs(any())).thenReturn(Map.of(
                 MessageType.EMAIL, Instant.now().minus(Duration.ofMinutes(2))));
         // Default: P4 answered and nothing is under hold. Tests that care override this.
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of()));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(), Map.of()));
         return new DispositionService(archive, deleter, holdCheck, caseHolds, retention, runs, items,
                 props, publisher, audit);
     }
@@ -229,8 +230,8 @@ class DispositionServiceTest {
         // reached this message, so every per-message signal still says "not held".
         ArchiveCandidate candidate = candidate("EXCH-11", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
-                hold("hold-1", "case-1", Set.of("custodian-1"), null, null))));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
+                hold("hold-1", "case-1", Set.of("custodian-1"), null, null)), Map.of()));
         when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
 
         DispositionRunEntity run = service.run(TriggerSource.SCHEDULED, false, "scheduler");
@@ -248,8 +249,8 @@ class DispositionServiceTest {
     void doesNotCallP4PerMessageWhenTheCaseScopeAlreadyRefuses() {
         ArchiveCandidate candidate = candidate("EXCH-12", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
-                hold("hold-1", "case-1", Set.of("custodian-1"), null, null))));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
+                hold("hold-1", "case-1", Set.of("custodian-1"), null, null)), Map.of()));
 
         service.run(TriggerSource.SCHEDULED, false, "scheduler");
 
@@ -262,8 +263,8 @@ class DispositionServiceTest {
     void deletesAMessageOutsideTheHoldsCustodianScope() {
         ArchiveCandidate candidate = candidate("EXCH-13", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
-                hold("hold-1", "case-1", Set.of("someone-else"), null, null))));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
+                hold("hold-1", "case-1", Set.of("someone-else"), null, null)), Map.of()));
         when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
         when(deleter.delete(anyString(), eq(candidate))).thenReturn(MessageDeleter.DeleteResult.DELETED);
 
@@ -279,10 +280,10 @@ class DispositionServiceTest {
         // Candidate was sent ten minutes ago; the hold covers a window that closed an hour ago.
         ArchiveCandidate candidate = candidate("EXCH-14", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
                 hold("hold-1", "case-1", Set.of("custodian-1"),
                         Instant.now().minus(Duration.ofDays(2)),
-                        Instant.now().minus(Duration.ofHours(1))))));
+                        Instant.now().minus(Duration.ofHours(1)))), Map.of()));
         when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
         when(deleter.delete(anyString(), eq(candidate))).thenReturn(MessageDeleter.DeleteResult.DELETED);
 
@@ -297,8 +298,8 @@ class DispositionServiceTest {
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
         // Empty custodian set means the whole corpus, not nobody. Getting this backwards would
         // turn the broadest possible hold into no hold at all.
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
-                hold("hold-1", "case-1", Set.of(), null, null))));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
+                hold("hold-1", "case-1", Set.of(), null, null)), Map.of()));
 
         DispositionRunEntity run = service.run(TriggerSource.MANUAL, false, "tester");
 
@@ -312,9 +313,9 @@ class DispositionServiceTest {
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
         // Terms cannot be evaluated without message bodies, so the scope is widened rather than
         // narrowed. Over-protecting costs a retention cycle; under-protecting destroys evidence.
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
                 new ActiveHold("hold-1", "case-1", "Project Atlas", Set.of("custodian-1"),
-                        null, null, List.of("atlas")))));
+                        null, null, List.of("atlas"))), Map.of()));
 
         DispositionRunEntity run = service.run(TriggerSource.MANUAL, false, "tester");
 
@@ -327,7 +328,7 @@ class DispositionServiceTest {
     void failsClosedWhenTheHoldScopeCannotBeRetrieved() {
         ArchiveCandidate candidate = candidate("EXCH-17", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.unavailable());
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.unavailable());
 
         DispositionRunEntity run = service.run(TriggerSource.SCHEDULED, false, "scheduler");
 
@@ -345,17 +346,88 @@ class DispositionServiceTest {
         // it, and the message stays protected until every covering hold is gone.
         ArchiveCandidate candidate = candidate("EXCH-18", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
-        when(caseHolds.activeHolds()).thenReturn(HoldScopeSnapshot.of(List.of(
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(List.of(
                 hold("hold-1", "case-1", Set.of("custodian-1"), null, null),
-                hold("hold-2", "case-2", Set.of("custodian-1"), null, null))));
+                hold("hold-2", "case-2", Set.of("custodian-1"), null, null)), Map.of()));
 
         service.run(TriggerSource.MANUAL, false, "tester");
 
         assertThat(savedItems().get(0).getBlockingCaseId()).isEqualTo("case-1");
     }
 
+    // -------------------------------------------------- evidence in a held case (FR-2.4)
+
     @Test
-    void takesTheHoldScopeOncePerRunRatherThanPerCandidate() {
+    void refusesAMessageAttachedToAHeldCaseEvenWhenItIsOutsideThatHoldsScope() {
+        // The gap scope matching alone leaves: an investigator pulled this message into the matter,
+        // but the hold was written for other custodians, so covers() correctly says no.
+        ArchiveCandidate candidate = candidate("EXCH-22", false);
+        when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(
+                List.of(hold("hold-1", "case-1", Set.of("someone-else"), null, null)),
+                Map.of(candidate.messageId(),
+                        new EvidenceHold(candidate.messageId(), "hold-1", "case-1", "SEC Inquiry"))));
+        when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
+
+        DispositionRunEntity run = service.run(TriggerSource.SCHEDULED, false, "scheduler");
+
+        verify(deleter, never()).delete(anyString(), any());
+        assertThat(run.getSkippedHoldCount()).isEqualTo(1);
+        DispositionItemEntity item = savedItems().get(0);
+        assertThat(item.getOutcome()).isEqualTo(DispositionOutcome.SKIPPED_HOLD);
+        assertThat(item.getBlockingCaseId()).isEqualTo("case-1");
+        assertThat(item.getReason()).contains("evidence in case");
+    }
+
+    @Test
+    void doesNotCallP4PerMessageWhenEvidenceMembershipAlreadyRefuses() {
+        ArchiveCandidate candidate = candidate("EXCH-23", false);
+        when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(
+                List.of(hold("hold-1", "case-1", Set.of("someone-else"), null, null)),
+                Map.of(candidate.messageId(),
+                        new EvidenceHold(candidate.messageId(), "hold-1", "case-1", "SEC Inquiry"))));
+
+        service.run(TriggerSource.MANUAL, false, "tester");
+
+        verify(holdCheck, never()).check(anyString());
+    }
+
+    @Test
+    void deletesAMessageThatIsEvidenceInNoHeldCase() {
+        // Evidence membership only protects when the case is actually under hold. A message in a
+        // case with no hold is not returned by P4, so it is deletable — otherwise adding anything
+        // to any case would silently switch retention off for it.
+        ArchiveCandidate candidate = candidate("EXCH-24", false);
+        when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(
+                List.of(hold("hold-1", "case-1", Set.of("someone-else"), null, null)), Map.of()));
+        when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
+        when(deleter.delete(anyString(), eq(candidate))).thenReturn(MessageDeleter.DeleteResult.DELETED);
+
+        DispositionRunEntity run = service.run(TriggerSource.MANUAL, false, "tester");
+
+        assertThat(run.getDeletedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void scopeIsPreferredOverEvidenceWhenBothApply() {
+        // Both mechanisms cover it. Either refusal is correct, but the ledger should be
+        // deterministic rather than depending on map iteration order.
+        ArchiveCandidate candidate = candidate("EXCH-25", false);
+        when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
+        when(caseHolds.contextFor(any())).thenReturn(HoldContext.of(
+                List.of(hold("hold-scope", "case-scope", Set.of("custodian-1"), null, null)),
+                Map.of(candidate.messageId(),
+                        new EvidenceHold(candidate.messageId(), "hold-ev", "case-ev", "Other"))));
+
+        service.run(TriggerSource.MANUAL, false, "tester");
+
+        assertThat(savedItems().get(0).getBlockingCaseId()).isEqualTo("case-scope");
+    }
+
+    @Test
+    void takesTheHoldContextOncePerRunRatherThanPerCandidate() {
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(
                 candidate("EXCH-19", false), candidate("EXCH-20", false), candidate("EXCH-21", false)));
         when(holdCheck.check(anyString())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
@@ -365,7 +437,7 @@ class DispositionServiceTest {
 
         // Every candidate is judged against the same snapshot, so a sweep cannot delete one
         // message and protect an identical one because a hold landed mid-run.
-        verify(caseHolds, org.mockito.Mockito.times(1)).activeHolds();
+        verify(caseHolds, org.mockito.Mockito.times(1)).contextFor(any());
     }
 
     @Test

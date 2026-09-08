@@ -25,16 +25,17 @@ sweep picks it up with no backfill.
 
 ## Holds always win
 
-Four independent guards stand between a candidate and deletion, and they are redundant on purpose:
+Five independent guards stand between a candidate and deletion, and they are redundant on purpose:
 
 | # | Guard | Where | Catches |
 |---|---|---|---|
 | 1 | `on_hold` flag | P2's `messages` row, mirrored from `holds.events` | Almost everything, for free |
 | 2 | **Active hold scope** | `GET /holds/active` on P4, once per run | A hold on a case that P4 has not yet expanded to messages |
-| 3 | `GET /holds/check` | Synchronous per-message call to P4 | Anything scope logic cannot express, e.g. evidence added from outside the hold's custodian range |
-| 4 | `AND on_hold = false` | Inside the DELETE statement | A hold placed *after* the check, milliseconds before the write |
+| 3 | **Held-case evidence** | `POST /holds/evidence-check` on P4, once per run | A message attached to a held case that the hold's own scope does not cover |
+| 4 | `GET /holds/check` | Synchronous per-message call to P4 | The backstop for anything neither run-level answer expressed |
+| 5 | `AND on_hold = false` | Inside the DELETE statement | A hold placed *after* the check, milliseconds before the write |
 
-Only the fourth is evaluated atomically with the write, which is why it exists even though three
+Only the fifth is evaluated atomically with the write, which is why it exists even though four
 checks already passed. A held message that reaches it is refused there, recorded as
 `SKIPPED_HOLD`, and audited as `disposition.refused` with outcome `REFUSED`. That is the
 demonstrable proof FR-4.6 asks for.
@@ -69,12 +70,41 @@ Overlapping holds (FR-4.5) need no special handling: one covering hold is enough
 ledger records which one, and the message stays protected until every covering hold is gone from
 the snapshot. Release is P4's business — a released hold is simply absent next run.
 
-**Fail closed.** An unreachable P4 makes both the scope and the per-message verdict unavailable,
-and while `hold-check.required` is true an unavailable answer is treated as held. Cannot verify,
-will not delete. `HoldScopeSnapshot` keeps "no holds exist" and "P4 could not be asked" as
-distinct states in the type, because an empty list is the most dangerous possible reading of a
-network error. A run records `hold_scope_available`, so a run that deleted nothing while failing
-closed can be told apart from one that had nothing to do.
+### Why guard 3 exists
+
+A hold's scope and a case's contents are **different sets**, and guard 2 only knows the first.
+
+A hold is written as custodians plus a date range. But FR-2.4 lets an investigator add *any*
+individual message — or a whole search result set — to a case as evidence. Nothing constrains
+those to the hold's scope: a hold covering two custodians for 2019–2021 does not cover a 2024
+message from a third custodian, so `ActiveHold.covers` correctly returns **false** for it. And yet
+if someone pulled that message into the matter, deleting it destroys part of a production that a
+human has already selected.
+
+So the sweep asks P4 a second question — "of these candidate ids, which are evidence in a case
+that is under hold?" — and refuses any that come back. Scope alone would delete out-of-scope
+evidence; evidence alone would delete everything a broad custodian hold was placed to freeze
+before anyone had reviewed it. Neither guard subsumes the other, and `HoldContext` carries both.
+
+Evidence membership protects only while the **case is under hold**. A message in a case with no
+hold is not returned and stays deletable — otherwise adding anything to any case would silently
+switch retention off for it, and retention would decay to nothing as the system got used.
+
+The two refusals are distinguishable in the audit trail via `detail.blockedBy`, which is
+`hold-scope` or `case-evidence`. They answer different questions in review: one is a rule firing,
+the other is a human's decision being overridden, and the second is the worse failure.
+
+**Fail closed.** An unreachable P4 makes the hold context unavailable, and while
+`hold-check.required` is true an unavailable answer is treated as held. Cannot verify, will not
+delete. `HoldContext` keeps "nothing is under hold" and "P4 could not be asked" as distinct states
+in the type rather than both being an empty collection, because an empty collection is the most
+dangerous available reading of a network error. A run records `hold_scope_available`, so a run
+that deleted nothing while failing closed can be told apart from one that had nothing to do.
+
+Partial knowledge counts as no knowledge: if the scopes come back but the evidence check fails,
+the whole context is unavailable. Knowing the scopes but not the evidence membership would let the
+sweep delete an out-of-scope evidence item with full confidence, which is worse than knowing
+nothing and refusing.
 
 ### Proving it, per case
 
@@ -166,7 +196,7 @@ command.
 
 ## What P4 has to provide
 
-Two endpoints. Neither exists yet, so both are stubbed out safely: unreachable means "held".
+Three endpoints. None exists yet, so all are handled safely: unreachable means "held".
 
 ### `GET /holds/active` — the case-level guard
 
@@ -196,6 +226,41 @@ Rules this service relies on:
 - **`from` / `to` may be null** for an unbounded range.
 - **`terms` may be omitted.** If present, this service widens rather than narrows — see above.
 - Unknown fields are ignored, so you can add to this shape freely.
+
+### `POST /holds/evidence-check` — the held-case evidence guard
+
+"Of these messages, which are evidence items in a case that is under hold?" A bulk POST rather
+than a query string because a sweep carries up to `batch-size` ids, and a GET would hit a URL
+length limit somewhere between here and P4 — a failure that would look like a hold check bug and
+behave like data loss.
+
+Request:
+
+```json
+{ "messageIds": ["msg-1", "msg-2", "msg-3"] }
+```
+
+Response — only the ones that *are* protected, so an empty array is the normal answer:
+
+```json
+[
+  {
+    "messageId": "msg-2",
+    "holdId": "hold-1",
+    "caseId": "case-1",
+    "caseName": "SEC Inquiry 2026"
+  }
+]
+```
+
+On your side this is one indexed query: evidence items joined to their case's active holds,
+filtered by `message_id IN (...)`. Rules this service relies on:
+
+- **Only include a message if its case has an active hold.** A case with no hold must not appear,
+  or retention stops applying to anything anyone ever filed.
+- **Membership beats scope.** Include an evidence item even when the hold's own custodian and date
+  scope would not cover it — that is the entire purpose of this endpoint.
+- Not called at all when `/holds/active` returns an empty list, since nothing could be protected.
 
 ### `GET /holds/check?messageId=...` — the per-message guard
 
@@ -279,16 +344,25 @@ ledger has to survive the failure that makes it interesting.
 ## Verifying
 
 ```bash
-mvn -q package -pl services/disposition-service -am    # 34 tests
+mvn -q package -pl services/disposition-service -am    # 38 tests
 ```
 
 The tests that matter are the hold guard ones in `DispositionServiceTest` — in particular
-`refusesAMessageInsideTheScopeOfAHoldOnACaseBeforeP4HasExpandedIt`, which is the propagation
-window pinned down — and the guarded DELETE in `JdbcMessageDeleterTest`, which runs against H2
-with the same DDL as P2's `V2__messages.sql`. `AND on_hold = false` is enforced by the database,
-and no amount of mocking would show that it works.
+`refusesAMessageInsideTheScopeOfAHoldOnACaseBeforeP4HasExpandedIt` (the propagation window) and
+`refusesAMessageAttachedToAHeldCaseEvenWhenItIsOutsideThatHoldsScope` (the scope-versus-contents
+gap) — plus the guarded DELETE in `JdbcMessageDeleterTest`, which runs against H2 with the same
+DDL as P2's `V2__messages.sql`. `AND on_hold = false` is enforced by the database, and no amount
+of mocking would show that it works.
 
-To exercise the case-hold guard by hand, stub P4 with a server that returns a hold on
-`/holds/active` and `{"held": false}` on `/holds/check` — that combination is the propagation
-window, and a candidate inside the hold's scope must survive the sweep with
-`blockingCaseId` set in the ledger.
+To exercise the case guards by hand, stub P4 so that:
+
+- `/holds/active` returns a hold on a case, scoped to a custodian your test message does **not**
+  belong to;
+- `/holds/check` returns `{"held": false}` — propagation has not happened;
+- `/holds/evidence-check` returns your test message.
+
+That combination defeats guards 1, 2 and 4, so the message survives only if guard 3 works. It
+should end the sweep as `SKIPPED_HOLD` with `blockingCaseId` set, while a sibling message that is
+not evidence is deleted. Note that Spring's `RestClient` sends the POST body **chunked**, so a
+hand-rolled stub reading `Content-Length` will get an empty body — and the sweep will correctly
+refuse everything rather than proceed on partial knowledge.

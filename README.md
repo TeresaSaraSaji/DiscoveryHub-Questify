@@ -107,11 +107,16 @@ Two things to know before running it:
   nothing is deleted while P4 is down — do not "fix" that by setting
   `hold-check.required: false` in committed config.
 
-It needs two endpoints from **P4**, both specified in DISPOSITION.md: `GET /holds/check?messageId=`
-(the shape P2 already assumes) and `GET /holds/active`, which returns holds as *scope* —
-custodians, date range, case — rather than expanded to messages. The second one is what stops a
-sweep from deleting evidence during the asynchronous hold propagation FR-4.3 mandates, when every
-per-message flag still reads "not held".
+It needs three endpoints from **P4**, all specified in DISPOSITION.md:
+
+- `GET /holds/check?messageId=` — the shape P2 already assumes, so there is one contract, not two.
+- `GET /holds/active` — holds as *scope* (custodians, date range, case) rather than expanded to
+  messages. This is what stops a sweep from deleting evidence during the asynchronous hold
+  propagation FR-4.3 mandates, when every per-message flag still reads "not held".
+- `POST /holds/evidence-check` — of these message ids, which are evidence items in a case that is
+  under hold. A hold's scope and a case's contents are different sets: FR-2.4 lets an investigator
+  attach any message to a case, including one the hold's own custodian and date scope never
+  covered, and deleting it would destroy part of a production someone already selected.
 
 ## Ports
 
