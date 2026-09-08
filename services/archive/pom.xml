@@ -4,43 +4,26 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <!-- Self-contained: the storage service builds and pushes on its own. The small contract types
-       it shared with the rest of the platform (Message, Attachment, Topics, Ids, MessageType,
-       AuditEvent) are inlined under com.discoveryhub.contracts in this module's own sources, so
-       there is no external parent pom and no external contracts dependency to resolve. -->
   <parent>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-parent</artifactId>
-    <version>4.1.1</version>
-    <relativePath/>
+    <groupId>com.discoveryhub</groupId>
+    <artifactId>discoveryhub-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <groupId>com.discoveryhub</groupId>
   <artifactId>archive</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
   <name>P2 Archive</name>
   <description>Storage service: consumes messages.ingested from Kafka, stores message metadata in
     PostgreSQL and attachment bytes on local disk (with an optional S3 offload copy), and owns
-    retention and disposition. Self-contained.</description>
-
-  <properties>
-    <java.version>21</java.version>
-    <aws-sdk.version>2.39.0</aws-sdk.version>
-  </properties>
-
-  <dependencyManagement>
-    <dependencies>
-      <dependency>
-        <groupId>software.amazon.awssdk</groupId>
-        <artifactId>bom</artifactId>
-        <version>${aws-sdk.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
+    retention and disposition.</description>
 
   <dependencies>
+    <!-- The frozen wire types, shared with every other service rather than inlined here. Changing
+         a field is a breaking change for P1 through P5 — see docs/message-schema.md. -->
+    <dependency>
+      <groupId>com.discoveryhub</groupId>
+      <artifactId>contracts</artifactId>
+    </dependency>
     <!-- Web read API + actuator -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

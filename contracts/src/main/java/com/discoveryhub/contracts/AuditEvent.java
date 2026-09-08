@@ -1,10 +1,15 @@
 package com.discoveryhub.contracts;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.time.Instant;
 import java.util.Map;
 
 /**
  * One entry in the chain of custody (FR-7). Every service emits its own; P5 only appends.
+ *
+ * <p><b>STRAWMAN — not yet ratified.</b> Argue with this before Day 1 coding hardens it into five
+ * services. Once P1 through P5 are all emitting, changing the shape means changing all of them.
  *
  * <p>Design intent worth preserving whatever the field names end up being:
  * <ul>
@@ -14,10 +19,11 @@ import java.util.Map;
  *       was in force is the single most important event in the whole system, and it is not a
  *       success. {@code outcome} exists so refusals are recorded rather than logged and lost.</li>
  *   <li><b>{@code detail} is deliberately loose.</b> Freezing a typed payload per action across
- *       five services will not converge. Anything the UI must filter or sort on gets promoted to a
- *       real field; everything else stays in the map.</li>
+ *       five services in four days will not converge. Anything the UI must filter or sort on gets
+ *       promoted to a real field; everything else stays in the map.</li>
  * </ul>
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record AuditEvent(
         /* Deterministic where possible, so a Kafka replay does not duplicate audit rows. */
         String eventId,
