@@ -180,6 +180,27 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # P4 Legal Hold owns its own datastore (NFR-1: one datastore, one owner). Separate instance, not
+  # a schema in the cases database — no connection string lets the hold-service read the
+  # case-service's tables or vice versa.
+  postgres-holds:
+    image: postgres:17.11
+    container_name: discoveryhub-postgres-holds
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: holds
+      POSTGRES_USER: holds
+      POSTGRES_PASSWORD: holds
+    volumes:
+      - postgres-holds-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U holds -d holds"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   # Kept from the original compose. No service claims it yet — whoever adopts it owns it, and it
   # should belong to exactly one service like every other datastore here.
   mongodb:
@@ -299,10 +320,58 @@ services:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-archive:5432/archive
       SERVER_PORT: 8082
+      # The hold-service owns /holds/check; inside the Docker network it is reachable by service
+      # name. The storage-service's disposition job calls this before deleting anything.
+      HOLDS_BASE_URL: http://hold-service:8086
     depends_on:
       kafka:
         condition: service_healthy
       postgres-archive:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # P4 Case Management — case lifecycle, custodians, evidence. Owner: Teresa.
+  case-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/case-service/Dockerfile
+    container_name: discoveryhub-case
+    ports:
+      - "8084:8084"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-cases:5432/cases
+      SERVER_PORT: 8084
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-cases:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # P4 Legal Hold — holds, scope resolution, hold check, release. Owner: Teresa.
+  # Separate deployable from the case-service: case and hold are two bounded contexts with their
+  # own datastores, communicating via cases.events (close → release) and the synchronous
+  # /holds/check endpoint (the disposition guard P2 calls before deleting).
+  hold-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/hold-service/Dockerfile
+    container_name: discoveryhub-hold
+    ports:
+      - "8086:8086"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-holds:5432/holds
+      SERVER_PORT: 8086
+      CASES_BASE_URL: http://case-service:8084
+      ARCHIVE_BASE_URL: http://storage-service:8082
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-holds:
         condition: service_healthy
     restart: unless-stopped
 
@@ -311,6 +380,7 @@ volumes:
   postgres-archive-data:
   postgres-cases-data:
   postgres-audit-data:
+  postgres-holds-data:
   mongo-data:
   elasticsearch-data:
   minio-data:

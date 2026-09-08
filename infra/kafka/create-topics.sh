@@ -19,6 +19,7 @@ TOPICS=(
   "messages.archived:6"
   "holds.commands:3"
   "holds.events:3"
+  "cases.events:3"
   "export.jobs:3"
   "audit.events:6"
 )
