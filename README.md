@@ -107,6 +107,12 @@ Two things to know before running it:
   nothing is deleted while P4 is down — do not "fix" that by setting
   `hold-check.required: false` in committed config.
 
+It needs two endpoints from **P4**, both specified in DISPOSITION.md: `GET /holds/check?messageId=`
+(the shape P2 already assumes) and `GET /holds/active`, which returns holds as *scope* —
+custodians, date range, case — rather than expanded to messages. The second one is what stops a
+sweep from deleting evidence during the asynchronous hold propagation FR-4.3 mandates, when every
+per-message flag still reads "not held".
+
 ## Ports
 
 | Port | What | Owner |

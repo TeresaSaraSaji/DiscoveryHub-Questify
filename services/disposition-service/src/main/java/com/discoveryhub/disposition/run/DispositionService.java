@@ -10,7 +10,10 @@ import com.discoveryhub.disposition.domain.DispositionOutcome;
 import com.discoveryhub.disposition.domain.DispositionRunEntity;
 import com.discoveryhub.disposition.domain.DispositionStatus;
 import com.discoveryhub.disposition.domain.TriggerSource;
+import com.discoveryhub.disposition.hold.ActiveHold;
+import com.discoveryhub.disposition.hold.CaseHoldClient;
 import com.discoveryhub.disposition.hold.HoldCheckClient;
+import com.discoveryhub.disposition.hold.HoldScopeSnapshot;
 import com.discoveryhub.disposition.messaging.AuditEvents;
 import com.discoveryhub.disposition.messaging.DispositionKafkaPublisher;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
@@ -23,6 +26,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -30,17 +34,31 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The disposition sweep (FR-5.2, FR-5.3): find messages past their type's retention period, delete
  * the ones no hold covers, and record what happened to every one of them.
  *
- * <p><b>Holds win, always.</b> Each candidate passes three independent guards before anything is
- * deleted: the hold flag P2 mirrors from {@code holds.events}, a synchronous call to P4, and — in
- * {@code ARCHIVE_DB} mode — an {@code AND on_hold = false} predicate inside the DELETE itself.
- * They are redundant on purpose. The flag can be stale, the P4 call can be a few milliseconds out
- * of date, and only the last one is evaluated atomically with the write. A held message that
- * reaches the third guard is refused there and audited as a refusal (FR-4.6).
+ * <p><b>Holds win, always.</b> Each candidate passes four independent guards before anything is
+ * deleted, and they are redundant on purpose:
  *
- * <p><b>Fail closed.</b> If P4 cannot be reached, the verdict is {@code UNKNOWN}, and while
- * {@code hold-check.required} is true an unknown is treated as held. One unreachable check skips
- * one message rather than aborting the sweep; a P4 that is down for the whole run produces a
- * completed run that deleted nothing, which is the correct and safe outcome, not a failure.
+ * <ol>
+ *   <li>the {@code on_hold} flag P2 mirrors from {@code holds.events} — free, and right most of
+ *       the time;</li>
+ *   <li>the <b>scope of every hold in force on a case</b>, taken once per run — this one does not
+ *       depend on P4 having expanded the hold down to individual messages;</li>
+ *   <li>a synchronous per-message call to P4;</li>
+ *   <li>in {@code ARCHIVE_DB} mode, an {@code AND on_hold = false} predicate inside the DELETE.</li>
+ * </ol>
+ *
+ * <p>Guard 2 exists because of FR-4.3. Hold propagation is required to be asynchronous, so between
+ * an investigator placing a hold on a case and every message in scope being flagged there is a
+ * window as long as P4's fan-out. Guards 1, 3 and 4 all read per-message state, so for the whole
+ * of that window they say "not held" — and a sweep landing in it would destroy the evidence the
+ * hold was placed to preserve. Evaluating the case's hold scope directly closes the window: the
+ * hold on the case is enough, expanded or not.
+ *
+ * <p><b>Fail closed.</b> An unreachable P4 makes both the per-message verdict and the hold scope
+ * unavailable, and while {@code hold-check.required} is true an unavailable answer is treated as
+ * held. One unreachable check skips one message rather than aborting the sweep; a P4 that is down
+ * for the whole run produces a completed run that deleted nothing, which is the correct and safe
+ * outcome, not a failure. The run records that the scope was unavailable, so a run that deleted
+ * nothing can be told apart from a run that had nothing to do.
  *
  * <p><b>Idempotent.</b> A message either is past retention or it is not, so re-running is a no-op
  * once the eligible set is gone. That is what makes a cron schedule and a manual trigger safe to
@@ -62,6 +80,7 @@ public class DispositionService {
     private final ArchiveGateway archive;
     private final MessageDeleter deleter;
     private final HoldCheckClient holdCheck;
+    private final CaseHoldClient caseHolds;
     private final RetentionPolicyService retention;
     private final DispositionRunRepository runs;
     private final DispositionItemRepository items;
@@ -70,12 +89,14 @@ public class DispositionService {
     private final AuditEvents audit;
 
     public DispositionService(ArchiveGateway archive, MessageDeleter deleter, HoldCheckClient holdCheck,
-                              RetentionPolicyService retention, DispositionRunRepository runs,
-                              DispositionItemRepository items, DispositionProperties props,
-                              DispositionKafkaPublisher publisher, AuditEvents audit) {
+                              CaseHoldClient caseHolds, RetentionPolicyService retention,
+                              DispositionRunRepository runs, DispositionItemRepository items,
+                              DispositionProperties props, DispositionKafkaPublisher publisher,
+                              AuditEvents audit) {
         this.archive = archive;
         this.deleter = deleter;
         this.holdCheck = holdCheck;
+        this.caseHolds = caseHolds;
         this.retention = retention;
         this.runs = runs;
         this.items = items;
@@ -121,16 +142,25 @@ public class DispositionService {
             Map<MessageType, Instant> cutoffs = retention.cutoffs(now);
             List<ArchiveCandidate> candidates = archive.findCandidates(cutoffs, props.batchSize());
 
+            // Once per run, before any decision. Every candidate is evaluated against the same
+            // snapshot, so a sweep cannot delete one message and then protect an identical one
+            // because a hold landed halfway through.
+            HoldScopeSnapshot scope = caseHolds.activeHolds();
+
             run.setCandidateCount(candidates.size());
+            run.setActiveHoldCount(scope.size());
+            run.setHoldScopeAvailable(scope.available());
             runs.save(run);
-            log.info("disposition run {} started: {} candidates (dryRun={}, cutoffs={})",
-                    runId, candidates.size(), dryRun, cutoffs);
+            log.info("disposition run {} started: {} candidates, {} active hold(s){} (dryRun={}, cutoffs={})",
+                    runId, candidates.size(), scope.size(),
+                    scope.available() ? "" : " [SCOPE UNAVAILABLE — failing closed]", dryRun, cutoffs);
             publisher.publishAudit(audit.runStarted(runId, candidates.size(), dryRun, actor));
 
             List<DispositionItemEntity> ledger = new ArrayList<>(candidates.size());
             for (ArchiveCandidate candidate : candidates) {
-                Decision decision = decide(runId, candidate, dryRun);
-                ledger.add(new DispositionItemEntity(runId, candidate, decision.outcome(), decision.reason()));
+                Decision decision = decide(runId, candidate, scope, dryRun);
+                ledger.add(new DispositionItemEntity(runId, candidate, decision.outcome(),
+                        decision.reason(), decision.blockingHoldId(), decision.blockingCaseId()));
                 switch (decision.outcome()) {
                     case DELETED, DELETE_REQUESTED -> deleted++;
                     case SKIPPED_HOLD -> skippedHold++;
@@ -165,15 +195,27 @@ public class DispositionService {
         }
     }
 
-    /** The three guards, in cheapest-first order, then the delete. */
-    private Decision decide(String runId, ArchiveCandidate candidate, boolean dryRun) {
+    /** The guards, in cheapest-first order, then the delete. */
+    private Decision decide(String runId, ArchiveCandidate candidate, HoldScopeSnapshot scope, boolean dryRun) {
         // Guard 1: P2's mirrored flag. Free, and right most of the time.
         if (candidate.onHold()) {
             return refuse(runId, candidate, "hold flag set in archive");
         }
 
-        // Guard 2: ask P4. Authoritative, and the reason this call is synchronous in an otherwise
-        // event-driven system.
+        // Guard 2: is this message inside the scope of a hold on a case? Answered from the
+        // run-level snapshot, so it holds even while P4 is still expanding that hold (FR-4.3).
+        if (!scope.available() && props.holdCheck().required()) {
+            return refuse(runId, candidate,
+                    "active hold scope could not be retrieved from P4 — failing closed");
+        }
+        Optional<ActiveHold> covering = scope.coveringHold(candidate);
+        if (covering.isPresent()) {
+            return refuseByCaseHold(runId, candidate, covering.get());
+        }
+
+        // Guard 3: ask P4 about this message specifically. Catches anything the scope logic cannot
+        // express — an evidence item added to a held case from outside the hold's custodian or
+        // date range, for instance.
         HoldCheckClient.Verdict verdict = holdCheck.check(candidate.messageId());
         if (verdict == HoldCheckClient.Verdict.HELD) {
             return refuse(runId, candidate, "P4 reports an active hold");
@@ -186,7 +228,7 @@ public class DispositionService {
             return new Decision(DispositionOutcome.WOULD_DELETE, "past retention; dry run, not deleted");
         }
 
-        // Guard 3 lives inside the deleter, evaluated atomically with the write.
+        // Guard 4 lives inside the deleter, evaluated atomically with the write.
         MessageDeleter.DeleteResult result = deleter.delete(runId, candidate);
         return switch (result) {
             case DELETED -> {
@@ -207,10 +249,23 @@ public class DispositionService {
 
     private Decision refuse(String runId, ArchiveCandidate candidate, String reason) {
         publisher.publishAudit(audit.refused(runId, candidate, reason));
-        return new Decision(DispositionOutcome.SKIPPED_HOLD, reason);
+        return new Decision(DispositionOutcome.SKIPPED_HOLD, reason, null, null);
     }
 
-    private record Decision(DispositionOutcome outcome, String reason) {
+    /** A refusal that can name the case responsible — the one a regulator asks to see. */
+    private Decision refuseByCaseHold(String runId, ArchiveCandidate candidate, ActiveHold hold) {
+        log.info("refused to delete {}: covered by {}", candidate.messageId(), hold.describe());
+        publisher.publishAudit(audit.refusedByCaseHold(runId, candidate, hold));
+        return new Decision(DispositionOutcome.SKIPPED_HOLD, "covered by " + hold.describe(),
+                hold.holdId(), hold.caseId());
+    }
+
+    private record Decision(DispositionOutcome outcome, String reason,
+                            String blockingHoldId, String blockingCaseId) {
+
+        Decision(DispositionOutcome outcome, String reason) {
+            this(outcome, reason, null, null);
+        }
     }
 
     private static String truncate(String s) {

@@ -21,5 +21,15 @@ public interface DispositionItemRepository extends JpaRepository<DispositionItem
      */
     List<DispositionItemEntity> findByMessageIdOrderByOccurredAtAsc(String messageId);
 
+    /**
+     * Everything a given case's holds have protected from disposition, across every run.
+     *
+     * <p>The FR-4.6 evidence, per matter: "show that the hold on this case stopped these messages
+     * from being destroyed". Survives the hold being released and the case being closed.
+     */
+    Page<DispositionItemEntity> findByBlockingCaseIdOrderByOccurredAtDesc(String caseId, Pageable pageable);
+
     long countByOutcome(DispositionOutcome outcome);
+
+    long countByBlockingCaseId(String caseId);
 }

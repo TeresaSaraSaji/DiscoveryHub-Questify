@@ -25,23 +25,67 @@ sweep picks it up with no backfill.
 
 ## Holds always win
 
-Three independent guards stand between a candidate and deletion, and they are redundant on purpose:
+Four independent guards stand between a candidate and deletion, and they are redundant on purpose:
 
-| Guard | Where | Catches |
-|---|---|---|
-| `on_hold` flag | P2's `messages` row, mirrored from `holds.events` | Almost everything, for free |
-| `GET /holds/check` | Synchronous call to P4 | A hold P2's consumer has not applied yet |
-| `AND on_hold = false` | Inside the DELETE statement | A hold placed *after* the check, milliseconds before the write |
+| # | Guard | Where | Catches |
+|---|---|---|---|
+| 1 | `on_hold` flag | P2's `messages` row, mirrored from `holds.events` | Almost everything, for free |
+| 2 | **Active hold scope** | `GET /holds/active` on P4, once per run | A hold on a case that P4 has not yet expanded to messages |
+| 3 | `GET /holds/check` | Synchronous per-message call to P4 | Anything scope logic cannot express, e.g. evidence added from outside the hold's custodian range |
+| 4 | `AND on_hold = false` | Inside the DELETE statement | A hold placed *after* the check, milliseconds before the write |
 
-Only the third is evaluated atomically with the write, which is why it exists even though the
-first two already ran. A held message that reaches it is refused there, recorded as
+Only the fourth is evaluated atomically with the write, which is why it exists even though three
+checks already passed. A held message that reaches it is refused there, recorded as
 `SKIPPED_HOLD`, and audited as `disposition.refused` with outcome `REFUSED`. That is the
 demonstrable proof FR-4.6 asks for.
 
-**Fail closed.** If P4 cannot be reached the verdict is `UNKNOWN`, and while
-`hold-check.required` is true an unknown is treated as held. Cannot verify, will not delete. A P4
-that is down for an entire run produces a completed run that deleted nothing — the correct
-outcome, not a failure.
+### Why guard 2 exists
+
+Guards 1, 3 and 4 all read **per-message** state, and FR-4.3 requires hold propagation to be
+**asynchronous**. So between an investigator placing a hold on a case and every message in scope
+being flagged, there is a window as long as P4's fan-out over a large custodian set. For the whole
+of that window every per-message signal correctly reports "not held" — nothing has marked the
+messages yet — and a sweep landing in it would destroy exactly the evidence the hold was placed to
+preserve.
+
+Guard 2 evaluates the hold's **scope** instead: custodians, date range, and the case it belongs
+to. The hold on the case is enough, expanded or not. It is fetched once per run, not once per
+message — there are only ever a handful of active holds, and one snapshot per sweep means a run
+cannot delete one message and then protect an identical one because a hold landed halfway through.
+
+Scope matching:
+
+- **Custodians** — exact. An *empty* custodian set means **every** custodian, not none: a hold
+  placed without narrowing to specific people covers the whole corpus.
+- **Date range** — exact, inclusive, either end may be unbounded.
+- **Search terms** (FR-4.1) — *not* evaluated. This service has identities and timestamps, not
+  bodies, so it cannot tell whether a message matches "project atlas". A term-scoped hold
+  therefore protects everything within its custodian and date range, which over-protects by
+  design. Under-protecting means deleting evidence and being unable to say so; over-protecting
+  means a message survives one retention cycle longer than it had to. Those are not comparable
+  costs.
+
+Overlapping holds (FR-4.5) need no special handling: one covering hold is enough to refuse, the
+ledger records which one, and the message stays protected until every covering hold is gone from
+the snapshot. Release is P4's business — a released hold is simply absent next run.
+
+**Fail closed.** An unreachable P4 makes both the scope and the per-message verdict unavailable,
+and while `hold-check.required` is true an unavailable answer is treated as held. Cannot verify,
+will not delete. `HoldScopeSnapshot` keeps "no holds exist" and "P4 could not be asked" as
+distinct states in the type, because an empty list is the most dangerous possible reading of a
+network error. A run records `hold_scope_available`, so a run that deleted nothing while failing
+closed can be told apart from one that had nothing to do.
+
+### Proving it, per case
+
+```bash
+curl localhost:8086/disposition/cases/case-1/protected
+```
+
+Everything the holds on one case have saved from disposition, across every run. It outlives both
+the release of the hold and the closing of the case, which is what makes it usable as evidence
+rather than as a status display — `blocking_hold_id` and `blocking_case_id` are copied onto the
+ledger row, not joined from P4.
 
 ## The uncomfortable part: how it deletes
 
@@ -120,6 +164,48 @@ Two properties this relies on: deleting an already-deleted message is a no-op, s
 delivery is fine; and the listener must refuse held messages itself rather than trusting the
 command.
 
+## What P4 has to provide
+
+Two endpoints. Neither exists yet, so both are stubbed out safely: unreachable means "held".
+
+### `GET /holds/active` — the case-level guard
+
+Every hold currently in force, as scope. **Not** expanded to messages, and not filtered by
+whether propagation has finished — that is the whole point.
+
+```json
+[
+  {
+    "holdId": "hold-1",
+    "caseId": "case-1",
+    "caseName": "SEC Inquiry 2026",
+    "custodianIds": ["cust-004", "cust-017"],
+    "from": "2019-01-01T00:00:00Z",
+    "to": "2021-12-31T23:59:59Z",
+    "terms": ["project atlas"]
+  }
+]
+```
+
+Rules this service relies on:
+
+- **Only unreleased holds appear.** Release semantics are yours; absence is how this service
+  learns a hold is gone. A message covered by two holds must keep appearing until both are
+  released (FR-4.5).
+- **`custodianIds: []` means all custodians.** If you mean "no one", do not return the hold.
+- **`from` / `to` may be null** for an unbounded range.
+- **`terms` may be omitted.** If present, this service widens rather than narrows — see above.
+- Unknown fields are ignored, so you can add to this shape freely.
+
+### `GET /holds/check?messageId=...` — the per-message guard
+
+```json
+{ "held": true }
+```
+
+Same shape P2 already assumes, so there is one contract to satisfy rather than two. Anything other
+than `{"held": false}` — including a 500, a timeout, or an empty body — is treated as held.
+
 ## Retention policy (FR-5.1)
 
 The policy lives in the `retention_policies` table, not in `application.yml`. FR-5.1 asks for it to
@@ -150,6 +236,7 @@ to destroy data on the next sweep, and the chain of custody should show who gave
 | `GET /disposition/runs/{runId}` | One run's summary. |
 | `GET /disposition/runs/{runId}/items` | Per-message ledger. `?outcome=SKIPPED_HOLD` is the "what did holds save?" view. |
 | `GET /disposition/messages/{messageId}` | Every decision ever recorded about one message. Survives the message. |
+| `GET /disposition/cases/{caseId}/protected` | Everything this case's holds have saved from disposition. |
 | `GET /retention/policies` · `PUT /retention/policies/{type}` | Retention policy (FR-5.1). |
 | `GET /disposition/stats` | Dashboard counts (FR-8.2). |
 | `GET /disposition/stats/candidates` | What the next sweep would touch, without running it. |
@@ -192,10 +279,16 @@ ledger has to survive the failure that makes it interesting.
 ## Verifying
 
 ```bash
-mvn -q package -pl services/disposition-service -am    # 25 tests
+mvn -q package -pl services/disposition-service -am    # 34 tests
 ```
 
-The tests that matter are the hold guard ones in `DispositionServiceTest` and the guarded DELETE in
-`JdbcMessageDeleterTest`, which runs against H2 with the same DDL as P2's `V2__messages.sql` —
-`AND on_hold = false` is enforced by the database, and no amount of mocking would show that it
-works.
+The tests that matter are the hold guard ones in `DispositionServiceTest` — in particular
+`refusesAMessageInsideTheScopeOfAHoldOnACaseBeforeP4HasExpandedIt`, which is the propagation
+window pinned down — and the guarded DELETE in `JdbcMessageDeleterTest`, which runs against H2
+with the same DDL as P2's `V2__messages.sql`. `AND on_hold = false` is enforced by the database,
+and no amount of mocking would show that it works.
+
+To exercise the case-hold guard by hand, stub P4 with a server that returns a hold on
+`/holds/active` and `{"held": false}` on `/holds/check` — that combination is the propagation
+window, and a candidate inside the hold's scope must survive the sweep with
+`blockingCaseId` set in the ledger.

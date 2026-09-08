@@ -54,6 +54,17 @@ public class DispositionItemEntity {
     @Column(name = "reason")
     private String reason;
 
+    /**
+     * The hold and case that stopped this delete, when one did. Copied in rather than referenced
+     * for the same reason as the message fields: P4 may release the hold and close the case, and
+     * this row still has to be able to prove what protected the message at the time.
+     */
+    @Column(name = "blocking_hold_id", length = 36)
+    private String blockingHoldId;
+
+    @Column(name = "blocking_case_id", length = 36)
+    private String blockingCaseId;
+
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
 
@@ -63,7 +74,15 @@ public class DispositionItemEntity {
 
     public DispositionItemEntity(String runId, ArchiveCandidate candidate,
                                  DispositionOutcome outcome, String reason) {
+        this(runId, candidate, outcome, reason, null, null);
+    }
+
+    public DispositionItemEntity(String runId, ArchiveCandidate candidate,
+                                 DispositionOutcome outcome, String reason,
+                                 String blockingHoldId, String blockingCaseId) {
         this.runId = runId;
+        this.blockingHoldId = blockingHoldId;
+        this.blockingCaseId = blockingCaseId;
         this.messageId = candidate.messageId();
         this.externalId = candidate.externalId();
         this.custodianId = candidate.custodianId();
@@ -91,6 +110,10 @@ public class DispositionItemEntity {
     public DispositionOutcome getOutcome() { return outcome; }
 
     public String getReason() { return reason; }
+
+    public String getBlockingHoldId() { return blockingHoldId; }
+
+    public String getBlockingCaseId() { return blockingCaseId; }
 
     public Instant getOccurredAt() { return occurredAt; }
 }

@@ -3,6 +3,7 @@ package com.discoveryhub.disposition.messaging;
 import com.discoveryhub.contracts.AuditEvent;
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.disposition.domain.ArchiveCandidate;
+import com.discoveryhub.disposition.hold.ActiveHold;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -77,6 +78,30 @@ public final class AuditEvents {
         detail.put("externalId", candidate.externalId());
         detail.put("custodianId", candidate.custodianId());
         detail.put("reason", reason);
+        return event("disposition.refused", AuditEvent.Outcome.REFUSED,
+                "message", candidate.messageId(), runId, SYSTEM_ACTOR, detail);
+    }
+
+    /**
+     * A deletion blocked by a hold on a case, naming the hold and the case.
+     *
+     * <p>Separate from {@link #refused} because this is the event a regulator actually asks for:
+     * not "a message was not deleted" but "the hold on this matter demonstrably prevented this
+     * message from being destroyed". {@code caseId} is promoted into the detail so P5's audit
+     * viewer can filter a case's chain of custody without parsing a reason string.
+     */
+    public AuditEvent refusedByCaseHold(String runId, ArchiveCandidate candidate, ActiveHold hold) {
+        Map<String, String> detail = new LinkedHashMap<>();
+        detail.put("runId", runId);
+        detail.put("externalId", candidate.externalId());
+        detail.put("custodianId", candidate.custodianId());
+        detail.put("holdId", hold.holdId());
+        detail.put("caseId", hold.caseId());
+        if (hold.caseName() != null) {
+            detail.put("caseName", hold.caseName());
+        }
+        detail.put("scopeApproximate", String.valueOf(hold.isScopeApproximate()));
+        detail.put("reason", hold.describe());
         return event("disposition.refused", AuditEvent.Outcome.REFUSED,
                 "message", candidate.messageId(), runId, SYSTEM_ACTOR, detail);
     }

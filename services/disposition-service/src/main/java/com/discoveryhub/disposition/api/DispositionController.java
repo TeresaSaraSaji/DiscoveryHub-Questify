@@ -108,4 +108,20 @@ public class DispositionController {
     public List<DispositionItemEntity> messageHistory(@PathVariable("messageId") String messageId) {
         return items.findByMessageIdOrderByOccurredAtAsc(messageId);
     }
+
+    /**
+     * Everything the holds on one case have protected from disposition, across every run.
+     *
+     * <p>The per-matter FR-4.6 evidence: "show that the hold on this case stopped these messages
+     * from being destroyed". Outlives both the release of the hold and the closing of the case,
+     * which is what makes it usable as proof rather than as a status display.
+     */
+    @GetMapping("/cases/{caseId}/protected")
+    public Page<DispositionItemEntity> protectedByCase(
+            @PathVariable("caseId") String caseId,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "50") int size) {
+        return items.findByBlockingCaseIdOrderByOccurredAtDesc(
+                caseId, PageRequest.of(page, Math.min(size, 500)));
+    }
 }

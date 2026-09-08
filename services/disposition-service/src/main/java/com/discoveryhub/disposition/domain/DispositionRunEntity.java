@@ -54,6 +54,16 @@ public class DispositionRunEntity {
     @Column(name = "failed_count", nullable = false)
     private int failedCount;
 
+    @Column(name = "active_hold_count", nullable = false)
+    private int activeHoldCount;
+
+    /**
+     * False when P4 could not be asked for the hold scope. A run with this false that deleted
+     * nothing was failing closed, not idle — and the ledger has to be able to say which.
+     */
+    @Column(name = "hold_scope_available", nullable = false)
+    private boolean holdScopeAvailable = true;
+
     @Column(name = "error")
     private String error;
 
@@ -94,6 +104,12 @@ public class DispositionRunEntity {
 
     public int getFailedCount() { return failedCount; }
     public void setFailedCount(int failedCount) { this.failedCount = failedCount; }
+
+    public int getActiveHoldCount() { return activeHoldCount; }
+    public void setActiveHoldCount(int activeHoldCount) { this.activeHoldCount = activeHoldCount; }
+
+    public boolean isHoldScopeAvailable() { return holdScopeAvailable; }
+    public void setHoldScopeAvailable(boolean holdScopeAvailable) { this.holdScopeAvailable = holdScopeAvailable; }
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }

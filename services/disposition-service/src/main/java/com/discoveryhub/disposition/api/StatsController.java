@@ -3,8 +3,11 @@ package com.discoveryhub.disposition.api;
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.disposition.archive.ArchiveGateway;
 import com.discoveryhub.disposition.config.DispositionProperties;
+import com.discoveryhub.disposition.domain.ArchiveCandidate;
 import com.discoveryhub.disposition.domain.DispositionOutcome;
 import com.discoveryhub.disposition.domain.DispositionRunEntity;
+import com.discoveryhub.disposition.hold.CaseHoldClient;
+import com.discoveryhub.disposition.hold.HoldScopeSnapshot;
 import com.discoveryhub.disposition.repository.DispositionItemRepository;
 import com.discoveryhub.disposition.repository.DispositionRunRepository;
 import com.discoveryhub.disposition.run.RetentionPolicyService;
@@ -29,15 +32,17 @@ public class StatsController {
 
     private final ArchiveGateway archive;
     private final RetentionPolicyService retention;
+    private final CaseHoldClient caseHolds;
     private final DispositionRunRepository runs;
     private final DispositionItemRepository items;
     private final DispositionProperties props;
 
     public StatsController(ArchiveGateway archive, RetentionPolicyService retention,
-                           DispositionRunRepository runs, DispositionItemRepository items,
-                           DispositionProperties props) {
+                           CaseHoldClient caseHolds, DispositionRunRepository runs,
+                           DispositionItemRepository items, DispositionProperties props) {
         this.archive = archive;
         this.retention = retention;
+        this.caseHolds = caseHolds;
         this.runs = runs;
         this.items = items;
         this.props = props;
@@ -77,13 +82,27 @@ public class StatsController {
     @GetMapping("/candidates")
     public Map<String, Object> candidates() {
         Map<MessageType, Instant> cutoffs = retention.cutoffs(Instant.now());
-        int count = archive.findCandidates(cutoffs, props.batchSize()).size();
+        List<ArchiveCandidate> candidates = archive.findCandidates(cutoffs, props.batchSize());
+        HoldScopeSnapshot scope = caseHolds.activeHolds();
+
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("batchSize", props.batchSize());
-        body.put("candidatesInNextSweep", count);
+        body.put("candidatesInNextSweep", candidates.size());
         Map<String, String> asStrings = new LinkedHashMap<>();
         cutoffs.forEach((type, cutoff) -> asStrings.put(type.name(), cutoff.toString()));
         body.put("cutoffs", asStrings);
+
+        // The number that matters before you let a sweep run: of the candidates, how many a hold
+        // on a case would save, and how many would actually be destroyed.
+        body.put("activeHolds", scope.size());
+        body.put("holdScopeAvailable", scope.available());
+        long protectedByHold = candidates.stream()
+                .filter(c -> c.onHold() || scope.coveringHold(c).isPresent())
+                .count();
+        body.put("protectedByHold", protectedByHold);
+        body.put("wouldBeDeleted", scope.available() || !props.holdCheck().required()
+                ? candidates.size() - protectedByHold
+                : 0);
         return body;
     }
 }
