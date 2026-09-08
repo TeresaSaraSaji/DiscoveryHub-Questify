@@ -10,9 +10,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 /**
  * Fires the sweep on a cron (FR-5.2 — "a scheduled disposition process").
  *
- * <p>Conditional on {@code discoveryhub.disposition.schedule.enabled} so the job can be switched
- * off — in tests, or while demonstrating the manual trigger — without disabling scheduling
- * globally and taking anything else on the same mechanism down with it.
+ * <p>Conditional on {@code discoveryhub.disposition.schedule.enabled}, and <b>absent unless that
+ * is explicitly true</b> — {@code matchIfMissing = false}. Automatic destruction is not a default:
+ * see {@code DispositionProperties.Schedule} for what happened when it was. Scheduling itself
+ * stays enabled at the application level, so switching this off does not take down anything else
+ * on the same mechanism.
  *
  * <p>A tick that lands while a run is still going is dropped rather than queued. Two concurrent
  * sweeps would evaluate the same candidates and race on the same rows, and the work is not urgent:
@@ -20,7 +22,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 @Configuration
 @ConditionalOnProperty(prefix = "discoveryhub.disposition.schedule", name = "enabled",
-        havingValue = "true", matchIfMissing = true)
+        havingValue = "true", matchIfMissing = false)
 public class DispositionScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(DispositionScheduler.class);

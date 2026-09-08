@@ -78,9 +78,24 @@ discoveryhub:
       timeout: 5s
 
     schedule:
-      enabled: true
-      # Every five minutes. With minute-scale retention that gives the demo a visible sweep; with
-      # year-scale retention it is a cheap check that is almost always a no-op.
+      # OFF by default, and this is not timidity.
+      #
+      # The sweep is the one destructive process in the system, and the committed corpus is mostly
+      # past retention already (fixtures dated 2017-2026, defaults of seven and three years, so
+      # ~500 eligible on any given day). Enabled by default it fires within seconds of
+      # `docker compose up`, before anyone has read the configuration, and in ARCHIVE_DB mode it
+      # deletes real fixture data — then again every tick. That is not hypothetical: it happened
+      # during testing, and only the run being in KAFKA mode meant the deletions were published
+      # rather than performed.
+      #
+      # FR-5.2's "scheduled disposition process" exists and works; starting it is a deliberate act:
+      #
+      #   --discoveryhub.disposition.schedule.enabled=true
+      #
+      # With it off, POST /disposition/runs still sweeps on demand — which is what the demo does —
+      # and ?dryRun=true shows the blast radius first.
+      enabled: false
+      # Every five minutes once enabled.
       cron: "0 */5 * * * *"
 
     archive:

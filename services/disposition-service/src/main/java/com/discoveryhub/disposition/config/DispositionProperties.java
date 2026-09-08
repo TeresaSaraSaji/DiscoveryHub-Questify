@@ -21,7 +21,7 @@ public record DispositionProperties(
         // of the archive in memory and the ledger is written incrementally rather than at the end.
         batchSize = batchSize <= 0 ? 500 : batchSize;
         holdCheck = holdCheck == null ? new HoldCheck(true, true, Duration.ofSeconds(5)) : holdCheck;
-        schedule = schedule == null ? new Schedule(true, "0 */5 * * * *") : schedule;
+        schedule = schedule == null ? new Schedule(false, "0 */5 * * * *") : schedule;
     }
 
     /** Which implementation of {@code archive.MessageDeleter} the sweep uses. */
@@ -64,9 +64,29 @@ public record DispositionProperties(
     }
 
     /**
-     * @param cron every five minutes by default. With minute-scale retention that gives the demo a
-     *             visible sweep; with year-scale retention it is a cheap check that is almost
-     *             always a no-op.
+     * The scheduled sweep (FR-5.2).
+     *
+     * <p><b>Off by default, deliberately.</b> This is the one destructive process in the system,
+     * and in this repository it starts out pointed at a corpus that is mostly past retention: the
+     * fixtures are dated 2017-2026, so with the real seven-year and three-year defaults roughly
+     * 500 of them are eligible on any given day. A sweep enabled by default fires within seconds
+     * of {@code docker compose up}, before anyone has looked at the configuration, and in
+     * {@code ARCHIVE_DB} mode it deletes them for real — then does it again every tick until the
+     * team's demo data is gone. That was not a hypothetical; it happened during testing, and only
+     * the fact that the run was in {@code KAFKA} mode meant the deletions were published rather
+     * than performed.
+     *
+     * <p>So turning the sweep on is a deliberate act:
+     *
+     * <pre>--discoveryhub.disposition.schedule.enabled=true</pre>
+     *
+     * <p>Everything else still works with it off: {@code POST /disposition/runs} triggers a sweep
+     * on demand, which is what the demo does anyway, and {@code ?dryRun=true} shows the blast
+     * radius first.
+     *
+     * @param cron every five minutes when enabled. With minute-scale retention that gives the demo
+     *             a visible sweep; with year-scale retention it is a cheap check that is usually a
+     *             no-op — on a corpus that is not already expired.
      */
     public record Schedule(boolean enabled, String cron) {
         public Schedule {
