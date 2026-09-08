@@ -78,6 +78,15 @@ management:
     # instance that is deliberately still serving.
     redis:
       enabled: false
+    # P1 owns no database and reads nothing from MongoDB. The starter is on the classpath, and its
+    # health contributor would otherwise take this service DOWN whenever an unrelated datastore is
+    # unreachable. A service should only report unhealthy for something it actually needs.
+    #
+    # The key is "mongodb" even though the component shows up in /actuator/health as "mongo" —
+    # ConditionalOnEnabledHealthIndicator("mongodb") in MongoHealthContributorAutoConfiguration.
+    # Guessing "mongo" here silently does nothing at all.
+    mongodb:
+      enabled: false
 
 logging:
   level:
