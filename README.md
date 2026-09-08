@@ -50,7 +50,11 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── storage-service/            P2  system of record, retention    :8082
+│   ├── storage-service/            P2  system of record              :8082
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── disposition-service/        P2.2 retention and disposition     :8086
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
@@ -86,23 +90,42 @@ Browsable at **http://localhost:8081/swagger-ui.html** once P1 is running.
 A duplicate is a **2xx outcome, not an error** — a source system re-sending is normal. Only an
 infrastructure failure returns a retryable status.
 
+## P2.2 Disposition
+
+Retention and disposition (FR-5) is its own service on **8086**, with its own database. It owns the
+retention policy, the scheduled sweep, and the ledger of what each sweep deleted or skipped.
+Details, and the one Kafka consumer P2 needs to take the delete path off P2.2's hands, are in
+`services/disposition-service/DISPOSITION.md`.
+
+Two things to know before running it:
+
+- It deletes from P2's archive directly in the default `ARCHIVE_DB` mode, because P2's API is
+  read-only. That is a deliberate, documented seam, not an oversight — read DISPOSITION.md before
+  judging it, and switch `delete-mode: KAFKA` once P2 has a consumer.
+- **The corpus is mostly past retention.** With the real defaults (seven years for email, three for
+  chat), ~500 fixture messages are eligible on any given day. The hold check fails closed, so
+  nothing is deleted while P4 is down — do not "fix" that by setting
+  `hold-check.required: false` in committed config.
+
 ## Ports
 
 | Port | What | Owner |
 |---|---|---|
 | 8081 | P1 Ingestion | A |
+| 8086 | P2.2 Disposition | Saketh |
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
 | 5433 | PostgreSQL `archive` / `archive` / `archive` | P2 |
 | 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 |
 | 5435 | PostgreSQL `audit` / `audit` / `audit` | P5 |
+| 5436 | PostgreSQL `disposition` / `disposition` / `disposition` | P2.2 |
 | 27017 | MongoDB | unclaimed |
 | 9200 | Elasticsearch | P3 |
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8082** P2, **8083** P3, **8084** P4, **8085** P5, **4200** frontend.
+Remaining application ports: **8083** P3, **8084** P4, **8085** P5, **4200** frontend.
 
 ## Conventions
 
