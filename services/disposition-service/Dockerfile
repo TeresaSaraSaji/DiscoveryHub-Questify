@@ -1,8 +1,8 @@
-# P2 Storage / Archive — the system of record.
+# P2.2 Disposition — retention policy, the scheduled sweep, and the run ledger.
 #
 # Built from the repository root, not from this directory:
 #
-#   docker build -f services/storage-service/Dockerfile -t discoveryhub/storage-service .
+#   docker build -f services/disposition-service/Dockerfile -t discoveryhub/disposition-service .
 #
 # The build context has to be the root because this module depends on contracts/ and inherits the
 # parent POM. docker-compose.yml sets that context; if you build by hand from here, Maven will not
@@ -22,11 +22,11 @@ COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
 COPY services/disposition-service/pom.xml services/disposition-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
-RUN mvn -B -q dependency:go-offline -pl contracts,services/storage-service -am || true
+RUN mvn -B -q dependency:go-offline -pl contracts,services/disposition-service -am || true
 
 COPY contracts/src contracts/src
-COPY services/storage-service/src services/storage-service/src
-RUN mvn -B -q -DskipTests package -pl services/storage-service -am
+COPY services/disposition-service/src services/disposition-service/src
+RUN mvn -B -q -DskipTests package -pl services/disposition-service -am
 
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
@@ -34,16 +34,18 @@ WORKDIR /app
 RUN useradd --system --uid 10001 --create-home appuser
 USER appuser
 
-COPY --from=build --chown=appuser /build/services/storage-service/target/storage-service-*.jar app.jar
+COPY --from=build --chown=appuser /build/services/disposition-service/target/disposition-service-*.jar app.jar
 
-EXPOSE 8082
+EXPOSE 8086
 
 ENV KAFKA_BOOTSTRAP=kafka:19092 \
-    DB_URL=jdbc:postgresql://postgres-archive:5432/archive \
-    SERVER_PORT=8082 \
+    DB_URL=jdbc:postgresql://postgres-disposition:5432/disposition \
+    ARCHIVE_DB_URL=jdbc:postgresql://postgres-archive:5432/archive \
+    CASES_BASE_URL=http://cases-service:8084 \
+    SERVER_PORT=8086 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-  CMD ["sh", "-c", "curl -sf http://localhost:8082/actuator/health | grep -q '\"status\":\"UP\"'"]
+  CMD ["sh", "-c", "curl -sf http://localhost:8086/actuator/health | grep -q '\"status\":\"UP\"'"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

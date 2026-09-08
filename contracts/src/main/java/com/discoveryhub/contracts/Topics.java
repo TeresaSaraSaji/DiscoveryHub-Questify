@@ -21,6 +21,13 @@ public final class Topics {
     /** P4 to P3 and P2. A custodian or message came under hold, or came off it. */
     public static final String HOLDS_EVENTS = "holds.events";
 
+    /**
+     * P2.2 to P2. One message past retention and covered by no hold, to be removed from the
+     * archive. A request, not a warrant: the archive still refuses held messages, because holds
+     * may have changed since the sweep decided.
+     */
+    public static final String DISPOSITION_COMMANDS = "disposition.commands";
+
     /** P5 to its own workers. One export job to build. */
     public static final String EXPORT_JOBS = "export.jobs";
 

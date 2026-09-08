@@ -13,10 +13,11 @@
 #   9092  Kafka              8090  Kafka UI
 #   6379  Redis (P1)         9200  Elasticsearch (P3)
 #   5433  Postgres (P2)      5434  Postgres (P4)      5435  Postgres (P5)
-#   27017 MongoDB            9000  MinIO API          9001  MinIO console
+#   5436  Postgres (P2.2)    27017 MongoDB
+#   9000  MinIO API          9001  MinIO console
 #
 # Application ports, as services arrive
-#   8081 P1  8082 P2  8083 P3  8084 P4  8085 P5  4200 frontend
+#   8081 P1  8082 P2  8083 P3  8084 P4  8085 P5  8086 P2.2  4200 frontend
 
 name: discoveryhub
 
@@ -79,7 +80,7 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # Creates the six topics, then exits. Re-running is a no-op.
+  # Creates the topics, then exits. Re-running is a no-op.
   kafka-init:
     image: apache/kafka:4.2.1
     container_name: discoveryhub-kafka-init
@@ -157,6 +158,27 @@ services:
       - postgres-cases-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cases -d cases"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # P2.2 Disposition. Its own instance, not a schema in postgres-archive: P2.2 reads and deletes
+  # from the archive, but its retention policy and run ledger are its own, and two Flyway
+  # histories in one database would make P2 fail on startup under ddl-auto: validate.
+  postgres-disposition:
+    image: postgres:17.11
+    container_name: discoveryhub-postgres-disposition
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: disposition
+      POSTGRES_USER: disposition
+      POSTGRES_PASSWORD: disposition
+    volumes:
+      - postgres-disposition-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U disposition -d disposition"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -306,9 +328,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  disposition-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/disposition-service/Dockerfile
+    container_name: discoveryhub-disposition
+    ports:
+      - "8086:8086"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-disposition:5432/disposition
+      # P2's archive: read for the eligibility query, written by the one guarded DELETE in
+      # ARCHIVE_DB delete mode.
+      ARCHIVE_DB_URL: jdbc:postgresql://postgres-archive:5432/archive
+      SERVER_PORT: 8086
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-disposition:
+        condition: service_healthy
+      postgres-archive:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:
+  postgres-disposition-data:
   postgres-cases-data:
   postgres-audit-data:
   mongo-data:
