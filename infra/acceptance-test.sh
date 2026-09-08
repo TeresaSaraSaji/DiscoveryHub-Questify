@@ -90,7 +90,7 @@ check "upload: unattested attachment is accepted and hashed" "$(echo "$r" | fiel
 
 echo
 echo "async upload"
-JOB=$(curl -s -F "file=@Corpus/fixtures/messages.ndjson" "$BASE/messages/upload?async=true" | field jobId)
+JOB=$(curl -s -F "file=@tools/corpus-generator/fixtures/messages.ndjson" "$BASE/messages/upload?async=true" | field jobId)
 [ -n "$JOB" ] && ok "async upload returns a job id" || bad "async upload" "no job id"
 for _ in $(seq 1 30); do
   S=$(curl -s "$BASE/messages/uploads/$JOB" | field status)

@@ -12,9 +12,20 @@ git clone git@github.com:TeresaSaraSaji/DiscoveryHub-Questify.git
 cd DiscoveryHub-Questify
 docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 3x Postgres
 ./infra/smoke-test.sh         # everything reachable from the host?
-mvn -q package                # build contracts, ingestion, corpus generator
-java -jar Ingestion/service/target/ingestion-0.1.0-SNAPSHOT.jar
+mvn -q package                # build every module
+java -jar services/ingestion-service/target/ingestion-service-0.1.0-SNAPSHOT.jar
+java -jar services/storage-service/target/storage-service-0.1.0-SNAPSHOT.jar
 ```
+
+Or run the services in Docker too — one command, nothing installed but Docker:
+
+```bash
+docker compose --profile app up -d --build
+```
+
+Day to day, prefer the first. Datastores in Docker, services in your IDE, where you can attach a
+debugger and a change costs a restart instead of an image rebuild. The profile is there for demos
+and for checking the thing works on a clean machine.
 
 `smoke-test.sh` checks every datastore is reachable **from the host**, which is where your service
 runs when you start it from your IDE. A container reporting healthy only proves it can talk to
@@ -23,21 +34,39 @@ itself. Run it before blaming your own code.
 Load the corpus once P1 is up:
 
 ```bash
-curl -F "file=@Corpus/fixtures/messages.ndjson" \
+curl -F "file=@tools/corpus-generator/fixtures/messages.ndjson" \
   "http://localhost:8081/messages/upload?async=true"
 ```
 
 ## Layout
 
-| Path | What |
-|---|---|
-| `Ingestion/contracts` | Wire types every service compiles against. Changes here are breaking changes. |
-| `Ingestion/service` | **P1** accept, dedupe, publish — port 8081 |
-| `Corpus/corpus-generator` | Deterministic 12,000-message fixture generator |
-| `Corpus/fixtures` | The committed corpus: `messages.ndjson`, `custodians.json`, `manifest.json` |
-| `infra/` | Topic and bucket creation, smoke test |
-| `docker-compose.yml` | The whole local stack |
-| `message-schema.md` | The frozen message contract, explained |
+```
+DiscoveryHub-Questify/
+├── docker-compose.yml              the whole local stack, one shared file
+├── pom.xml                         parent build
+├── contracts/                      shared wire types — a library, not a service
+├── services/
+│   ├── ingestion-service/          P1  accept, dedupe, publish        :8081
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── storage-service/            P2  system of record, retention    :8082
+│       ├── Dockerfile
+│       ├── pom.xml
+│       └── src/
+├── tools/
+│   └── corpus-generator/           12,000-message fixture generator
+│       └── fixtures/               the committed corpus
+├── infra/                          topic and bucket creation, test scripts
+├── message-schema.md               the frozen message contract
+└── README.md
+```
+
+`contracts/` sits outside `services/` deliberately: every service compiles against it, and nothing
+deploys it. Put it under `services/` and the next person assumes it runs somewhere.
+
+New services go in `services/<name>-service/` with their own `Dockerfile` and `pom.xml`, and get
+added to `<modules>` in the root POM.
 
 Read `message-schema.md` before writing anything that touches a message.
 

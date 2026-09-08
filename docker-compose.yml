@@ -254,6 +254,58 @@ services:
       - ./infra/minio/create-buckets.sh:/scripts/create-buckets.sh:ro
     restart: "no"
 
+  # ------------------------------------------------------------------ application
+  # Behind a profile on purpose. Day to day you want the datastores in Docker and the services in
+  # your IDE, where you can debug them and a change costs a restart rather than an image rebuild:
+  #
+  #   docker compose up -d                      infrastructure only
+  #
+  # For a demo, a clean-machine check, or anyone who just wants it running:
+  #
+  #   docker compose --profile app up -d --build     everything
+  #
+  # Both use the same compose file, so there is no second definition to drift.
+  ingestion-service:
+    profiles: ["app"]
+    build:
+      # Root context: the module depends on contracts/ and inherits the parent POM, neither of
+      # which is visible from the service directory.
+      context: .
+      dockerfile: services/ingestion-service/Dockerfile
+    container_name: discoveryhub-ingestion
+    ports:
+      - "8081:8081"
+    environment:
+      # Service names, not localhost — inside the network localhost is the container itself.
+      KAFKA_BOOTSTRAP: kafka:19092
+      REDIS_HOST: redis
+      SERVER_PORT: 8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  storage-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/storage-service/Dockerfile
+    container_name: discoveryhub-storage
+    ports:
+      - "8082:8082"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-archive:5432/archive
+      SERVER_PORT: 8082
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-archive:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:

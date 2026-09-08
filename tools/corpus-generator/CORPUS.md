@@ -9,7 +9,7 @@ This file consolidates the generator author's original notes, which previously l
 README inside `corpus-generator/`.
 
 ```
-Corpus/
+tools/corpus-generator/
 ├── corpus-generator/          Java CLI that generates the corpus
 │   ├── pom.xml
 │   └── src/main/java/com/discoveryhub/tools/corpus/
@@ -94,7 +94,7 @@ cd Corpus
 java -jar corpus-generator/target/corpus-generator.jar --out fixtures
 ```
 
-Load a running stack (P1 Ingestion must be up on 8081 — see `../Ingestion/README.md`):
+Load a running stack (P1 Ingestion must be up on 8081 — see `../../services/ingestion-service/NOTES.md`):
 
 ```bash
 java -jar corpus-generator/target/corpus-generator.jar \
@@ -183,7 +183,7 @@ needing all five owners to agree.
 ## Tests
 
 ```bash
-cd .. && mvn -pl Corpus/corpus-generator test
+cd .. && mvn -pl tools/corpus-generator test
 ```
 
 11 tests in `CorpusBuilderTest`, covering determinism, the volume and attachment floors, the

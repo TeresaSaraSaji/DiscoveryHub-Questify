@@ -3,7 +3,7 @@ spring:
     name: archive
 
   datasource:
-    url: jdbc:postgresql://localhost:5433/archive
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/archive}
     username: archive
     password: archive
 
@@ -24,7 +24,7 @@ spring:
     locations: classpath:db/migration
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     consumer:
       group-id: p2-archive
       auto-offset-reset: earliest
@@ -43,7 +43,7 @@ spring:
 discoveryhub:
   archive:
     # P4 Case & Hold base URL, for the synchronous disposition guard (architecture decision 4).
-    hold-check-base-url: http://localhost:8084
+    hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
     hold-check-timeout: 5s
   retention:
     # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
@@ -59,7 +59,7 @@ discoveryhub:
       cron: "0 */5 * * * *"
 
 server:
-  port: 8082
+  port: ${SERVER_PORT:8082}
 
 management:
   endpoints:

@@ -5,7 +5,7 @@ requires that the component accepting messages is not the component storing them
 stateless means an Archive outage queues in Kafka instead of losing data (NFR-2).
 
 ```
-Ingestion/
+services/ingestion-service/
 ├── contracts/               shared wire types — the frozen team contract
 │   └── src/main/java/com/discoveryhub/contracts/
 │       ├── Message.java         the message wire format
@@ -154,10 +154,10 @@ docker exec dh-redis redis-cli --scan --pattern 'dh:ingest:extid:*' \
 ## Tests
 
 ```bash
-cd .. && mvn -pl Ingestion/contracts,Ingestion/service test
+cd .. && mvn -pl contracts,services/ingestion-service test
 ```
 
-Both modules, always — `contracts` is not installed to the local repo, so `-pl Ingestion/service`
+Both modules, always — `contracts` is not installed to the local repo, so `-pl services/ingestion-service`
 on its own fails to resolve it.
 
 34 tests. `IdsTest` pins deterministic id derivation. `IngestServiceTest` covers dedupe, the

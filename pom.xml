@@ -11,10 +11,10 @@
   <name>DiscoveryHub</name>
 
   <modules>
-    <module>Ingestion/contracts</module>
-    <module>Ingestion/service</module>
-    <module>services/archive</module>
-    <module>Corpus/corpus-generator</module>
+    <module>contracts</module>
+    <module>services/ingestion-service</module>
+    <module>services/storage-service</module>
+    <module>tools/corpus-generator</module>
   </modules>
 
   <properties>

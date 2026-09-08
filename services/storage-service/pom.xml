@@ -11,7 +11,7 @@
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <artifactId>archive</artifactId>
+  <artifactId>storage-service</artifactId>
   <name>P2 Archive</name>
   <description>System of record for messages, plus retention and disposition. Owner: A.</description>
 

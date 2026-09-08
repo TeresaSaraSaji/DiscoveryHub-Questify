@@ -11,7 +11,7 @@
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <artifactId>ingestion</artifactId>
+  <artifactId>ingestion-service</artifactId>
   <name>P1 Ingestion</name>
   <description>Accepts messages, dedupes on externalId, publishes. Stateless. Owner: A.</description>
 
