@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.discoveryhub</groupId>
+    <artifactId>discoveryhub-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>ingestion-service</artifactId>
+  <name>P1 Ingestion</name>
+  <description>Accepts messages, dedupes on externalId, publishes. Stateless. Owner: A.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.discoveryhub</groupId>
+      <artifactId>contracts</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+    <!-- Boot 4 splits auto-configuration into per-technology modules. The bare spring-kafka
+         dependency gives you the template classes but no auto-configured ProducerFactory, so the
+         starter is what actually wires Kafka from application.yml. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-kafka</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <!-- P1 validates by hand in IngestService rather than with @Valid, because a batch is not
+         atomic: bean validation rejects the whole request body, and the contract is that one bad
+         message is one REJECTED beside 249 ACCEPTEDs. This is here for request DTOs that are
+         genuinely all-or-nothing. -->
+
+    <!-- Ingestion owns no database. This is here because the stack runs MongoDB and someone will
+         want it; it is not used by P1 today, and its health contributor is switched off in
+         application.yml so an unrelated datastore cannot take this service down. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-mongodb</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.projectlombok</groupId>
+      <artifactId>lombok</artifactId>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- The 3.x line targets Spring Framework 7 / Boot 4; 2.x is for Boot 3 and will not start
+         here. Not managed by the Boot BOM, so the version is pinned deliberately. -->
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+      <version>${springdoc.version}</version>
+    </dependency>
+
+    <!-- Restarts the app when the classpath changes. Note that a restart re-joins the Kafka
+         consumer group, so expect a rebalance pause on every save once P1 consumes anything. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-devtools</artifactId>
+      <scope>runtime</scope>
+      <optional>true</optional>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <excludes>
+            <!-- Lombok is compile-time only. Without this it ships inside the fat jar, which is
+                 dead weight and occasionally confuses tooling that scans the classpath. -->
+            <exclude>
+              <groupId>org.projectlombok</groupId>
+              <artifactId>lombok</artifactId>
+            </exclude>
+          </excludes>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

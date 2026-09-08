@@ -1,0 +1,15 @@
+-- P2 Archive — baseline. Owner: A.
+--
+-- Intentionally empty. The schema is yours to design; this file exists so Flyway is wired from
+-- the first commit and nobody is tempted to reach for ddl-auto: update on Day 2.
+--
+-- Add V2__messages.sql with your tables. One constraint is not negotiable, because the whole
+-- idempotency guarantee rests on it rather than on the Redis cache in P1:
+--
+--   UNIQUE (external_id)
+--
+-- Two further notes that will save you rework:
+--   - custodian_id is the mailbox the copy came from, so the same conversation legitimately
+--     appears more than once with different external_ids. Do not add a constraint that collapses
+--     them.
+--   - Attachment bytes live in object storage, not here. Keep the sha256 and the object key.
