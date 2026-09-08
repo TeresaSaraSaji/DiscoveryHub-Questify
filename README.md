@@ -103,9 +103,11 @@ Two things to know before running it:
   read-only. That is a deliberate, documented seam, not an oversight — read DISPOSITION.md before
   judging it, and switch `delete-mode: KAFKA` once P2 has a consumer.
 - **The corpus is mostly past retention.** With the real defaults (seven years for email, three for
-  chat), ~500 fixture messages are eligible on any given day. The hold check fails closed, so
-  nothing is deleted while P4 is down — do not "fix" that by setting
-  `hold-check.required: false` in committed config.
+  chat), ~500 fixture messages are eligible on any given day. So the scheduled sweep ships
+  **disabled** — trigger one with `POST /disposition/runs`, ideally `?dryRun=true` first. Enabling
+  the cron on this corpus deletes real fixture data every tick; that is correct FR-5 behaviour and
+  still not what you want by accident. The hold check also fails closed, so nothing is deleted
+  while P4 is down — do not "fix" that by setting `hold-check.required: false` in committed config.
 
 It needs three endpoints from **P4**, all specified in DISPOSITION.md:
 

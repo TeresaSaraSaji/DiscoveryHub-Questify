@@ -12,6 +12,10 @@ mvn -q package -pl services/disposition-service -am
 java -jar services/disposition-service/target/disposition-service-0.1.0-SNAPSHOT.jar
 ```
 
+**The scheduled sweep is off by default.** Trigger one with `POST /disposition/runs`, or turn the
+cron on with `--discoveryhub.disposition.schedule.enabled=true` once you know what it will delete.
+[Why](#the-scheduler-is-off-by-default).
+
 ## What it does
 
 1. Reads the retention period for each communication type from its own database (FR-5.1).
@@ -312,20 +316,44 @@ next one.
 
 ## Watch out
 
-**The corpus is mostly past retention.** Its messages are dated 2017–2026, so with the real
-defaults (seven years for email, three for chat) roughly 500 corpus messages are eligible on any
-given day. That is correct behaviour, and it means a sweep that is allowed to delete will delete
-real fixture data. Reload with the ingestion upload in the root README if you need it back.
+### The scheduler is off by default
 
-**Never set `hold-check.required: false` in committed config.** With P4 down it turns every
-unverifiable message into a deletable one, and combined with the point above that is the corpus
-going away batch-size at a time on a five-minute cron. Pass it on the command line for a demo:
+`discoveryhub.disposition.schedule.enabled` defaults to **false**, and the
+`@ConditionalOnProperty` on `DispositionScheduler` uses `matchIfMissing = false`, so the bean does
+not exist unless you ask for it.
+
+This is not timidity. **The committed corpus is mostly past retention** — fixtures dated
+2017–2026, defaults of seven years for email and three for chat, so roughly 500 messages are
+eligible on any given day. A sweep enabled by default fires within seconds of startup, before
+anyone has read the configuration, and in `ARCHIVE_DB` mode deletes real fixture data — then again
+every tick.
+
+That is not a hypothetical. During testing, a locally started instance with a ten-second cron
+completed two sweeps of `candidates=500, deleted=499` before a retention change could be applied.
+It happened to be running in `KAFKA` mode, so 499 delete commands were *published* rather than
+executed, and the corpus survived — and then those commands sat on `disposition.commands` as a
+loaded gun for whoever adds P2's consumer with `auto-offset-reset: earliest`. The topic had to be
+deleted and recreated.
+
+Two lessons worth keeping:
+
+- Turn the cron on deliberately, after `?dryRun=true` tells you the blast radius.
+- If you have been testing in `KAFKA` mode, **check what is sitting on `disposition.commands`**
+  before P2 grows a consumer. `docker exec discoveryhub-kafka /opt/kafka/bin/kafka-topics.sh
+  --bootstrap-server localhost:19092 --delete --topic disposition.commands`, then re-run
+  `infra/kafka/create-topics.sh`.
+
+### Never set `hold-check.required: false` in committed config
+
+With P4 down it turns every unverifiable message into a deletable one, and combined with the point
+above that is the corpus going away batch-size at a time. Pass it on the command line for a demo:
 
 ```bash
 java -jar ... --discoveryhub.disposition.hold-check.required=false
 ```
 
-and run `?dryRun=true` first to see the blast radius.
+and run `?dryRun=true` first. Reload the corpus with the ingestion upload in the root README if
+you need it back.
 
 **`DataSourceProperties` moved in Boot 4** to `org.springframework.boot.jdbc.autoconfigure`.
 Every Boot 3 example still shows `org.springframework.boot.autoconfigure.jdbc`, and the failure is
