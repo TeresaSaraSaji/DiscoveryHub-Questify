@@ -1,6 +1,7 @@
 package com.discoveryhub.archive.retention;
 
 import com.discoveryhub.archive.config.RetentionProperties;
+import com.discoveryhub.archive.domain.AttachmentEntity;
 import com.discoveryhub.archive.domain.DispositionItemEntity;
 import com.discoveryhub.archive.domain.DispositionOutcome;
 import com.discoveryhub.archive.domain.DispositionRunEntity;
@@ -12,6 +13,7 @@ import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.DispositionItemRepository;
 import com.discoveryhub.archive.repository.DispositionRunRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.MessageType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,11 +48,13 @@ public class DispositionService {
     private final HoldCheckClient holdCheck;
     private final ArchiveKafkaPublisher publisher;
     private final AuditEvents audit;
+    private final AttachmentStore storage;
 
     public DispositionService(MessageRepository messages, AttachmentRepository attachments,
                               DispositionRunRepository runs, DispositionItemRepository items,
                               RetentionProperties retention, HoldCheckClient holdCheck,
-                              ArchiveKafkaPublisher publisher, AuditEvents audit) {
+                              ArchiveKafkaPublisher publisher, AuditEvents audit,
+                              AttachmentStore storage) {
         this.messages = messages;
         this.attachments = attachments;
         this.runs = runs;
@@ -59,6 +63,7 @@ public class DispositionService {
         this.holdCheck = holdCheck;
         this.publisher = publisher;
         this.audit = audit;
+        this.storage = storage;
     }
 
     /** Run a full disposition sweep. Returns the persisted run record (already COMPLETED/FAILED). */
@@ -95,6 +100,11 @@ public class DispositionService {
                     skippedHold++;
                     publisher.publishAudit(audit.dispositionRefused(runId, m.getMessageId(), "held"));
                     continue;
+                }
+                // Drop the attachment blobs (local file + optional S3 offload copy) before removing
+                // the rows, so a successful disposition does not leave orphaned bytes behind.
+                for (AttachmentEntity a : attachments.findByMessageIdOrderByOrdinalAsc(m.getMessageId())) {
+                    storage.delete(a);
                 }
                 attachments.deleteByMessageId(m.getMessageId());
                 messages.delete(m);

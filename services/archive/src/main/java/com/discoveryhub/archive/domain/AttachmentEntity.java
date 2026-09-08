@@ -4,11 +4,20 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 /**
- * One attachment, bytes included. Per the storage-service brief the content lives in PostgreSQL
- * ({@code content} BYTEA) rather than an object store; {@code sha256} is the chain-of-custody
- * anchor that P5 re-computes when building an export manifest (FR-6.5).
+ * One attachment. The bytes no longer live in the database: they are written to local disk (the
+ * primary copy the read API serves) and, when S3 is enabled, offloaded to S3. The table keeps the
+ * metadata, the chain-of-custody {@code sha256}, and pointers — {@code storage_location} for the
+ * local file and {@code s3_key} / {@code s3_bucket} for the optional S3 copy.
+ *
+ * <p>{@code contentBytes} is {@link Transient}: set by {@link MessageMapper} while turning a wire
+ * message into entities, read once by the storage service to write the blob, then cleared so the
+ * bytes are not held in memory across the JPA save. It is never persisted.
+ *
+ * <p>{@code sha256} remains the chain-of-custody anchor that the export verifier re-computes
+ * (FR-6.5); it now anchors bytes that live on disk / S3 instead of in the row.
  */
 @Entity
 @Table(name = "attachments")
@@ -36,8 +45,21 @@ public class AttachmentEntity {
     @Column(name = "sha256", nullable = false, length = 64)
     private String sha256;
 
-    @Column(name = "content", nullable = false)
-    private byte[] content;
+    /** Relative path of the primary local copy, e.g. {@code <messageId>/<attachmentId>}. */
+    @Column(name = "storage_location", nullable = false, length = 1024)
+    private String storageLocation;
+
+    /** S3 object key for the offload copy, or {@code null} when S3 is not enabled. */
+    @Column(name = "s3_key", length = 1024)
+    private String s3Key;
+
+    /** S3 bucket that holds the offload copy, or {@code null} when S3 is not enabled. */
+    @Column(name = "s3_bucket", length = 255)
+    private String s3Bucket;
+
+    /** In-memory only: the decoded bytes, present between mapping and storage, never persisted. */
+    @Transient
+    private byte[] contentBytes;
 
     protected AttachmentEntity() {
         // JPA
@@ -64,6 +86,15 @@ public class AttachmentEntity {
     public String getSha256() { return sha256; }
     public void setSha256(String sha256) { this.sha256 = sha256; }
 
-    public byte[] getContent() { return content; }
-    public void setContent(byte[] content) { this.content = content; }
+    public String getStorageLocation() { return storageLocation; }
+    public void setStorageLocation(String storageLocation) { this.storageLocation = storageLocation; }
+
+    public String getS3Key() { return s3Key; }
+    public void setS3Key(String s3Key) { this.s3Key = s3Key; }
+
+    public String getS3Bucket() { return s3Bucket; }
+    public void setS3Bucket(String s3Bucket) { this.s3Bucket = s3Bucket; }
+
+    public byte[] getContentBytes() { return contentBytes; }
+    public void setContentBytes(byte[] contentBytes) { this.contentBytes = contentBytes; }
 }

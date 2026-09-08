@@ -3,9 +3,9 @@ spring:
     name: archive
 
   datasource:
-    url: jdbc:postgresql://localhost:5433/archive
-    username: archive
-    password: archive
+    url: jdbc:postgresql://localhost:5432/discoveryhub
+    username: discoveryhub
+    password: discoveryhub
 
   jpa:
     # Schema comes from Flyway, never from Hibernate. validate fails loudly on drift instead of
@@ -39,12 +39,38 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
+    listener:
+      # Per-record ack mode: an exception on one record does not roll back the whole batch, and
+      # the offset for a record is only committed after its listener returns normally.
+      ack-mode: record
+      # checkpoint 6: the CommonErrorHandler bean (KafkaConsumerConfig) retries transient failures
+      # with an unbounded fixed backoff, so a Storage/DB outage parks the consumer on the failing
+      # record instead of skipping it. The offset is not committed until processing succeeds, so
+      # Kafka redelivers pending records in order once Storage recovers — no messages lost.
 
 discoveryhub:
   archive:
     # P4 Case & Hold base URL, for the synchronous disposition guard (architecture decision 4).
     hold-check-base-url: http://localhost:8084
     hold-check-timeout: 5s
+    # Attachment bytes live on local disk (primary copy) with an optional S3 offload ("after use")
+    # copy. Message metadata still lives in PostgreSQL. See V4__attachment_storage.sql and the
+    # com.discoveryhub.archive.storage package.
+    storage:
+      local:
+        base-dir: ./data/attachments
+      s3:
+        # Off by default. Flip to true to also write every attachment to S3 (real S3 or MinIO).
+        enabled: false
+        # Leave endpoint empty to use real AWS S3; set it for MinIO / a local S3-compatible server.
+        endpoint: http://localhost:9000
+        region: us-east-1
+        bucket: discoveryhub-archive
+        access-key: minioadmin
+        secret-key: minioadmin
+        # Required for MinIO; harmless for AWS S3.
+        path-style-access: true
+        key-prefix: attachments/
   retention:
     # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
     # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.

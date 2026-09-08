@@ -1,7 +1,5 @@
 package com.discoveryhub.archive.messaging;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-
 import java.time.Instant;
 
 /**
@@ -13,7 +11,6 @@ import java.time.Instant;
  * <p>Once P4 ratifies the shape this record should move into {@code com.discoveryhub.contracts} and
  * the local parser in {@code HoldsEventListener} should be replaced with typed deserialisation.
  */
-@JsonInclude(JsonInclude.Include.NON_NULL)
 public record HoldEvent(
         String messageId,
         String custodianId,

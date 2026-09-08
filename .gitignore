@@ -23,3 +23,15 @@
 hs_err_pid*
 replay_pid*
 .DS_Store
+
+# Maven build output
+target/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Local attachment storage (runtime data, not source)
+data/

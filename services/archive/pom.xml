@@ -4,22 +4,44 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
+  <!-- Self-contained: the storage service builds and pushes on its own. The small contract types
+       it shared with the rest of the platform (Message, Attachment, Topics, Ids, MessageType,
+       AuditEvent) are inlined under com.discoveryhub.contracts in this module's own sources, so
+       there is no external parent pom and no external contracts dependency to resolve. -->
   <parent>
-    <groupId>com.discoveryhub</groupId>
-    <artifactId>discoveryhub-parent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
-    <relativePath>../../pom.xml</relativePath>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
   </parent>
 
+  <groupId>com.discoveryhub</groupId>
   <artifactId>archive</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
   <name>P2 Archive</name>
-  <description>System of record for messages, plus retention and disposition. Owner: A.</description>
+  <description>Storage service: consumes messages.ingested from Kafka, stores message metadata in
+    PostgreSQL and attachment bytes on local disk (with an optional S3 offload copy), and owns
+    retention and disposition. Self-contained.</description>
+
+  <properties>
+    <java.version>21</java.version>
+    <aws-sdk.version>2.39.0</aws-sdk.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws-sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
-    <dependency>
-      <groupId>com.discoveryhub</groupId>
-      <artifactId>contracts</artifactId>
-    </dependency>
+    <!-- Web read API + actuator -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
@@ -28,30 +50,31 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+    <!-- System of record -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-jpa</artifactId>
     </dependency>
+    <!-- Kafka: consume messages.ingested / holds.events, publish messages.archived / audit.events -->
     <dependency>
       <groupId>org.springframework.kafka</groupId>
       <artifactId>spring-kafka</artifactId>
     </dependency>
     <!-- Boot 4 splits Kafka auto-configuration into its own module, just as it did for Flyway.
          Without this, spring-kafka is on the classpath but KafkaAutoConfiguration never loads and
-         no KafkaTemplate bean is created — the app starts clean and every send fails. The README's
-         "library is actually doing something rather than merely present" warning bites here. -->
+         no KafkaTemplate bean is created — the app starts clean and every send fails. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-kafka</artifactId>
     </dependency>
+    <!-- PostgreSQL + Flyway -->
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
       <scope>runtime</scope>
     </dependency>
     <!-- Boot 4 splits auto-configuration into per-technology modules, and flyway-core alone does
-         not bring its own. Without this, migrations are silently never applied: the app starts
-         clean and the schema history table simply never appears. -->
+         not bring its own. Without this, migrations are silently never applied. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-flyway</artifactId>
@@ -65,6 +88,18 @@
       <artifactId>flyway-database-postgresql</artifactId>
       <scope>runtime</scope>
     </dependency>
+    <!-- S3 offload option: real AWS S3 or any S3-compatible endpoint (MinIO) via endpoint +
+         path-style access. Only used when discoveryhub.archive.storage.s3.enabled=true; the S3Client
+         bean is conditionally created, so an S3-less deployment never opens an S3 connection. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>apache-client</artifactId>
+    </dependency>
+    <!-- Test -->
     <dependency>
       <groupId>com.h2database</groupId>
       <artifactId>h2</artifactId>
