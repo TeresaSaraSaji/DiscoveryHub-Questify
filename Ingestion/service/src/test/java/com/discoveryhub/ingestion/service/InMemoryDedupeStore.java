@@ -8,16 +8,16 @@ class InMemoryDedupeStore implements DedupeStore {
     private final Set<String> seen = ConcurrentHashMap.newKeySet();
 
     @Override
-    public boolean claim(String externalId) {
-        return seen.add(externalId);
+    public boolean claim(String namespace, String key) {
+        return seen.add(namespace + ":" + key);
     }
 
     @Override
-    public void release(String externalId) {
-        seen.remove(externalId);
+    public void release(String namespace, String key) {
+        seen.remove(namespace + ":" + key);
     }
 
-    boolean hasClaim(String externalId) {
-        return seen.contains(externalId);
+    boolean hasClaim(String namespace, String key) {
+        return seen.contains(namespace + ":" + key);
     }
 }

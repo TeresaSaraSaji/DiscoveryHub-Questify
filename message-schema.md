@@ -59,18 +59,43 @@ what every other service references — cases, holds, search hits, export manife
 
 ## Dedupe: what is and is not a duplicate
 
-A duplicate is **the same `externalId` arriving more than once**. It is dropped, and dropping it is
-an audit event, not an error. The API returns 2xx for it — a re-sending source system is a normal
-condition, not a client fault.
+Two independent keys, either of which makes a message a duplicate. It is dropped, and dropping it
+is an audit event, not an error. The API returns 2xx — a re-sending source system is a normal
+condition, not a client fault. The response `reason` says which key matched.
 
-The same conversation captured from two mailboxes is **not** a duplicate. Two `externalId`s, two
-`messageId`s, two `custodianId`s, identical `body`. Both must be stored: a hold on one custodian
-must preserve their copy independently of the other's. The corpus contains this case on purpose,
-including on the narrative's smoking-gun message, so a dedupe implementation that keys on body
-hash or on `from`+`subject`+`sentAt` will fail visibly rather than quietly losing evidence.
+**1. `externalId`.** The source system's own key. Catches the same record submitted twice.
+
+**2. `contentHash`.** A SHA-256 fingerprint computed by `ContentHash.of(message)`. Catches the same
+message arriving under a *different* source key — a re-export, a re-crawl, or two connectors
+pointed at one mailbox. `externalId` alone cannot see that case.
+
+The fingerprint covers `custodianId`, `source`, `type`, `from`, `to`, `cc`, `subject`, `body`,
+`sentAt`, `threadId`, `inReplyTo`, and each attachment's filename, size and `sha256`. Fields are
+length-prefixed so content cannot forge a field boundary. It excludes `externalId` and `messageId`
+(identifiers, not content) and `labels` (classification is mutable; re-sending with a label added
+is still the same message).
+
+**`custodianId` is inside the fingerprint, and that is the whole design.** The same conversation
+captured from two mailboxes is **not** a duplicate: two `externalId`s, two `messageId`s, two
+`custodianId`s, identical `body`. Both must be stored, because a hold on one custodian must
+preserve their copy independently of the other's. Hashing content alone would collapse them and
+silently destroy evidence. So:
+
+| | |
+|---|---|
+| same content, same mailbox, different `externalId` | duplicate, dropped |
+| same content, **different mailbox** | two records, both kept |
+
+The corpus contains that second case on purpose, including on the narrative's smoking-gun message.
+Verified against the full 12,000-message fixture: 12,000 distinct fingerprints, zero collisions.
 
 Enforcement is in two places (see decision 2 in `architecture.md`): a Redis check in P1 for speed,
-a unique constraint on `externalId` in P2 for correctness. The constraint is the guarantee.
+unique constraints on **both** keys in P2 for correctness. The constraints are the guarantee — P1
+fails open, so if Redis is unavailable duplicates reach P2 and are rejected there.
+
+P1 and P2 must both call `ContentHash.of()`. It lives in `contracts` for that reason. If the two
+layers compute fingerprints differently, they disagree, and the disagreement will not surface
+until something has already been lost.
 
 ## Batching
 

@@ -142,10 +142,16 @@ class IngestControllerTest {
         return MAPPER.readTree(raw);
     }
 
+    /**
+     * The body varies with the external id on purpose. These are batching tests, and P1 now also
+     * dedupes on a content fingerprint — a batch of messages identical in everything but their
+     * source key is a batch of duplicates, which is a different test.
+     */
     private static String message(String externalId) {
         return MAPPER.writeValueAsString(new Message(
                 null, externalId, "EXCHANGE", MessageType.EMAIL, "alice",
-                "alice@firm.test", List.of("bob@firm.test"), List.of(), "subject", "body",
+                "alice@firm.test", List.of("bob@firm.test"), List.of(), "subject",
+                "body of " + externalId,
                 Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of()));
     }
 
@@ -153,13 +159,13 @@ class IngestControllerTest {
         Set<String> seen = new HashSet<>();
         return new DedupeStore() {
             @Override
-            public boolean claim(String externalId) {
-                return seen.add(externalId);
+            public boolean claim(String namespace, String key) {
+                return seen.add(namespace + ":" + key);
             }
 
             @Override
-            public void release(String externalId) {
-                seen.remove(externalId);
+            public void release(String namespace, String key) {
+                seen.remove(namespace + ":" + key);
             }
         };
     }

@@ -1,6 +1,7 @@
 package com.discoveryhub.ingestion.service;
 
 import com.discoveryhub.contracts.AuditEvent;
+import com.discoveryhub.contracts.ContentHash;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.ingestion.api.IngestResponse;
@@ -66,20 +67,37 @@ public class IngestService {
         Message message = MessageIds.withDerivedIds(incoming);
         String externalId = message.externalId();
         String messageId = message.messageId();
+        String contentHash = ContentHash.of(message);
 
-        if (!dedupe.claim(externalId)) {
+        // Two independent keys. externalId catches a source system re-sending the same record;
+        // contentHash catches the same message arriving under a different source key, which a
+        // re-export or a second connector on one mailbox will produce. Neither collapses the same
+        // conversation captured from two custodians — see ContentHash.
+        if (!dedupe.claim(DedupeStore.EXTERNAL_ID, externalId)) {
             // A source system re-sending is normal, not a client fault. Dropping the copy is an
             // audit event and a 2xx outcome (FR-1.6).
             audit("message.deduped", messageId, AuditEvent.Outcome.REFUSED, correlationId,
-                    Map.of("externalId", externalId));
-            return IngestResult.duplicate(externalId, messageId);
+                    Map.of("externalId", externalId, "matchedOn", DedupeStore.EXTERNAL_ID));
+            return IngestResult.duplicate(externalId, messageId, "externalId already ingested");
+        }
+
+        if (!dedupe.claim(DedupeStore.CONTENT_HASH, contentHash)) {
+            // The externalId claim stays. This key genuinely has been seen now, and releasing it
+            // would only mean re-deriving the same duplicate verdict on the next re-send.
+            audit("message.deduped", messageId, AuditEvent.Outcome.REFUSED, correlationId,
+                    Map.of("externalId", externalId,
+                            "contentHash", contentHash,
+                            "matchedOn", DedupeStore.CONTENT_HASH));
+            return IngestResult.duplicate(externalId, messageId,
+                    "identical message already ingested under a different externalId");
         }
 
         try {
             publisher.publishIngested(message);
         } catch (RuntimeException e) {
-            // Release the claim so a retry is not mistaken for a duplicate and silently dropped.
-            dedupe.release(externalId);
+            // Release both claims so a retry is not mistaken for a duplicate and silently dropped.
+            dedupe.release(DedupeStore.EXTERNAL_ID, externalId);
+            dedupe.release(DedupeStore.CONTENT_HASH, contentHash);
             log.error("publish failed for externalId={}", externalId, e);
             audit("message.ingest_failed", messageId, AuditEvent.Outcome.FAILURE, correlationId,
                     Map.of("externalId", externalId, "error", String.valueOf(e.getMessage())));
@@ -88,6 +106,7 @@ public class IngestService {
 
         audit("message.ingested", messageId, AuditEvent.Outcome.SUCCESS, correlationId,
                 Map.of("externalId", externalId,
+                        "contentHash", contentHash,
                         "custodianId", message.custodianId(),
                         "type", message.type().name(),
                         "attachmentCount", String.valueOf(message.attachments().size())));

@@ -1,6 +1,7 @@
 package com.discoveryhub.ingestion.service;
 
 import com.discoveryhub.contracts.Attachment;
+import com.discoveryhub.contracts.ContentHash;
 import com.discoveryhub.contracts.Ids;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
@@ -74,9 +75,9 @@ class IngestServiceTest {
         publisher.ingested.clear();
 
         IngestResponse response = service.ingest(List.of(
-                email("EXCH-1", "alice"),
+                distinctEmail("EXCH-1", "alice"),
                 email("EXCH-2", "alice"),
-                email("EXCH-3", "alice")));
+                distinctEmail("EXCH-3", "alice")));
 
         assertThat(response.accepted()).isEqualTo(2);
         assertThat(response.duplicates()).isEqualTo(1);
@@ -139,7 +140,9 @@ class IngestServiceTest {
         IngestResponse first = service.ingest(List.of(email("EXCH-9", "alice")));
 
         assertThat(first.failed()).isEqualTo(1);
-        assertThat(dedupe.hasClaim("EXCH-9")).isFalse();
+        assertThat(dedupe.hasClaim(DedupeStore.EXTERNAL_ID, "EXCH-9")).isFalse();
+        assertThat(dedupe.hasClaim(DedupeStore.CONTENT_HASH,
+                ContentHash.of(email("EXCH-9", "alice")))).isFalse();
         assertThat(publisher.auditActions()).containsExactly("message.ingest_failed");
 
         publisher.failNextPublishes(null);
@@ -149,11 +152,74 @@ class IngestServiceTest {
         assertThat(publisher.ingested).hasSize(1);
     }
 
+    @Test
+    void identicalContentUnderADifferentExternalIdIsADuplicate() {
+        // A re-export or a second connector on one mailbox produces this: same message, new
+        // source key. externalId alone cannot see it.
+        IngestResponse response = service.ingest(List.of(
+                email("EXCH-first", "alice"),
+                email("EXCH-reexported", "alice")));
+
+        assertThat(response.accepted()).isEqualTo(1);
+        assertThat(response.duplicates()).isEqualTo(1);
+        assertThat(publisher.ingested).hasSize(1);
+        assertThat(publisher.auditActions())
+                .containsExactly("message.ingested", "message.deduped");
+    }
+
+    @Test
+    void contentHashCoversTheCustodianSoTwoMailboxesStayDistinct() {
+        // The regression guard for ContentHash. If custodianId ever leaves the fingerprint, these
+        // two collapse into one and a hold on bob preserves nothing.
+        assertThat(ContentHash.of(email("EXCH-a", "alice")))
+                .isNotEqualTo(ContentHash.of(email("EXCH-b", "bob")));
+    }
+
+    @Test
+    void contentHashIgnoresTheSourceKeyButNotTheContent() {
+        assertThat(ContentHash.of(email("EXCH-1", "alice")))
+                .isEqualTo(ContentHash.of(email("EXCH-2", "alice")));
+
+        Message edited = new Message(
+                null, "EXCH-3", "EXCHANGE", MessageType.EMAIL, "alice", "alice@firm.test",
+                List.of("bob@firm.test"), List.of(), "Q2 numbers", "a different body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-77", null, List.of(), List.of());
+        assertThat(ContentHash.of(edited))
+                .isNotEqualTo(ContentHash.of(email("EXCH-1", "alice")));
+    }
+
+    @Test
+    void fieldBoundariesCannotBeForgedByContent() {
+        // Length-prefixing exists for this: without it, shifting a character between two adjacent
+        // fields would produce the same canonical string and the same fingerprint.
+        Message a = new Message(null, "EXCH-a", "EXCHANGE", MessageType.EMAIL, "alice",
+                "alice@firm.test", List.of(), List.of(), "AB", "C",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of());
+        Message b = new Message(null, "EXCH-b", "EXCHANGE", MessageType.EMAIL, "alice",
+                "alice@firm.test", List.of(), List.of(), "A", "BC",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of());
+
+        assertThat(ContentHash.of(a)).isNotEqualTo(ContentHash.of(b));
+    }
+
+    /**
+     * Identical content whatever the external id. Several tests depend on that: it is what makes
+     * the two-mailbox case and the content-fingerprint cases meaningful.
+     */
     private static Message email(String externalId, String custodianId) {
         return new Message(
                 null, externalId, "EXCHANGE", MessageType.EMAIL, custodianId,
                 "alice@firm.test", List.of("bob@firm.test"), List.of(),
                 "Q2 numbers", "the same body text in both mailboxes",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-77", null, List.of(), List.of());
+    }
+
+    /** A genuinely different message, for tests about batching rather than about dedupe. */
+    private static Message distinctEmail(String externalId, String custodianId) {
+        return new Message(
+                null, externalId, "EXCHANGE", MessageType.EMAIL, custodianId,
+                "alice@firm.test", List.of("bob@firm.test"), List.of(),
+                "Q2 numbers", "body of " + externalId,
                 Instant.parse("2024-05-11T21:37:00Z"), "thread-77", null, List.of(), List.of());
     }
 }

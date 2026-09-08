@@ -20,8 +20,9 @@ public record IngestResult(
         return new IngestResult(externalId, messageId, Outcome.ACCEPTED, null);
     }
 
-    public static IngestResult duplicate(String externalId, String messageId) {
-        return new IngestResult(externalId, messageId, Outcome.DUPLICATE, null);
+    /** {@code reason} says which key matched, so a caller can tell the two dedupe rules apart. */
+    public static IngestResult duplicate(String externalId, String messageId, String reason) {
+        return new IngestResult(externalId, messageId, Outcome.DUPLICATE, reason);
     }
 
     public static IngestResult rejected(String externalId, String reason) {
