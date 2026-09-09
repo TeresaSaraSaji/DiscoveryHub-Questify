@@ -2,9 +2,11 @@ package com.discoveryhub.archive.repository;
 
 import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.contracts.MessageType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -15,6 +17,17 @@ import java.util.Optional;
 public interface MessageRepository extends JpaRepository<MessageEntity, String> {
 
     Optional<MessageEntity> findByExternalId(String externalId);
+
+    /**
+     * Same lookup as {@link #findById}, but takes a row lock for the rest of the transaction.
+     * Deletion callers use this instead of {@code findById} between the P4 hold check and the
+     * actual delete, so a concurrent {@code HoldsEventListener} update to {@code onHold} for the
+     * same row cannot land in the window between "P4 said not held" and "row removed" — the
+     * listener's {@code save} blocks until this transaction commits or rolls back.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from MessageEntity m where m.messageId = :messageId")
+    Optional<MessageEntity> findByIdForUpdate(@Param("messageId") String messageId);
 
     boolean existsByExternalId(String externalId);
 

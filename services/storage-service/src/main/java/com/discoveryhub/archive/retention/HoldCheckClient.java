@@ -26,8 +26,12 @@ public class HoldCheckClient {
     }
 
     /**
-     * @return {@code true} if P4 says the message is held, or if P4 could not be reached. Never
-     *         {@code false} on a communication failure — that would let a held message be deleted.
+     * @return {@code true} if P4 says the message is held, if P4 could not be reached, or if P4
+     *         returned a response this client cannot positively read as "not held". Never
+     *         {@code false} except on an explicit {@code held: false} — a {@code null} body or a
+     *         response missing the field would otherwise deserialise to the same {@code false} as
+     *         a real "not held" answer, and treating that as safe to delete is exactly the held-
+     *         data destruction this guard exists to prevent.
      */
     public boolean isHeld(String messageId) {
         try {
@@ -35,7 +39,11 @@ public class HoldCheckClient {
                     .uri(uri -> uri.path("/holds/check").queryParam("messageId", messageId).build())
                     .retrieve()
                     .body(HoldCheckResponse.class);
-            return response != null && response.held();
+            if (response == null) {
+                log.warn("hold check for {} returned an empty body — treating as held (fail closed)", messageId);
+                return true;
+            }
+            return response.held();
         } catch (Exception ex) {
             log.warn("hold check failed for {} — treating as held (fail closed): {}", messageId, ex.toString());
             return true;
