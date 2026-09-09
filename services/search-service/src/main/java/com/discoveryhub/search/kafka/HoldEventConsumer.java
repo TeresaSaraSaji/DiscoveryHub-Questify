@@ -50,9 +50,9 @@ public class HoldEventConsumer {
         }
 
         if (event.messageId() != null) {
-            repository.setHold(event.messageId(), event.held());
+            repository.setHold(event.messageId(), event.held(), event.occurredAt());
         } else if (event.custodianId() != null) {
-            repository.setHoldByCustodian(event.custodianId(), event.held());
+            repository.setHoldByCustodian(event.custodianId(), event.held(), event.occurredAt());
         }
     }
 

@@ -45,6 +45,16 @@ public class CommunicationDocument {
     @Field(type = FieldType.Keyword)
     private String custodianId;
 
+    /**
+     * Stored lower-cased (see {@code CommunicationDocumentMapper.fromMessage}). {@code Keyword}'s
+     * wildcard match (the free-text query in {@code SearchQueryBuilder}) is case-sensitive against
+     * the raw string, unlike {@code to}/{@code cc}'s analyzed {@code Text} match — without
+     * normalizing the casing on both the stored value and the query term, a search for "alice"
+     * would silently miss {@code From: Alice@firm.test} even though the identical search matches
+     * that same address in {@code to}. {@link com.discoveryhub.search.service.SearchQueryBuilder}
+     * lower-cases the free-text term and the exact {@code from} filter before comparing, so this
+     * stays an exact (not analyzed) match either way.
+     */
     @Field(type = FieldType.Keyword)
     private String from;
 
@@ -83,6 +93,16 @@ public class CommunicationDocument {
     /** Mirrored from holds.events; true while any hold covers this message. */
     @Field(type = FieldType.Boolean)
     private boolean onHold;
+
+    /**
+     * {@code occurredAt} of the last {@code holds.events} record applied to this document, or
+     * {@code null} if none has been. Lets {@code setHold}/{@code setHoldByCustodian} reject a
+     * stale, out-of-order redelivered event instead of blindly overwriting a newer one — and lets
+     * a re-index from {@code messages.archived} know it must not touch {@code onHold} at all
+     * (re-indexing carries no hold information of its own).
+     */
+    @Field(type = FieldType.Date, format = DateFormat.date_optional_time)
+    private Instant holdUpdatedAt;
 
     /** Spring Data Elasticsearch instantiates via reflection, so a no-arg constructor is required. */
     public CommunicationDocument() {
@@ -162,4 +182,7 @@ public class CommunicationDocument {
 
     public boolean isOnHold() { return onHold; }
     public void setOnHold(boolean onHold) { this.onHold = onHold; }
+
+    public Instant getHoldUpdatedAt() { return holdUpdatedAt; }
+    public void setHoldUpdatedAt(Instant holdUpdatedAt) { this.holdUpdatedAt = holdUpdatedAt; }
 }

@@ -43,8 +43,13 @@ public class CommunicationDocumentMapper {
         List<String> filenames = m.attachments().stream()
                 .map(Attachment::filename)
                 .toList();
+        // from is a Keyword field (see CommunicationDocument), so its match is exact rather than
+        // analyzed like to/cc. Lower-casing at index time — matched by SearchQueryBuilder
+        // lower-casing the query term — keeps that exact match case-insensitive, consistent with
+        // how to/cc behave under Elasticsearch's default lower-casing analyzer.
+        String from = m.from() == null ? null : m.from().toLowerCase(Locale.ROOT);
         return new CommunicationDocument(
-                m.messageId(), m.externalId(), m.source(), m.type(), m.custodianId(), m.from(),
+                m.messageId(), m.externalId(), m.source(), m.type(), m.custodianId(), from,
                 m.to(), m.cc(), m.subject(), m.body(), m.sentAt(), m.threadId(), m.inReplyTo(),
                 m.attachments().size(), filenames, m.labels(), false);
     }

@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Turns a {@link SearchRequest} into a Spring Data Elasticsearch {@link Query}.
@@ -81,9 +82,15 @@ public class SearchQueryBuilder {
             // just the last OR'd field — without this, a filter like onHold=false would bind as
             // (body OR subject OR from OR to OR (cc AND onHold=false)) instead of
             // (body OR subject OR from OR to OR cc) AND onHold=false.
+            //
+            // from is a Keyword field (see CommunicationDocument), so its wildcard match is
+            // case-sensitive against the exact stored string, unlike body/subject/to/cc's analyzed
+            // Text match. Lower-casing the term against the lower-cased stored value (see
+            // CommunicationDocumentMapper.fromMessage) keeps a search for "alice" matching
+            // From: Alice@firm.test the same way it already matches that address in to/cc.
             Criteria text = new Criteria("body").contains(term)
                     .or(new Criteria("subject").contains(term))
-                    .or(new Criteria("from").contains(term))
+                    .or(new Criteria("from").contains(term.toLowerCase(Locale.ROOT)))
                     .or(new Criteria("to").contains(term))
                     .or(new Criteria("cc").contains(term));
             criteria = new Criteria().subCriteria(text);
@@ -99,18 +106,23 @@ public class SearchQueryBuilder {
         }
 
         if (request.from() != null && !request.from().isBlank()) {
-            criteria = chain(criteria, new Criteria("from").is(request.from()));
+            criteria = chain(criteria, new Criteria("from").is(request.from().toLowerCase(Locale.ROOT)));
         }
 
         Instant after = request.sentAfter();
         Instant before = request.sentBefore();
         if (after != null || before != null) {
+            // Inclusive on both ends, matching the e-discovery convention (a hold's date range and
+            // disposition's retention cutoff are both inclusive — see DateRangeScopeFilter and
+            // MessageRepository.findDispositionEligible). An exclusive bound here previously meant
+            // a query for "messages sent on or before 2024-12-31T23:59:59Z" silently dropped any
+            // message sent at exactly that instant.
             Criteria range = new Criteria("sentAt");
             if (after != null) {
-                range = range.greaterThan(after);
+                range = range.greaterThanEqual(after);
             }
             if (before != null) {
-                range = range.lessThan(before);
+                range = range.lessThanEqual(before);
             }
             criteria = chain(criteria, range);
         }
