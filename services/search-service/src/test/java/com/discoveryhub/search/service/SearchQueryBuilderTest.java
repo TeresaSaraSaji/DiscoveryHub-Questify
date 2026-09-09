@@ -53,6 +53,29 @@ class SearchQueryBuilderTest {
         assertThat(((CriteriaQuery) query).getCriteria().getSubCriteria()).isNotEmpty();
     }
 
+    /**
+     * A phrase is the most ordinary query a person types, and it used to be a 500.
+     *
+     * <p>{@code Criteria.contains} builds a wildcard query, and Spring Data Elasticsearch rejects a
+     * wildcard containing a blank outright — {@code *quarterly report*} threw
+     * {@code InvalidDataAccessApiUsageException} before the builder ever reached Elasticsearch, so
+     * every multi-word search returned "unexpected error". Nothing in the single-word tests above
+     * could catch it.
+     */
+    @Test
+    void multiWordQueriesBuildInsteadOfThrowing() {
+        assertThatCode(() -> builder.build(new SearchRequest("quarterly report", null, null, null,
+                null, null, null, null, null, null, null, null, null), Sort.unsorted()))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aQueryOfOnlyWhitespaceIsTreatedAsNoQueryRatherThanAnEmptyClause() {
+        assertThatCode(() -> builder.build(new SearchRequest("   ", null, MessageType.EMAIL, null,
+                null, null, null, null, null, null, null, null, null), Sort.unsorted()))
+                .doesNotThrowAnyException();
+    }
+
     @Test
     void textQueryMatchingAParticipantFieldBuildsSuccessfully() {
         // A query for an email address should build — it will match the from/to/cc text fields.
