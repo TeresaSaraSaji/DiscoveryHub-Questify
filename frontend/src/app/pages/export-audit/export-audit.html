@@ -1,10 +1,7 @@
 <header class="page__head">
   <div>
     <h1>Export &amp; Audit</h1>
-    <p class="page__lede">
-      Defensible export packages, and the append-only chain of custody that makes them defensible.
-      FR-6, FR-7.
-    </p>
+    <p class="page__lede">Request and download evidence exports, and view all system activity.</p>
   </div>
 </header>
 
@@ -21,7 +18,7 @@
   <!-- FR-6 -->
   <app-panel
     heading="Request an export"
-    hint="POST /exports — asynchronous, because packaging a case is not request-sized work"
+    hint="Request an evidence package. Asynchronous — the job is polled to completion."
     service="p5"
   >
     <div class="form">
@@ -117,7 +114,7 @@
 
   <app-panel
     heading="Export history"
-    hint="GET /exports — every package ever produced, with its digest"
+    hint="Every package ever produced, with its manifest digest."
     service="p5"
     [source]="exports"
   >
@@ -176,7 +173,7 @@
 <!-- FR-7 -->
 <app-panel
   heading="Audit trail"
-  hint="GET /audit/events — append-only; every service emits its own"
+  hint="Append-only system activity. Every service emits its own events."
   service="p5"
   [source]="events"
 >
@@ -294,7 +291,7 @@
 <div class="grid grid--2">
   <app-panel
     heading="Chain of custody, one subject"
-    hint="GET /audit/events/{subjectId} — every service's events about one thing, oldest first"
+    hint="Every service's events about one subject, oldest first."
     service="p5"
     [source]="chain"
   >
@@ -336,7 +333,7 @@
   <!-- The part of FR-7 that is already true -->
   <app-panel
     heading="Disposition decisions for one message"
-    hint="GET /disposition/messages/{messageId} on P2.2 — recorded at sweep time, survives the message"
+    hint="Recorded at sweep time by P2.2, and survives the message."
     service="p22"
   >
     <div class="controls controls--tight">

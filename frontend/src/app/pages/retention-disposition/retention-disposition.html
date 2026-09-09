@@ -1,9 +1,7 @@
 <header class="page__head">
   <div>
     <h1>Retention &amp; Disposition</h1>
-    <p class="page__lede">
-      What the retention policy says, and what the sweep did about it. FR-5.1, FR-5.2, FR-5.3.
-    </p>
+    <p class="page__lede">Manage retention rules and run disposition jobs.</p>
   </div>
   <label class="field field--inline">
     <span>Acting as</span>
@@ -21,7 +19,7 @@
   <!-- FR-5.1 -->
   <app-panel
     heading="Retention policy"
-    hint="GET · PUT /retention/policies — takes effect on the next sweep, no backfill"
+    hint="Set how long each communication type is kept. Takes effect on the next sweep, with no backfill."
     service="p22"
     [source]="policies"
   >
@@ -90,7 +88,7 @@
   <!-- The blast radius, before anyone presses anything -->
   <app-panel
     heading="What the next sweep would touch"
-    hint="GET /disposition/stats/candidates — bounded by batch-size, nothing is deleted"
+    hint="What the next sweep would touch, without running it. Nothing is deleted."
     service="p22"
     [source]="candidates"
   >
@@ -152,11 +150,7 @@
 </div>
 
 <!-- FR-5.2 + FR-8.1 -->
-<app-panel
-  heading="Run a sweep"
-  hint="POST /disposition/runs?async=true, then GET /disposition/runs/stream"
-  service="p22"
->
+<app-panel heading="Run a sweep" hint="Trigger a disposition run and watch it live." service="p22">
   @if (holdCheckWarning(); as warning) {
     <div class="alert alert--warn" role="alert">{{ warning }}</div>
   }
@@ -246,7 +240,7 @@
 <div class="grid grid--2">
   <app-panel
     heading="Disposition overview"
-    hint="GET /disposition/stats"
+    hint="Totals across every sweep this service has run."
     service="p22"
     [source]="stats"
   >
@@ -299,7 +293,7 @@
   <!-- A different service on the same page, on purpose: stop P2.2 and this panel still answers. -->
   <app-panel
     heading="Archive"
-    hint="GET /stats on P2 — the system of record, independent of P2.2"
+    hint="The system of record, read independently of P2.2."
     service="p2"
     [source]="archiveStats"
   >
@@ -326,7 +320,7 @@
 <!-- FR-5.3 -->
 <app-panel
   heading="Run history"
-  hint="GET /disposition/runs — newest first"
+  hint="Every sweep, newest first. Select one to read its decisions."
   service="p22"
   [source]="runs"
 >
@@ -387,7 +381,7 @@
 <!-- FR-4.6: what a hold actually saved -->
 <app-panel
   heading="Ledger"
-  hint="GET /disposition/runs/{runId}/items — one row per candidate, and it outlives the message"
+  hint="One row per candidate considered. Outlives the message itself."
   service="p22"
   [source]="items"
 >

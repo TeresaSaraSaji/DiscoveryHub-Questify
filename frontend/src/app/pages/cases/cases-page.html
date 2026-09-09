@@ -2,8 +2,7 @@
   <div>
     <h1>Case &amp; Hold</h1>
     <p class="page__lede">
-      What is under legal hold right now (P4), and what those holds have already saved from
-      destruction (P2.2). FR-2.4, FR-4.2, FR-4.3, FR-4.5, FR-4.6.
+      What is under legal hold, and what those holds have saved from destruction.
     </p>
   </div>
   <label class="field field--inline">
@@ -40,7 +39,7 @@
 <!-- FR-4.3: holds as scope, before propagation has finished -->
 <app-panel
   heading="Active holds"
-  hint="GET /holds/active — scope, never expanded to messages"
+  hint="Every hold in force, as scope — custodians and a date range."
   service="p4"
   [source]="holds"
 >
@@ -110,7 +109,7 @@
   <!-- FR-4.2 -->
   <app-panel
     heading="Is this message held?"
-    hint="GET /holds/check?messageId= — the per-message guard P2 and P2.2 call before any delete"
+    hint="The per-message guard both services call before any delete."
     service="p4"
   >
     <div class="controls">
@@ -149,7 +148,7 @@
   <!-- FR-2.4 vs FR-4.3: membership beats scope -->
   <app-panel
     heading="Held-case evidence check"
-    hint="POST /holds/evidence-check — which of these are evidence in a case under hold?"
+    hint="Which of these messages are evidence in a case under hold?"
     service="p4"
   >
     <textarea
@@ -217,7 +216,7 @@
 <!-- FR-4.6, and the reason this page still works with P4 down -->
 <app-panel
   heading="What this case's holds have saved"
-  hint="GET /disposition/cases/{caseId}/protected on P2.2 — written at sweep time, outlives the hold"
+  hint="Recorded at sweep time by P2.2. Outlives the hold and the case."
   service="p22"
   [source]="protectedItems"
 >
@@ -279,7 +278,7 @@
 <div class="grid grid--2">
   <app-panel
     heading="Archive hold flag"
-    hint="GET /stats on P2 — the mirrored on_hold flag, guard #1 of five"
+    hint="The mirrored on_hold flag — the first of five disposition guards."
     service="p2"
     [source]="archiveStats"
   >
@@ -305,7 +304,7 @@
 
   <app-panel
     heading="Find messages to file as evidence"
-    hint="GET /messages on P2"
+    hint="Browse the archive to pick messages to file as evidence."
     service="p2"
     [source]="messages"
   >

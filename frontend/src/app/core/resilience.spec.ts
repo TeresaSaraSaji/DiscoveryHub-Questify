@@ -93,16 +93,14 @@ describe('a failing service does not take the others with it', () => {
     // What the Reload button in the panel header does.
     policies.reload();
     await settle();
-    http
-      .expectOne('http://localhost:8086/retention/policies')
-      .flush([
-        {
-          messageType: 'EMAIL',
-          periodSeconds: 220_752_000,
-          updatedAt: '2026-01-01T00:00:00Z',
-          updatedBy: 'seed',
-        },
-      ]);
+    http.expectOne('http://localhost:8086/retention/policies').flush([
+      {
+        messageType: 'EMAIL',
+        periodSeconds: 220_752_000,
+        updatedAt: '2026-01-01T00:00:00Z',
+        updatedBy: 'seed',
+      },
+    ]);
     await settle();
 
     expect(policies.status()).toBe('resolved');

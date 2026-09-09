@@ -23,7 +23,7 @@ import { HealthService, ServiceHealth } from '../core/health.service';
           <span class="status__dot"></span>{{ health.service.code }}
         </span>
       }
-      <button type="button" class="btn btn--ghost btn--small" (click)="health.probeAll()">
+      <button type="button" class="link status__recheck" (click)="health.probeAll()">
         Re-check
       </button>
     </div>
