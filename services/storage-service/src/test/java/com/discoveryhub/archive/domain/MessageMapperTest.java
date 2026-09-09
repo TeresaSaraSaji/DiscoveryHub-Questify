@@ -47,7 +47,7 @@ class MessageMapperTest {
         att.setContentType("text/plain");
         att.setSizeBytes(bytes.length);
         att.setSha256("deadbeef");
-        att.setContent(bytes);
+        att.setContentBytes(bytes);
 
         MessageEntity msg = mapper.toEntity(sample("EXCH-002", "s", List.of(), List.of()));
         msg.setMessageId("m-1");
@@ -72,7 +72,7 @@ class MessageMapperTest {
 
         String expected = MessageMapper.checksum(bytes);
         assertThat(e.getSha256()).isEqualTo(expected);
-        assertThat(e.getContent()).isEqualTo(bytes);
+        assertThat(e.getContentBytes()).isEqualTo(bytes);
         // attachmentId is derived from the message id + ordinal when absent.
         assertThat(e.getAttachmentId()).isNotNull();
     }

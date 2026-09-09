@@ -39,6 +39,14 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
+    listener:
+      # Per-record ack mode: an exception on one record does not roll back the whole batch, and
+      # the offset for a record is only committed after its listener returns normally.
+      ack-mode: record
+      # The CommonErrorHandler bean (config/KafkaConsumerConfig) retries transient failures with an
+      # unbounded fixed backoff, so a Storage/DB/S3 outage parks the consumer on the failing record
+      # instead of skipping it. The offset is not committed until processing succeeds, so Kafka
+      # redelivers pending records in order once Storage recovers — no messages lost.
 
 discoveryhub:
   archive:
@@ -46,6 +54,27 @@ discoveryhub:
     # The hold-service owns GET /holds/check; the case-service is a separate deployable on 8084.
     hold-check-base-url: ${HOLDS_BASE_URL:http://localhost:8086}
     hold-check-timeout: 5s
+    # Attachment bytes live on local disk (the primary copy the read API serves), with an optional
+    # S3 offload copy for durable "after use" retrieval. Message metadata stays in PostgreSQL. See
+    # V4__attachment_storage.sql and the com.discoveryhub.archive.storage package.
+    storage:
+      local:
+        base-dir: ${ATTACHMENT_DIR:./data/attachments}
+      s3:
+        # Off by default. Flip to true to also write every attachment to S3 (real S3 or MinIO).
+        enabled: ${S3_ENABLED:false}
+        # Leave empty to use real AWS S3; set it for MinIO / a local S3-compatible server.
+        endpoint: ${S3_ENDPOINT:http://localhost:9000}
+        region: ${S3_REGION:us-east-1}
+        # infra/minio/create-buckets.sh provisions this one; a different name here silently means
+        # every offload fails with NoSuchBucket and s3_key stays null on every row.
+        bucket: ${S3_BUCKET:archive-attachments}
+        # Leave empty to fall back to the default AWS credentials provider chain.
+        access-key: ${S3_ACCESS_KEY:minioadmin}
+        secret-key: ${S3_SECRET_KEY:minioadmin}
+        # Required for MinIO; harmless for AWS S3.
+        path-style-access: ${S3_PATH_STYLE:true}
+        key-prefix: attachments/
   retention:
     # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
     # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.

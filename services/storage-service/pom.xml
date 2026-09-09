@@ -15,6 +15,23 @@
   <name>P2 Archive</name>
   <description>System of record for messages, plus retention and disposition. Owner: A.</description>
 
+  <properties>
+    <aws-sdk.version>2.39.0</aws-sdk.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Only this module talks to S3, so the BOM is imported here rather than in the parent. -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws-sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>com.discoveryhub</groupId>
@@ -64,6 +81,18 @@
       <groupId>org.flywaydb</groupId>
       <artifactId>flyway-database-postgresql</artifactId>
       <scope>runtime</scope>
+    </dependency>
+    <!-- Optional S3 offload copy for attachment bytes: real AWS S3 or any S3-compatible endpoint
+         (MinIO) via endpoint override + path-style access. Only used when
+         discoveryhub.archive.storage.s3.enabled=true — the S3Client bean is conditional, so an
+         S3-less deployment never opens a connection and needs no credentials. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>apache-client</artifactId>
     </dependency>
     <dependency>
       <groupId>com.h2database</groupId>
