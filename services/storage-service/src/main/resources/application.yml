@@ -61,6 +61,12 @@ management:
     web:
       exposure:
         include: health,info,metrics
+      # Actuator has its own CORS, and config/CorsConfig does not reach it: these endpoints are
+      # served by a separate handler mapping that ignores addCorsMappings. Without this the
+      # frontend's status strip reports this service DOWN while it answers every other request.
+      cors:
+        allowed-origin-patterns: ${discoveryhub.web.cors.allowed-origins:http://localhost:[*],http://127.0.0.1:[*]}
+        allowed-methods: GET
   endpoint:
     health:
       show-details: always

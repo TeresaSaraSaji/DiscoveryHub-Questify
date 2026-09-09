@@ -19,7 +19,8 @@
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
-const ORIGINS = ['http://localhost:4200', 'http://127.0.0.1:4200'];
+/** Any port on the loopback host, matching the three real services' CorsConfig. */
+const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 const CASE_PORT = Number(process.env.P4_PORT ?? 8084);
 const AUDIT_PORT = Number(process.env.P5_PORT ?? 8085);
 
@@ -129,7 +130,13 @@ const readBody = (req) =>
 /** Same allowance the three real services grant in their `CorsConfig`. */
 function cors(req, res) {
   const origin = req.headers.origin;
-  res.setHeader('access-control-allow-origin', ORIGINS.includes(origin) ? origin : ORIGINS[0]);
+  // Echo the caller's origin when it is loopback, whatever port it came from. A hard-coded 4200
+  // refuses an IDE preview pane or a second dev server, and the browser reports that refusal as a
+  // bare network error — which the UI then honestly, and misleadingly, calls "not reachable".
+  res.setHeader(
+    'access-control-allow-origin',
+    origin && LOOPBACK.test(origin) ? origin : 'http://localhost:4200',
+  );
   res.setHeader('access-control-allow-methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('access-control-allow-headers', '*');
   res.setHeader('vary', 'origin');

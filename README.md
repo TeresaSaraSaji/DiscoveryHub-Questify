@@ -153,9 +153,12 @@ and a page that waited on them would never open. There are no route resolvers, a
 is never rendered as an empty result — upstream an unreachable P4 means *held*, so "no holds" and
 "could not ask" are opposite facts and the UI keeps them apart.
 
-The three existing services allow `:4200` in their own `CorsConfig`
-(`discoveryhub.web.cors.allowed-origins`). Without it a running service and a correct URL still
-fail, as a network error with no status.
+The three existing services allow any port on the loopback host in their own `CorsConfig`, and
+in `management.endpoints.web.cors` for actuator, which has its own and does not inherit that one.
+Both are governed by `discoveryhub.web.cors.allowed-origins`. Without them a running service and a
+correct URL still fail, as a network error with no status — so the UI reports "not reachable" for a
+service that is answering curl perfectly. If every panel says that at once, it is CORS, not the
+services.
 
 ## Ports
 

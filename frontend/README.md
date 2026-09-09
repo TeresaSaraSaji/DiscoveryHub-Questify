@@ -105,10 +105,26 @@ Anything omitted falls back to the localhost default in `core/api-config.ts`.
 
 ## CORS
 
-Every call the browser makes is cross-origin, so the three existing services allow `:4200` in their
-own `CorsConfig`, overridable with `discoveryhub.web.cors.allowed-origins`. Without it a running
-service and a correct URL still fail as a network error with no status — which the UI would
-correctly, and uselessly, report as "not reachable".
+Every call the browser makes is cross-origin. The three existing services allow **any port on the
+loopback host** in their own `CorsConfig`, overridable with
+`discoveryhub.web.cors.allowed-origins`. Without it a running service and a correct URL still fail
+as a network error with no status — which the UI then reports, correctly and uselessly, as "not
+reachable".
+
+Two things here were learned the hard way, and both look like the whole UI being broken:
+
+- **Do not pin the port.** `http://localhost:4200` alone refuses an IDE preview pane, a
+  `ng serve --port 4201`, and a static server over `dist/` — every one a different origin, every
+  one a 403 the browser reports as a bare network error. Localhost is already whoever is sitting
+  at the machine; the port buys no security.
+- **Actuator has its own CORS.** Its endpoints are served by a separate handler mapping that
+  ignores `addCorsMappings`, so `management.endpoints.web.cors.allowed-origin-patterns` is set in
+  each service's `application.yml` — pointed at the same property. Miss it and the status strip in
+  the header shows every service DOWN while every panel on the page loads fine, because the strip
+  polls `/actuator/health`.
+
+If the whole page says "not reachable" but `curl` works, it is one of these. Check the browser
+console for a CORS message and compare `document.location.origin` against the allowlist.
 
 ## The P4 and P5 contracts
 

@@ -21,14 +21,23 @@ import java.util.List;
  *
  * <p>Credentials are deliberately not allowed: nothing here is authenticated yet and the UI sends
  * no cookies.
+ *
+ * <p>The default allows <b>any port on the loopback host</b>, not just 4200. Pinning the port
+ * looks tighter and is a trap: an IDE preview pane, a `ng serve --port`, or a static server over
+ * `dist/` each present a different origin, are refused with a 403 the browser reports as a bare
+ * network error, and the UI then says the service is unreachable while it is running perfectly.
+ * Localhost is already whoever is sitting at the machine. Deployments set
+ * {@code discoveryhub.web.cors.allowed-origins} to real origins.
  */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
 
+    private static final String LOOPBACK_ANY_PORT = "http://localhost:[*],http://127.0.0.1:[*]";
+
     private final List<String> allowedOrigins;
 
     public CorsConfig(
-            @Value("${discoveryhub.web.cors.allowed-origins:http://localhost:4200,http://127.0.0.1:4200}")
+            @Value("${discoveryhub.web.cors.allowed-origins:" + LOOPBACK_ANY_PORT + "}")
             List<String> allowedOrigins) {
         this.allowedOrigins = allowedOrigins;
     }
