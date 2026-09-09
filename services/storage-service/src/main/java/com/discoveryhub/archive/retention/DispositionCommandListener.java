@@ -3,7 +3,10 @@ package com.discoveryhub.archive.retention;
 import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.archive.messaging.ArchiveKafkaPublisher;
 import com.discoveryhub.archive.messaging.AuditEvents;
+import com.discoveryhub.archive.domain.AttachmentEntity;
+import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.DeleteCommand;
 import com.discoveryhub.contracts.DeleteReceipt;
 import com.discoveryhub.contracts.Topics;
@@ -16,6 +19,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -41,8 +45,12 @@ import java.util.Optional;
  * replayed partition are both harmless — which is what makes it safe for the offset to be
  * committed only after the receipt is sent.
  *
- * <p>Attachments go with the message: {@code fk_attachments_message} is {@code ON DELETE CASCADE}
- * (V2__messages.sql), so one statement is the whole delete and there is no window in which a
+ * <p>Attachments go with the message, rows and bytes both. The row cascade
+ * ({@code fk_attachments_message} is {@code ON DELETE CASCADE} in V2__messages.sql) would take the
+ * rows on its own, but attachment bytes now live on blob storage and nothing cascades to those —
+ * deleting the message without them leaves blobs that nothing knows about, because the row that
+ * named them is gone. {@link MessageDeletionService} does the same thing for
+ * {@code DELETE /messages/{id}}; the two must not drift apart. There is no window in which a
  * message is gone but its bytes are orphaned.
  */
 @Component
@@ -51,15 +59,20 @@ public class DispositionCommandListener {
     private static final Logger log = LoggerFactory.getLogger(DispositionCommandListener.class);
 
     private final MessageRepository messages;
+    private final AttachmentRepository attachments;
+    private final AttachmentStore storage;
     private final HoldCheckClient holdCheck;
     private final ArchiveKafkaPublisher publisher;
     private final AuditEvents audit;
     private final ObjectMapper json;
 
-    public DispositionCommandListener(MessageRepository messages, HoldCheckClient holdCheck,
+    public DispositionCommandListener(MessageRepository messages, AttachmentRepository attachments,
+                                      AttachmentStore storage, HoldCheckClient holdCheck,
                                       ArchiveKafkaPublisher publisher, AuditEvents audit,
                                       ObjectMapper json) {
         this.messages = messages;
+        this.attachments = attachments;
+        this.storage = storage;
         this.holdCheck = holdCheck;
         this.publisher = publisher;
         this.audit = audit;
@@ -109,8 +122,22 @@ public class DispositionCommandListener {
         }
 
         try {
+            // Rows first, blobs only once this transaction commits.
+            //
+            // Attachment bytes moved out of PostgreSQL onto blob storage, and blob deletion is not
+            // transactional. Deleting bytes inline would mean a rollback restores rows whose bytes
+            // are already gone — metadata claiming an attachment that does not exist, which cannot
+            // be undone and looks like a clean rollback. Deferring inverts the failure: if the row
+            // delete rolls back the bytes are still there, and if blob deletion fails afterwards
+            // the bytes are merely orphaned, which is reconcilable.
+            //
+            // The refs are snapshotted before the delete because the entities are gone by the time
+            // the after-commit callback runs.
+            List<AttachmentEntity> atts = attachments.findByMessageIdOrderByOrdinalAsc(messageId);
+            attachments.deleteByMessageId(messageId);
             messages.delete(entity);
             messages.flush();
+            storage.deleteAfterCommit(atts);
         } catch (Exception ex) {
             // Left in place deliberately. The next sweep finds it past retention again and
             // retries; reporting FAILED keeps the ledger honest in the meantime.

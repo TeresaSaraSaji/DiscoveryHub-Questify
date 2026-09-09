@@ -4,6 +4,7 @@ import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.archive.domain.MessageMapper;
 import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
 import tools.jackson.databind.ObjectMapper;
@@ -36,6 +37,7 @@ class ArchiveServiceTest {
 
     @Mock MessageRepository messages;
     @Mock AttachmentRepository attachments;
+    @Mock AttachmentStore storage;
     @Spy MessageMapper mapper = new MessageMapper(new ObjectMapper());
 
     @InjectMocks ArchiveService service;

@@ -25,6 +25,7 @@ COPY services/search-service/pom.xml services/search-service/
 COPY services/case-service/pom.xml services/case-service/
 COPY services/hold-service/pom.xml services/hold-service/
 COPY services/export-service/pom.xml services/export-service/
+COPY services/disposition-service/pom.xml services/disposition-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
 RUN mvn -B -q dependency:go-offline -pl contracts,services/storage-service -am || true
 
@@ -36,6 +37,16 @@ FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
 RUN useradd --system --uid 10001 --create-home appuser
+
+# Attachment bytes are written here, not into PostgreSQL (V4__attachment_storage.sql). Created and
+# chowned before the USER switch because appuser cannot mkdir under a root-owned WORKDIR.
+#
+# This MUST be backed by a volume in whatever runs the image — without one the bytes live in the
+# container's writable layer and are destroyed with the container, which loses the durability
+# guarantee the metadata rows still claim. docker-compose.yml has to mount it.
+RUN mkdir -p /app/data/attachments && chown -R appuser /app/data
+VOLUME ["/app/data/attachments"]
+
 USER appuser
 
 COPY --from=build --chown=appuser /build/services/storage-service/target/storage-service-*.jar app.jar
@@ -51,6 +62,7 @@ ENV KAFKA_BOOTSTRAP=kafka:19092 \
     DB_URL=jdbc:postgresql://postgres-archive:5432/archive \
     CASES_BASE_URL=http://cases-service:8084 \
     SERVER_PORT=8082 \
+    ATTACHMENT_DIR=/app/data/attachments \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \

@@ -22,9 +22,10 @@ import java.util.List;
  * out to the archived representation that downstream services see.
  *
  * <p>The archived shape is the same as the ingestion shape with one field dropped: attachment
- * {@code contentBase64} is gone, because the bytes now live in {@code attachments.content} and
- * {@code sha256} is what everything downstream reasons about (message-schema.md). This is what P2
- * publishes to {@code messages.archived} and what its read API returns.
+ * {@code contentBase64} is gone, because the bytes now live on local disk (and, when S3 is
+ * enabled, in an S3 offload bucket) and {@code sha256} is what everything downstream reasons about
+ * (message-schema.md). This is what the storage service publishes to {@code messages.archived}
+ * and what its read API returns.
  */
 @Component
 public class MessageMapper {
@@ -77,7 +78,9 @@ public class MessageMapper {
         // sha256 is the chain-of-custody anchor. If the source omitted it, derive it from the bytes
         // so the anchor always exists before anything downstream can reference it.
         e.setSha256(a.sha256() != null && !a.sha256().isBlank() ? a.sha256() : sha256Hex(bytes));
-        e.setContent(bytes);
+        // Bytes are not persisted in the row: hold them transiently for the storage service to write
+        // to local disk (+ optional S3), then clear.
+        e.setContentBytes(bytes);
         return e;
     }
 

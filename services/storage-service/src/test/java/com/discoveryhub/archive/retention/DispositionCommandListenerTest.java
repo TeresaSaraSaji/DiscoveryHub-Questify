@@ -4,7 +4,10 @@ import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.archive.domain.MessageMapper;
 import com.discoveryhub.archive.messaging.ArchiveKafkaPublisher;
 import com.discoveryhub.archive.messaging.AuditEvents;
+import com.discoveryhub.archive.domain.AttachmentEntity;
+import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.DeleteCommand;
 import com.discoveryhub.contracts.DeleteReceipt;
 import com.discoveryhub.contracts.Message;
@@ -43,6 +46,8 @@ import static org.mockito.Mockito.when;
 class DispositionCommandListenerTest {
 
     @Mock MessageRepository messages;
+    @Mock AttachmentRepository attachments;
+    @Mock AttachmentStore storage;
     @Mock HoldCheckClient holdCheck;
     @Mock ArchiveKafkaPublisher publisher;
     @Mock AuditEvents audit;
@@ -54,7 +59,8 @@ class DispositionCommandListenerTest {
 
     @BeforeEach
     void setUp() {
-        listener = new DispositionCommandListener(messages, holdCheck, publisher, audit, json);
+        listener = new DispositionCommandListener(messages, attachments, storage, holdCheck,
+                publisher, audit, json);
     }
 
     @Test
@@ -62,6 +68,7 @@ class DispositionCommandListenerTest {
         MessageEntity entity = message("EXCH-1", false);
         when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
         when(holdCheck.isHeld("msg-1")).thenReturn(false);
+        when(attachments.findByMessageIdOrderByOrdinalAsc("msg-1")).thenReturn(List.of());
 
         DeleteReceipt receipt = listener.apply(command("msg-1"));
 
@@ -69,6 +76,37 @@ class DispositionCommandListenerTest {
         assertThat(receipt.outcome()).isEqualTo(DeleteReceipt.Outcome.DELETED);
         assertThat(receipt.runId()).isEqualTo("run-1");
         assertThat(receipt.messageId()).isEqualTo("msg-1");
+    }
+
+    /**
+     * Attachment bytes live on blob storage now, and the row cascade does not reach them. Deleting
+     * the message without this leaves the blobs behind forever: nothing else knows they existed,
+     * because the row that named them is gone. The bytes must be scheduled for deletion, and only
+     * after the transaction commits — see the comment on the delete itself.
+     */
+    @Test
+    void takesTheAttachmentBlobsWithTheMessage() {
+        MessageEntity entity = message("EXCH-2", false);
+        AttachmentEntity att = org.mockito.Mockito.mock(AttachmentEntity.class);
+        when(messages.findById("msg-2")).thenReturn(Optional.of(entity));
+        when(holdCheck.isHeld("msg-2")).thenReturn(false);
+        when(attachments.findByMessageIdOrderByOrdinalAsc("msg-2")).thenReturn(List.of(att));
+
+        listener.apply(command("msg-2"));
+
+        verify(storage).deleteAfterCommit(List.of(att));
+    }
+
+    /** A refused delete must not touch the bytes either. */
+    @Test
+    void leavesTheBlobsAloneWhenTheDeleteIsRefused() {
+        MessageEntity entity = message("EXCH-3", true);
+        when(messages.findById("msg-3")).thenReturn(Optional.of(entity));
+
+        listener.apply(command("msg-3"));
+
+        verify(storage, never()).deleteAfterCommit(any());
+        verify(messages, never()).delete(any());
     }
 
     @Test
