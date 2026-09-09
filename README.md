@@ -55,7 +55,15 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── search-service/             P3  index, full-text search        :8083
+│   ├── search-service/             P3  index, full-text search        :8083
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── case-service/                P4  case lifecycle, custodians, evidence  :8084
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── hold-service/                P4  legal hold, scope resolution, /holds/check  :8086
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
@@ -100,14 +108,21 @@ infrastructure failure returns a retryable status.
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
 | 5433 | PostgreSQL `archive` / `archive` / `archive` | P2 |
-| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 |
+| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 (case) |
 | 5435 | PostgreSQL `audit` / `audit` / `audit` | P5 |
+| 5436 | PostgreSQL `holds` / `holds` / `holds` | P4 (hold) |
 | 27017 | MongoDB | unclaimed |
 | 9200 | Elasticsearch | P3 |
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8082** P2, **8083** P3, **8084** P4, **8085** P5, **4200** frontend.
+Remaining application ports: **8082** P2, **8083** P3, **8084** P4 (case), **8085** P5,
+**8086** P4 (hold), **4200** frontend.
+
+P4 is two deployables: **case-service** (8084, cases DB) and **hold-service** (8086, holds DB).
+The split keeps case and hold as separate bounded contexts with their own datastores (NFR-1),
+coordinating via `cases.events` (close → release) and the synchronous `GET /holds/check` endpoint
+that P2 calls before deleting anything.
 
 ## Conventions
 

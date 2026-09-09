@@ -196,4 +196,56 @@ class SearchControllerTest {
         assertThat(result).isEqualTo(expected);
         verify(searchService).addToCase(request);
     }
+
+    @Test
+    void addToCaseWithAllResultsDelegatesToTheService() {
+        BulkAddToCaseRequest request = new BulkAddToCaseRequest("case-42", true,
+                new SearchRequest("fraud", List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null));
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-42", 100, List.of("msg-1"), true);
+        when(searchService.addToCase(request)).thenReturn(expected);
+
+        BulkAddToCaseResponse result = controller.addToCase(request);
+
+        assertThat(result.added()).isEqualTo(100);
+        assertThat(result.truncated()).isTrue();
+        verify(searchService).addToCase(request);
+    }
+
+    @Test
+    void getSavedSearchReturnsNotFoundWhenServiceReturnsEmpty() {
+        when(searchService.getSavedSearch("missing")).thenReturn(Optional.empty());
+
+        ResponseEntity<SavedSearch> result = controller.getSavedSearch("missing");
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(result.getBody()).isNull();
+    }
+
+    @Test
+    void listSavedSearchesWithNoCaseIdDelegatesToTheService() {
+        when(searchService.listSavedSearches(null)).thenReturn(List.of());
+
+        List<SavedSearch> result = controller.listSavedSearches(null);
+
+        assertThat(result).isEmpty();
+        verify(searchService).listSavedSearches(null);
+    }
+
+    @Test
+    void deleteSavedSearchAlwaysReturnsNoContent() {
+        ResponseEntity<Void> result = controller.deleteSavedSearch("any-id");
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(searchService).deleteSavedSearch("any-id");
+    }
+
+    @Test
+    void runSavedSearchPropagatesServiceExceptionForMissingId() {
+        when(searchService.runSavedSearch("missing"))
+                .thenThrow(new SearchException("saved search not found: missing", 404));
+
+        assertThatThrownBy(() -> controller.runSavedSearch("missing"))
+                .isInstanceOf(SearchException.class)
+                .satisfies(ex -> assertThat(((SearchException) ex).status()).isEqualTo(404));
+    }
 }

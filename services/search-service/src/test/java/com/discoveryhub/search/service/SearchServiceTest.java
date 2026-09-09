@@ -288,6 +288,98 @@ class SearchServiceTest {
         verify(publisher, never()).publishAddToCase(any(), any());
     }
 
+    @Test
+    void addToCaseWithAllResultsAndEmptyMatchReturnsZeroAdded() {
+        SearchRequest search = request("nonexistent", SearchRequest.SortBy.RELEVANCE, null);
+        BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", true, search);
+        when(repository.searchMessageIds(any(Query.class), anyInt()))
+                .thenReturn(List.of());
+
+        BulkAddToCaseResponse response = service.addToCase(addRequest);
+
+        assertThat(response.added()).isZero();
+        assertThat(response.messageIds()).isEmpty();
+        assertThat(response.truncated()).isFalse();
+        verify(publisher).publishAddToCase("case-1", List.of());
+    }
+
+    @Test
+    void deleteSavedSearchDelegatesToRepository() {
+        service.deleteSavedSearch("id-1");
+        verify(repository).deleteSavedSearch("id-1");
+    }
+
+    @Test
+    void listSavedSearchesDelegatesToRepository() {
+        SavedSearch saved = new SavedSearch("id-1", "Q1", "case-1", "{}", "alice", Instant.now());
+        when(repository.listSavedSearches("case-1")).thenReturn(List.of(saved));
+
+        List<SavedSearch> result = service.listSavedSearches("case-1");
+
+        assertThat(result).containsExactly(saved);
+    }
+
+    @Test
+    void listSavedSearchesWithBlankCaseIdListsAll() {
+        when(repository.listSavedSearches("")).thenReturn(List.of());
+
+        service.listSavedSearches("");
+
+        verify(repository).listSavedSearches("");
+    }
+
+    @Test
+    void saveSearchWithNullRequestUsesDefaults() {
+        // A null request in the save body should not crash — defaults fill in.
+        SaveSearchRequest saveRequest = new SaveSearchRequest("Q1", "case-1", null, "alice");
+        when(repository.saveSavedSearch(any(SavedSearch.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        SavedSearch saved = service.saveSearch(saveRequest);
+
+        assertThat(saved.getName()).isEqualTo("Q1");
+        assertThat(saved.getRequestJson()).isNotNull();
+    }
+
+    @Test
+    void searchWithMultipleCustodiansIsAccepted() {
+        SearchRequest request = new SearchRequest(
+                "fraud", List.of("custodian-1", "custodian-2"), null, null, null, null,
+                List.of(), null, null, 0, 20, null, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 0, 0, 20, 0L));
+
+        service.search(request);
+
+        verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
+    @Test
+    void searchWithOnlyFromDateFilterIsAccepted() {
+        SearchRequest request = new SearchRequest(
+                null, List.of(), null, null, Instant.parse("2024-01-01T00:00:00Z"),
+                null, List.of(), null, null, 0, 20, null, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 0, 0, 20, 0L));
+
+        service.search(request);
+
+        verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
+    @Test
+    void searchWithOnlyLabelsFilterIsAccepted() {
+        SearchRequest request = new SearchRequest(
+                null, List.of(), null, null, null, null, List.of("PRIVILEGED"),
+                null, null, 0, 20, null, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 0, 0, 20, 0L));
+
+        service.search(request);
+
+        verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
     private SearchRequest request(String query, SearchRequest.SortBy sortBy, SearchRequest.SortDirection direction) {
         return new SearchRequest(query, List.of(), null, null, null, null, List.of(), null, null, 0, 20, sortBy, direction);
     }

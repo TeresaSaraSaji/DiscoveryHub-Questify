@@ -166,6 +166,94 @@ class CommunicationDocumentMapperTest {
     }
 
     @Test
+    void toSearchResultWithEmptyHighlightMapUsesComputedSnippet() {
+        CommunicationDocument doc = new CommunicationDocument(
+                "msg-1", "ext-1", "EXCHANGE", MessageType.EMAIL, "custodian-1", "from@firm.test",
+                List.of("to@firm.test"), List.of(), "subject", "the fraud body text here",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, 0, List.of(), List.of(), false);
+
+        SearchResult result = mapper.toSearchResult(doc, 1.0f, "fraud", Map.of());
+
+        // Empty highlight map -> computed snippet, empty highlights list.
+        assertThat(result.snippet()).contains("fraud");
+        assertThat(result.highlights()).isEmpty();
+    }
+
+    @Test
+    void toSearchResultWithNullHighlightMapUsesComputedSnippet() {
+        CommunicationDocument doc = new CommunicationDocument(
+                "msg-1", "ext-1", "EXCHANGE", MessageType.EMAIL, "custodian-1", "from@firm.test",
+                List.of("to@firm.test"), List.of(), "subject", "the fraud body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, 0, List.of(), List.of(), false);
+
+        SearchResult result = mapper.toSearchResult(doc, 1.0f, "fraud", null);
+
+        assertThat(result.snippet()).contains("fraud");
+        assertThat(result.highlights()).isEmpty();
+    }
+
+    @Test
+    void toSearchResultWithMultipleBodyHighlightsUsesTheFirst() {
+        CommunicationDocument doc = new CommunicationDocument(
+                "msg-1", "ext-1", "EXCHANGE", MessageType.EMAIL, "custodian-1", "from@firm.test",
+                List.of("to@firm.test"), List.of(), "subject", "body with fraud",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, 0, List.of(), List.of(), false);
+
+        SearchResult result = mapper.toSearchResult(doc, 1.0f, "fraud",
+                Map.of("body", List.of("first <em>fraud</em> hit", "second <em>fraud</em> hit")));
+
+        // The first body highlight becomes the snippet.
+        assertThat(result.snippet()).isEqualTo("first <em>fraud</em> hit");
+        // Both highlights are in the list.
+        assertThat(result.highlights()).hasSize(2);
+    }
+
+    @Test
+    void fromMessageWithNoAttachmentsMapsAttachmentCountToZero() {
+        Message noAttachments = new Message(
+                "msg-1", "ext-1", "EXCHANGE", MessageType.EMAIL, "custodian-1",
+                "from@firm.test", List.of("to@firm.test"), List.of(), "subject", "body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of());
+
+        CommunicationDocument doc = mapper.fromMessage(noAttachments);
+
+        assertThat(doc.getAttachmentCount()).isZero();
+        assertThat(doc.getAttachmentFilenames()).isEmpty();
+    }
+
+    @Test
+    void fromMessageWithMultipleAttachmentsMapsAllFilenames() {
+        Message withAttachments = new Message(
+                "msg-1", "ext-1", "EXCHANGE", MessageType.EMAIL, "custodian-1",
+                "from@firm.test", List.of("to@firm.test"), List.of(), "subject", "body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null,
+                List.of(
+                        new Attachment("att-1", "report.pdf", "application/pdf", 1024, "sha1", null),
+                        new Attachment("att-2", "data.xlsx", "application/vnd.ms-excel", 2048, "sha2", null),
+                        new Attachment("att-3", "photo.jpg", "image/jpeg", 512, "sha3", null)),
+                List.of());
+
+        CommunicationDocument doc = mapper.fromMessage(withAttachments);
+
+        assertThat(doc.getAttachmentCount()).isEqualTo(3);
+        assertThat(doc.getAttachmentFilenames()).containsExactly("report.pdf", "data.xlsx", "photo.jpg");
+    }
+
+    @Test
+    void fromMessageWithChatTypeHasNullSubjectInDocument() {
+        Message chat = new Message(
+                "msg-1", "ext-1", "TEAMS", MessageType.CHAT, "custodian-1",
+                "from@firm.test", List.of("to@firm.test"), List.of(), null, "chat body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of());
+
+        CommunicationDocument doc = mapper.fromMessage(chat);
+
+        // CHAT messages have no subject (message-schema.md) — the field is null, not "".
+        assertThat(doc.getSubject()).isNull();
+        assertThat(doc.getType()).isEqualTo(MessageType.CHAT);
+    }
+
+    @Test
     void snippetHandlesNullAndBlank() {
         assertThat(CommunicationDocumentMapper.snippet(null, "fraud", 20)).isEmpty();
         assertThat(CommunicationDocumentMapper.snippet("", "fraud", 20)).isEmpty();
