@@ -2,10 +2,24 @@ spring:
   application:
     name: archive
 
+  # Slim Postgres: legal-hold state and retention/disposition bookkeeping only. Message content
+  # (including attachment bytes) lives in MongoDB — see spring.mongodb below and
+  # domain/ArchivedMessageDocument.
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/archive}
     username: archive
     password: archive
+
+  # NOT spring.data.mongodb — Boot 4.1 moved MongoProperties into its own autoconfigure module
+  # (spring-boot-mongodb, same split as Kafka/Flyway elsewhere in this file) and renamed the
+  # prefix to spring.mongodb in the move. spring.data.mongodb.* still parses as valid YAML and
+  # shows up in /actuator/env, which is what makes this trap dangerous: nothing fails, nothing
+  # warns, the app starts clean and connects — every write just silently lands in the driver's
+  # own fallback database ("test") instead of the one configured. Confirmed against a real Mongo
+  # container, not a hypothetical.
+  mongodb:
+    uri: ${MONGO_URI:mongodb://localhost:27017/archive}
+    database: ${MONGO_DATABASE:archive}
 
   jpa:
     # Schema comes from Flyway, never from Hibernate. validate fails loudly on drift instead of
@@ -54,27 +68,6 @@ discoveryhub:
     # The hold-service owns GET /holds/check; the case-service is a separate deployable on 8084.
     hold-check-base-url: ${HOLDS_BASE_URL:http://localhost:8086}
     hold-check-timeout: 5s
-    # Attachment bytes live on local disk (the primary copy the read API serves), with an optional
-    # S3 offload copy for durable "after use" retrieval. Message metadata stays in PostgreSQL. See
-    # V4__attachment_storage.sql and the com.discoveryhub.archive.storage package.
-    storage:
-      local:
-        base-dir: ${ATTACHMENT_DIR:./data/attachments}
-      s3:
-        # Off by default. Flip to true to also write every attachment to S3 (real S3 or MinIO).
-        enabled: ${S3_ENABLED:false}
-        # Leave empty to use real AWS S3; set it for MinIO / a local S3-compatible server.
-        endpoint: ${S3_ENDPOINT:http://localhost:9000}
-        region: ${S3_REGION:us-east-1}
-        # infra/minio/create-buckets.sh provisions this one; a different name here silently means
-        # every offload fails with NoSuchBucket and s3_key stays null on every row.
-        bucket: ${S3_BUCKET:archive-attachments}
-        # Leave empty to fall back to the default AWS credentials provider chain.
-        access-key: ${S3_ACCESS_KEY:minioadmin}
-        secret-key: ${S3_SECRET_KEY:minioadmin}
-        # Required for MinIO; harmless for AWS S3.
-        path-style-access: ${S3_PATH_STYLE:true}
-        key-prefix: attachments/
   retention:
     # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
     # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.
@@ -82,6 +75,12 @@ discoveryhub:
     per-type:
       EMAIL: P2555D
       CHAT: P1095D
+    # How long a message P1 tagged with RetentionLabels.DEMO_RETENTION (the "DEMO" option on
+    # POST /messages/upload) stays before disposition is allowed to delete it — independent of
+    # default-period/per-type above, and it affects only the tagged message, not everything else
+    # of its type. Short on purpose: this exists so one uploaded document can be shown going
+    # through the full disposition path within the length of a demo.
+    demo-period: ${RETENTION_DEMO_PERIOD:PT2M}
     schedule:
       enabled: true
       # Every 5 minutes by default. With minute-scale retention this gives the demo a visible
@@ -96,6 +95,15 @@ management:
     web:
       exposure:
         include: health,info,metrics
+      # Actuator endpoints (/actuator/health, the frontend's liveness probe) sit behind their own
+      # handler mapping, separate from @RestController — CorsConfig's WebMvcConfigurer registers
+      # CORS on the latter only, so without this, every regular API call works from the browser
+      # and every actuator call is silently blocked, which looks like the service being down when
+      # it is actually up. Confirmed: an OPTIONS preflight to /actuator/health returned 200 with
+      # no Access-Control-* headers at all before this was added.
+      cors:
+        allowed-origins: ${discoveryhub.cors.allowed-origins:http://localhost:4200}
+        allowed-methods: GET,OPTIONS
   endpoint:
     health:
       show-details: always

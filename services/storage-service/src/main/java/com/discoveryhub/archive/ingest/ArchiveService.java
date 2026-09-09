@@ -1,70 +1,61 @@
 package com.discoveryhub.archive.ingest;
 
-import com.discoveryhub.archive.domain.AttachmentEntity;
-import com.discoveryhub.archive.domain.MessageEntity;
+import com.discoveryhub.archive.domain.ArchivedMessageDocument;
+import com.discoveryhub.archive.domain.MessageHoldStatus;
 import com.discoveryhub.archive.domain.MessageMapper;
-import com.discoveryhub.archive.repository.AttachmentRepository;
-import com.discoveryhub.archive.repository.MessageRepository;
-import com.discoveryhub.archive.storage.AttachmentStore;
-import com.discoveryhub.contracts.Attachment;
+import com.discoveryhub.archive.repository.ArchivedMessageRepository;
+import com.discoveryhub.archive.repository.MessageHoldStatusRepository;
 import com.discoveryhub.contracts.Message;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * Stores one ingested message durably. The idempotency guarantee (FR-1.6) rests on the
- * {@code UNIQUE (external_id)} constraint in {@code V2__messages.sql}: the {@code existsByExternalId}
- * check is the fast path, and a duplicate that races past it is caught by the constraint and turned
- * into a dedupe outcome by the listener — never an error.
+ * Stores one ingested message durably. Content (including attachment bytes) goes to Mongo as one
+ * document; a slim bookkeeping row goes to P2's own Postgres for legal-hold state and the
+ * retention/disposition sweep — see {@link ArchivedMessageDocument} and {@link MessageHoldStatus}.
  *
- * <p>Message metadata goes to PostgreSQL; attachment bytes go to local disk (the primary copy) and,
- * when S3 is enabled, an S3 offload copy. The blob write happens before the DB save so the storage
- * refs are on the entity when it is persisted. Because blob paths are deterministic
- * ({@code <messageId>/<attachmentId>}), a Kafka re-delivery that re-runs {@code ingest} for a message
- * whose first attempt failed mid-way overwrites the same blobs rather than orphaning copies.
+ * <p>The idempotency guarantee (FR-1.6) is now two-layered: P1's {@code message_id_map} is the
+ * first line of defence, and {@code UNIQUE (external_id)} on {@code message_hold_status} is P2's
+ * own backstop — the {@code existsByExternalId} check below is the fast path, and a duplicate
+ * that races past it is caught by that constraint and turned into a dedupe outcome by the
+ * listener, never an error.
  *
- * <p>Transactional on the database side only. Kafka publication happens after this method returns,
- * so a rolled-back transaction never publishes a {@code messages.archived} for a message that isn't
- * actually stored.
+ * <p>The Mongo write happens before the Postgres row: {@code save} on a Mongo document keyed by
+ * {@code messageId} is an idempotent upsert (same id, same deterministic content), so writing it
+ * first and then losing a race on the Postgres constraint leaves nothing incorrect behind — the
+ * document is simply already there, byte-for-byte the same as this attempt would have written.
+ * The other order risks a hold-status row that claims a message no Mongo document backs.
  */
 @Service
 public class ArchiveService {
 
-    private final MessageRepository messages;
-    private final AttachmentRepository attachments;
+    private final ArchivedMessageRepository documents;
+    private final MessageHoldStatusRepository holdStatuses;
     private final MessageMapper mapper;
-    private final AttachmentStore storage;
 
-    public ArchiveService(MessageRepository messages, AttachmentRepository attachments,
-                          MessageMapper mapper, AttachmentStore storage) {
-        this.messages = messages;
-        this.attachments = attachments;
+    public ArchiveService(ArchivedMessageRepository documents, MessageHoldStatusRepository holdStatuses,
+                          MessageMapper mapper) {
+        this.documents = documents;
+        this.holdStatuses = holdStatuses;
         this.mapper = mapper;
-        this.storage = storage;
     }
 
-    @Transactional
     public IngestionResult ingest(Message message) {
-        if (messages.existsByExternalId(message.externalId())) {
+        if (holdStatuses.existsByExternalId(message.externalId())) {
             return IngestionResult.deduped(message.externalId());
         }
-        MessageEntity entity = mapper.toEntity(message);
-        List<AttachmentEntity> savedAttachments = new ArrayList<>();
-        int ordinal = 0;
-        for (Attachment attachment : message.attachments()) {
-            AttachmentEntity att = mapper.toEntity(attachment, entity.getMessageId(), ordinal++);
-            // Write the bytes to local disk (+ optional S3 offload) and record the storage refs on
-            // the entity before it is persisted.
-            storage.store(att);
-            savedAttachments.add(att);
+        ArchivedMessageDocument document = mapper.toDocument(message);
+        documents.save(document);
+
+        MessageHoldStatus holdStatus = mapper.toHoldStatus(message);
+        try {
+            holdStatuses.save(holdStatus);
+        } catch (DataIntegrityViolationException ex) {
+            // Lost a race on UNIQUE(external_id). The Mongo document above is already this exact
+            // content under this exact messageId, so there is nothing to undo — just report the
+            // dedupe like any other race caught by the constraint.
+            return IngestionResult.deduped(message.externalId());
         }
-        messages.save(entity);
-        if (!savedAttachments.isEmpty()) {
-            attachments.saveAll(savedAttachments);
-        }
-        return IngestionResult.stored(entity, savedAttachments);
+        return IngestionResult.stored(document, holdStatus);
     }
 }

@@ -22,6 +22,7 @@ TOPICS=(
   "cases.events:3"
   "export.jobs:3"
   "audit.events:6"
+  "disposition.commands:3"
 )
 
 # Must match KAFKA_MESSAGE_MAX_BYTES on the broker. A topic silently keeps the 1 MiB default

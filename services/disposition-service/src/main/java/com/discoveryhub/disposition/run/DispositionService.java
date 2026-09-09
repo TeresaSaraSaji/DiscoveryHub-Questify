@@ -45,7 +45,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li><b>evidence membership of a held case</b> (FR-2.4), also taken once per run — a message an
  *       investigator attached to a held matter, whether or not it matches that hold's scope;</li>
  *   <li>a synchronous per-message call to P4;</li>
- *   <li>in {@code ARCHIVE_DB} mode, an {@code AND on_hold = false} predicate inside the DELETE.</li>
+ *   <li>P2's own re-check on receiving the delete command — the same {@code on_hold} guard
+ *       {@code DELETE /messages/{id}} uses.</li>
  * </ol>
  *
  * <p>Guard 2 exists because of FR-4.3. Hold propagation is required to be asynchronous, so between

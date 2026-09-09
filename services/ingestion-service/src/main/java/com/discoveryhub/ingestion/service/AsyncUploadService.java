@@ -1,5 +1,6 @@
 package com.discoveryhub.ingestion.service;
 
+import com.discoveryhub.ingestion.api.RetentionMode;
 import com.discoveryhub.ingestion.api.UploadJob;
 import com.discoveryhub.ingestion.api.UploadResponse;
 import jakarta.annotation.PreDestroy;
@@ -75,6 +76,14 @@ public class AsyncUploadService {
      * @return the accepted job, already RUNNING
      */
     public UploadJob submit(String filename, InputStream in) throws IOException {
+        return submit(filename, in, RetentionMode.NORMAL);
+    }
+
+    /**
+     * @param retentionMode {@link RetentionMode#DEMO} tags every message in this upload for P2's
+     *                       short, per-message disposition window — see {@link UploadService}.
+     */
+    public UploadJob submit(String filename, InputStream in, RetentionMode retentionMode) throws IOException {
         Path spooled = Files.createTempFile("dh-upload-", ".json");
         try {
             Files.copy(in, spooled, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -91,7 +100,7 @@ public class AsyncUploadService {
         jobs.put(job);
 
         try {
-            executor.submit(() -> run(jobId, filename, spooled));
+            executor.submit(() -> run(jobId, filename, spooled, retentionMode));
         } catch (RejectedExecutionException e) {
             Files.deleteIfExists(spooled);
             jobs.put(job.failed("ingestion is busy; retry shortly", clock.instant()));
@@ -100,9 +109,9 @@ public class AsyncUploadService {
         return job;
     }
 
-    private void run(String jobId, String filename, Path spooled) {
+    private void run(String jobId, String filename, Path spooled, RetentionMode retentionMode) {
         try (InputStream in = Files.newInputStream(spooled)) {
-            UploadResponse result = uploadService.ingest(filename, in,
+            UploadResponse result = uploadService.ingest(filename, in, retentionMode,
                     processed -> jobs.find(jobId)
                             .ifPresent(j -> jobs.put(j.withProgress(processed))));
             jobs.find(jobId).ifPresent(j -> jobs.put(j.completed(result, clock.instant())));

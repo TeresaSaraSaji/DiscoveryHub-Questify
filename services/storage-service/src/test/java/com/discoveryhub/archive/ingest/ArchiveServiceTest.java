@@ -1,13 +1,13 @@
 package com.discoveryhub.archive.ingest;
 
-import com.discoveryhub.archive.domain.MessageEntity;
+import com.discoveryhub.archive.config.RetentionProperties;
+import com.discoveryhub.archive.domain.ArchivedMessageDocument;
+import com.discoveryhub.archive.domain.MessageHoldStatus;
 import com.discoveryhub.archive.domain.MessageMapper;
-import com.discoveryhub.archive.repository.AttachmentRepository;
-import com.discoveryhub.archive.repository.MessageRepository;
-import com.discoveryhub.archive.storage.AttachmentStore;
+import com.discoveryhub.archive.repository.ArchivedMessageRepository;
+import com.discoveryhub.archive.repository.MessageHoldStatusRepository;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
-import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,9 +15,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.Spy;
+import org.springframework.dao.DataIntegrityViolationException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -27,18 +30,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The idempotency guarantee (FR-1.6) is what the whole dedupe story rests on. The fast path is the
- * repository's {@code existsByExternalId} check; the hard guarantee is the UNIQUE constraint, which
- * the listener turns into a dedupe outcome on a {@code DataIntegrityViolationException}. These
- * tests cover the fast path — the constraint path is an integration concern.
+ * The idempotency guarantee (FR-1.6) is layered now: P1's message_id_map is the first line of
+ * defence, and {@code UNIQUE(external_id)} on {@code message_hold_status} is P2's own backstop.
+ * The fast path is the repository's {@code existsByExternalId} check; the hard guarantee is that
+ * constraint, which {@link ArchiveService} itself turns into a dedupe outcome on a
+ * {@code DataIntegrityViolationException}. These tests cover both paths.
  */
 @ExtendWith(MockitoExtension.class)
 class ArchiveServiceTest {
 
-    @Mock MessageRepository messages;
-    @Mock AttachmentRepository attachments;
-    @Mock AttachmentStore storage;
-    @Spy MessageMapper mapper = new MessageMapper(new ObjectMapper());
+    @Mock ArchivedMessageRepository documents;
+    @Mock MessageHoldStatusRepository holdStatuses;
+    @Spy MessageMapper mapper = new MessageMapper(
+            new RetentionProperties(null, Map.of(), Duration.ofMinutes(2)));
 
     @InjectMocks ArchiveService service;
 
@@ -54,29 +58,44 @@ class ArchiveServiceTest {
     }
 
     @Test
-    void storesFirstOccurrenceAndSavesEntities() {
-        when(messages.existsByExternalId("EXCH-001")).thenReturn(false);
+    void storesFirstOccurrenceAndSavesBothStores() {
+        when(holdStatuses.existsByExternalId("EXCH-001")).thenReturn(false);
 
         IngestionResult result = service.ingest(message);
 
         assertThat(result.outcome()).isEqualTo(IngestionOutcome.STORED);
-        assertThat(result.entity()).isNotNull();
-        assertThat(result.entity().getExternalId()).isEqualTo("EXCH-001");
-        verify(messages, times(1)).save(any(MessageEntity.class));
-        verify(attachments, never()).saveAll(any());
+        assertThat(result.document()).isNotNull();
+        assertThat(result.document().externalId()).isEqualTo("EXCH-001");
+        verify(documents, times(1)).save(any(ArchivedMessageDocument.class));
+        verify(holdStatuses, times(1)).save(any(MessageHoldStatus.class));
     }
 
     @Test
     void dedupesSecondOccurrenceOfSameExternalId() {
-        when(messages.existsByExternalId("EXCH-001")).thenReturn(true);
+        when(holdStatuses.existsByExternalId("EXCH-001")).thenReturn(true);
 
         IngestionResult result = service.ingest(message);
 
         assertThat(result.outcome()).isEqualTo(IngestionOutcome.DEDUPED);
         assertThat(result.externalId()).isEqualTo("EXCH-001");
-        assertThat(result.entity()).isNull();
+        assertThat(result.document()).isNull();
         // A dedupe must not write anything.
-        verify(messages, never()).save(any(MessageEntity.class));
-        verify(attachments, never()).saveAll(any());
+        verify(documents, never()).save(any(ArchivedMessageDocument.class));
+        verify(holdStatuses, never()).save(any(MessageHoldStatus.class));
+    }
+
+    @Test
+    void dedupesWhenTheConstraintCatchesARacePastTheFastPathCheck() {
+        when(holdStatuses.existsByExternalId("EXCH-001")).thenReturn(false);
+        when(holdStatuses.save(any(MessageHoldStatus.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_message_hold_status_external_id"));
+
+        IngestionResult result = service.ingest(message);
+
+        assertThat(result.outcome()).isEqualTo(IngestionOutcome.DEDUPED);
+        assertThat(result.externalId()).isEqualTo("EXCH-001");
+        // The Mongo document was already written before the race was discovered — same content,
+        // same messageId, so nothing to undo.
+        verify(documents, times(1)).save(any(ArchivedMessageDocument.class));
     }
 }

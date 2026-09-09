@@ -4,6 +4,7 @@ import com.discoveryhub.contracts.HoldCheckResponse;
 import com.discoveryhub.holds.domain.HoldEntity;
 import com.discoveryhub.holds.domain.HoldScope;
 import com.discoveryhub.holds.domain.HoldStatus;
+import com.discoveryhub.holds.service.HoldCaseGuardService;
 import com.discoveryhub.holds.service.HoldCheckService;
 import com.discoveryhub.holds.service.HoldService;
 import org.springframework.http.HttpStatus;
@@ -29,12 +30,16 @@ import java.util.Map;
  * GET    /holds?caseId=&status=        list/filter holds
  * POST   /holds/{id}/release          release a hold (synchronous)
  * GET    /holds/check?messageId=...    is this message held? (FR-4.2 — the disposition guard)
+ * GET    /holds/active                 every ACTIVE hold's scope — P2.2's case-level guard
+ * POST   /holds/evidence-check         held-case evidence membership — P2.2's other case-level guard
  * GET    /holds/case/{caseId}/count   total held messages for a case (FR-4.4)
  * GET    /holds/stats                  dashboard counts
  * </pre>
  *
  * <p>{@code GET /holds/check} is the single most important endpoint in the system: it is what P2
  * asks before deleting a message, so it is the fail-closed guard against evidence destruction.
+ * {@code /active} and {@code /evidence-check} are P2.2's run-level counterparts to it — see
+ * {@code disposition-service/DISPOSITION.md}, "What P4 has to provide".
  */
 @RestController
 @RequestMapping("/holds")
@@ -42,10 +47,12 @@ public class HoldController {
 
     private final HoldService holdService;
     private final HoldCheckService checkService;
+    private final HoldCaseGuardService caseGuard;
 
-    public HoldController(HoldService holdService, HoldCheckService checkService) {
+    public HoldController(HoldService holdService, HoldCheckService checkService, HoldCaseGuardService caseGuard) {
         this.holdService = holdService;
         this.checkService = checkService;
+        this.caseGuard = caseGuard;
     }
 
     @PostMapping
@@ -81,6 +88,27 @@ public class HoldController {
     @GetMapping("/check")
     public HoldCheckResponse check(@RequestParam("messageId") String messageId) {
         return checkService.check(messageId);
+    }
+
+    /**
+     * P2.2's active-hold-scope guard (DISPOSITION.md guard 2): every ACTIVE hold's scope, not the
+     * messages it has been expanded to — closes the window between "hold placed" and "propagation
+     * finished" that every per-message guard is blind to.
+     */
+    @GetMapping("/active")
+    public List<ActiveHoldResponse> active() {
+        return caseGuard.activeHolds();
+    }
+
+    /**
+     * P2.2's held-case evidence guard (DISPOSITION.md guard 3): of these messageIds, which are
+     * evidence items in a case under an active hold, regardless of whether that hold's own
+     * custodian/date scope would cover them. A case-service failure propagates as a non-2xx
+     * response rather than an empty array — see {@link com.discoveryhub.holds.client.CaseEvidenceClient}.
+     */
+    @PostMapping("/evidence-check")
+    public List<EvidenceCheckResponse> evidenceCheck(@RequestBody EvidenceCheckRequest request) {
+        return caseGuard.evidenceCheck(request.messageIds());
     }
 
     @GetMapping("/case/{caseId}/count")

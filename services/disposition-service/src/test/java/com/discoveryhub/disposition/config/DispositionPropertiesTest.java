@@ -52,7 +52,7 @@ class DispositionPropertiesTest {
     }
 
     @Test
-    void deleteModeDefaultsToTheOneThatWorksWithoutChangesToP2() {
-        assertThat(defaults.deleteMode()).isEqualTo(DispositionProperties.DeleteMode.ARCHIVE_DB);
+    void deleteModeDefaultsToKafkaNowThatP2HasTheConsumer() {
+        assertThat(defaults.deleteMode()).isEqualTo(DispositionProperties.DeleteMode.KAFKA);
     }
 }

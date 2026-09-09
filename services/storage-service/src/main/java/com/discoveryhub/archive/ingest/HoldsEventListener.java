@@ -1,10 +1,10 @@
 package com.discoveryhub.archive.ingest;
 
-import com.discoveryhub.archive.domain.MessageEntity;
+import com.discoveryhub.archive.domain.MessageHoldStatus;
 import com.discoveryhub.archive.messaging.ArchiveKafkaPublisher;
 import com.discoveryhub.archive.messaging.AuditEvents;
 import com.discoveryhub.archive.messaging.HoldEvent;
-import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.repository.MessageHoldStatusRepository;
 import com.discoveryhub.contracts.Topics;
 import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -31,12 +31,12 @@ public class HoldsEventListener {
 
     private static final Logger log = LoggerFactory.getLogger(HoldsEventListener.class);
 
-    private final MessageRepository messages;
+    private final MessageHoldStatusRepository messages;
     private final ObjectMapper json;
     private final ArchiveKafkaPublisher publisher;
     private final AuditEvents audit;
 
-    public HoldsEventListener(MessageRepository messages, ObjectMapper json,
+    public HoldsEventListener(MessageHoldStatusRepository messages, ObjectMapper json,
                               ArchiveKafkaPublisher publisher, AuditEvents audit) {
         this.messages = messages;
         this.json = json;
@@ -58,13 +58,13 @@ public class HoldsEventListener {
         if (event.messageId() != null) {
             messages.findById(event.messageId()).ifPresent(m -> apply(m, event));
         } else if (event.custodianId() != null) {
-            for (MessageEntity m : messages.findByCustodianId(event.custodianId())) {
+            for (MessageHoldStatus m : messages.findByCustodianId(event.custodianId())) {
                 apply(m, event);
             }
         }
     }
 
-    private void apply(MessageEntity m, HoldEvent event) {
+    private void apply(MessageHoldStatus m, HoldEvent event) {
         int next = m.getHoldCount() + (event.held() ? 1 : -1);
         m.setHoldCount(Math.max(0, next));
         m.setOnHold(m.getHoldCount() > 0);

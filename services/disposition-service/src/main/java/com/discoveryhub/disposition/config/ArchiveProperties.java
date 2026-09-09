@@ -13,14 +13,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * {@code discoveryhub.disposition.delete-mode} to {@code KAFKA} and this datasource is needed for
  * the read alone.
  *
- * <p>{@code holdCheckBaseUrl} is P4, for the synchronous hold guard.
+ * <p>{@code holdCheckBaseUrl} is P4's <b>hold-service</b> half — the one that owns
+ * {@code GET /holds/check}, {@code GET /holds/active}, and {@code POST /holds/evidence-check}
+ * (see DISPOSITION.md's "What P4 has to provide"). Not case-service: case-service owns cases and
+ * evidence rows, but none of the three endpoints this client calls live there. Pointing this at
+ * case-service's port makes every one of those calls 404, which this client's fail-closed
+ * handling reports identically to "P4 is down" — so the mistake hides as a safety message instead
+ * of an error.
  */
 @ConfigurationProperties(prefix = "discoveryhub.disposition.archive")
 public record ArchiveProperties(String holdCheckBaseUrl) {
 
     public ArchiveProperties {
         if (holdCheckBaseUrl == null || holdCheckBaseUrl.isBlank()) {
-            holdCheckBaseUrl = "http://localhost:8084";
+            holdCheckBaseUrl = "http://localhost:8086";
         }
     }
 }

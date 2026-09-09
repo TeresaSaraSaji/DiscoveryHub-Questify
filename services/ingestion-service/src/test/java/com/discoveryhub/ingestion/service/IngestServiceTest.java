@@ -28,6 +28,7 @@ class IngestServiceTest {
         dedupe = new InMemoryDedupeStore();
         publisher = new RecordingPublisher();
         service = new IngestService(dedupe, publisher,
+                new InMemoryMessageIdMappingStore(),
                 Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC));
     }
 

@@ -6,6 +6,7 @@ import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.ingestion.service.DedupeStore;
 import com.discoveryhub.ingestion.service.EventPublisher;
 import com.discoveryhub.ingestion.service.IngestService;
+import com.discoveryhub.ingestion.service.InMemoryMessageIdMappingStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,7 @@ class IngestControllerTest {
     private final List<Message> published = new ArrayList<>();
     private final IngestController controller = new IngestController(
             new IngestService(dedupeStore(), publisher(),
+                    new InMemoryMessageIdMappingStore(),
                     Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC)),
             new MessageBatchDecoder(MAPPER),
             3);

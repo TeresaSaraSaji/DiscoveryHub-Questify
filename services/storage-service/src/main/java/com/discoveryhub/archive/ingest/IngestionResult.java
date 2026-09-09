@@ -1,23 +1,22 @@
 package com.discoveryhub.archive.ingest;
 
-import com.discoveryhub.archive.domain.AttachmentEntity;
-import com.discoveryhub.archive.domain.MessageEntity;
-
-import java.util.List;
+import com.discoveryhub.archive.domain.ArchivedMessageDocument;
+import com.discoveryhub.archive.domain.MessageHoldStatus;
 
 /**
  * What {@link ArchiveService#ingest} did with one message. For a {@code STORED} outcome the saved
- * entities are returned so the listener can build the archived wire message without re-reading the
- * database; for a {@code DEDUPED} outcome only the {@code externalId} is meaningful.
+ * document and hold-status row are returned so the listener can build the archived wire message
+ * without re-reading either store; for a {@code DEDUPED} outcome only the {@code externalId} is
+ * meaningful.
  */
 public record IngestionResult(IngestionOutcome outcome, String externalId,
-                              MessageEntity entity, List<AttachmentEntity> attachments) {
+                              ArchivedMessageDocument document, MessageHoldStatus holdStatus) {
 
-    static IngestionResult stored(MessageEntity entity, List<AttachmentEntity> attachments) {
-        return new IngestionResult(IngestionOutcome.STORED, entity.getExternalId(), entity, attachments);
+    static IngestionResult stored(ArchivedMessageDocument document, MessageHoldStatus holdStatus) {
+        return new IngestionResult(IngestionOutcome.STORED, document.externalId(), document, holdStatus);
     }
 
     static IngestionResult deduped(String externalId) {
-        return new IngestionResult(IngestionOutcome.DEDUPED, externalId, null, List.of());
+        return new IngestionResult(IngestionOutcome.DEDUPED, externalId, null, null);
     }
 }

@@ -54,6 +54,15 @@ management:
     web:
       exposure:
         include: health,info,metrics
+      # Actuator endpoints (/actuator/health, the frontend's liveness probe) sit behind their own
+      # handler mapping, separate from @RestController — CorsConfig's WebMvcConfigurer registers
+      # CORS on the latter only, so without this, every regular API call works from the browser
+      # and every actuator call is silently blocked, which looks like the service being down when
+      # it is actually up. Confirmed: an OPTIONS preflight to /actuator/health returned 200 with
+      # no Access-Control-* headers at all before this was added.
+      cors:
+        allowed-origins: ${discoveryhub.cors.allowed-origins:http://localhost:4200}
+        allowed-methods: GET,OPTIONS
   endpoint:
     health:
       show-details: always

@@ -1,5 +1,6 @@
 package com.discoveryhub.ingestion.service;
 
+import com.discoveryhub.ingestion.api.RetentionMode;
 import com.discoveryhub.ingestion.api.UploadJob;
 import com.discoveryhub.ingestion.api.UploadResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -72,7 +73,7 @@ class AsyncUploadServiceTest {
 
     @Test
     void submitSpoolsTheStreamAndReturnsARunningJob() throws Exception {
-        when(uploadService.ingest(anyString(), any(), any())).thenReturn(
+        when(uploadService.ingest(anyString(), any(), any(RetentionMode.class), any())).thenReturn(
                 new UploadResponse("f.json", 1, 1, 0, 0, 0, List.of(), false));
 
         UploadJob job = serviceWithWorkers(2).submit("f.json", content());
@@ -84,7 +85,7 @@ class AsyncUploadServiceTest {
     @Test
     void aSuccessfulJobIsRecordedAsCompletedAndTheSpooledFileIsDeleted() throws Exception {
         UploadResponse result = new UploadResponse("f.json", 3, 3, 0, 0, 0, List.of(), false);
-        when(uploadService.ingest(anyString(), any(), any())).thenReturn(result);
+        when(uploadService.ingest(anyString(), any(), any(RetentionMode.class), any())).thenReturn(result);
 
         UploadJob job = serviceWithWorkers(2).submit("f.json", content());
         UploadJob finished = awaitFinished(job.jobId());
@@ -96,7 +97,8 @@ class AsyncUploadServiceTest {
 
     @Test
     void aFailedJobIsRecordedAsFailedAndTheSpooledFileIsStillDeleted() throws Exception {
-        when(uploadService.ingest(anyString(), any(), any())).thenThrow(new IOException("archive unreachable"));
+        when(uploadService.ingest(anyString(), any(), any(RetentionMode.class), any()))
+                .thenThrow(new IOException("archive unreachable"));
 
         UploadJob job = serviceWithWorkers(2).submit("f.json", content());
         UploadJob finished = awaitFinished(job.jobId());
@@ -135,7 +137,7 @@ class AsyncUploadServiceTest {
         // worker and a small bounded queue, saturating both must throw RejectedExecutionException.
         CountDownLatch blockWorker = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        when(uploadService.ingest(anyString(), any(), any())).thenAnswer(inv -> {
+        when(uploadService.ingest(anyString(), any(), any(RetentionMode.class), any())).thenAnswer(inv -> {
             blockWorker.countDown();
             release.await();
             return new UploadResponse("f.json", 1, 1, 0, 0, 0, List.of(), false);

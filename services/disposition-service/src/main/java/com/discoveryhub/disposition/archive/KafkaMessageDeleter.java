@@ -1,7 +1,7 @@
 package com.discoveryhub.disposition.archive;
 
+import com.discoveryhub.contracts.DeleteCommand;
 import com.discoveryhub.disposition.domain.ArchiveCandidate;
-import com.discoveryhub.disposition.messaging.DeleteCommand;
 import com.discoveryhub.disposition.messaging.DispositionKafkaPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,14 +11,15 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 
 /**
- * Publishes a delete command to {@code disposition.commands} and lets P2 own the write. Active
- * when {@code discoveryhub.disposition.delete-mode} is {@code KAFKA}.
+ * Publishes a delete command to {@code disposition.commands} and lets P2 own the write. The
+ * default mode: P2 now has the consumer ({@code archive.ingest.DispositionCommandListener}), so
+ * this is where the service actually lives, not just where it was meant to end up.
  *
- * <p>This is where this service is meant to end up. It restores the property NFR-1 actually cares
- * about — only P2 writes to P2's tables — and it makes the delete path resilient in the way NFR-2
- * asks for: with P2 down, commands queue on the topic and are applied when it returns, instead of
- * the sweep failing. It needs one consumer on P2's side, which is not this service's to write.
- * DISPOSITION.md carries the contract and a sketch of that listener.
+ * <p>This restores the property NFR-1 actually cares about — only P2 writes to P2's tables (both
+ * of them, now that P2 splits message content into MongoDB and hold/retention bookkeeping into
+ * its own slim Postgres) — and it makes the delete path resilient in the way NFR-2 asks for: with
+ * P2 down, commands queue on the topic and are applied when it returns, instead of the sweep
+ * failing.
  *
  * <p>The honest cost of the switch: a published command is not a completed delete. The ledger
  * records {@link DeleteResult#REQUESTED} and the item stays in that state, because P2 does not
