@@ -25,6 +25,13 @@ public final class Topics {
      *  hold-service releases a case's holds when it sees a transition to CLOSED (FR-2.4, FR-4.5). */
     public static final String CASES_EVENTS = "cases.events";
 
+    /**
+     * P2.2 to P2. One message past retention and covered by no hold, to be removed from the
+     * archive. A request, not a warrant: the archive still refuses held messages, because holds
+     * may have changed since the sweep decided.
+     */
+    public static final String DISPOSITION_COMMANDS = "disposition.commands";
+
     /** P5 to its own workers. One export job to build. */
     public static final String EXPORT_JOBS = "export.jobs";
 
