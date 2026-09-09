@@ -1,8 +1,8 @@
-# P3 Search.
+# P5 Evidence Export & Audit.
 #
 # Built from the repository root, not from this directory:
 #
-#   docker build -f services/search-service/Dockerfile -t discoveryhub/search-service .
+#   docker build -f services/export-service/Dockerfile -t discoveryhub/export-service .
 #
 # The build context has to be the root because this module depends on contracts/ and inherits the
 # parent POM. docker-compose.yml sets that context; if you build by hand from here, Maven will not
@@ -10,9 +10,6 @@
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /build
 
-# POMs first, so a source-only change reuses the cached dependency layer instead of re-downloading
-# the world on every build.
-#
 # Every module's POM, not just this service's: Maven validates that all children listed in the
 # parent exist before it applies -pl, so a missing sibling POM fails the build with "child module
 # does not exist" even though that module is not being built. Add a module to the root POM and it
@@ -21,37 +18,34 @@ COPY pom.xml .
 COPY contracts/pom.xml contracts/
 COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
-COPY services/search-service/pom.xml services/search-service/
-COPY services/case-service/pom.xml services/case-service/
-COPY services/hold-service/pom.xml services/hold-service/
 COPY services/export-service/pom.xml services/export-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
-RUN mvn -B -q dependency:go-offline -pl contracts,services/search-service -am || true
+RUN mvn -B -q dependency:go-offline -pl contracts,services/export-service -am || true
 
 COPY contracts/src contracts/src
-COPY services/search-service/src services/search-service/src
-RUN mvn -B -q -DskipTests package -pl services/search-service -am
+COPY services/export-service/src services/export-service/src
+RUN mvn -B -q -DskipTests package -pl services/export-service -am
 
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
-# Not root. A container that only needs to read a jar and open a port has no reason to be able to
-# write to its own filesystem as a privileged user.
-RUN useradd --system --uid 10003 --create-home appuser
+RUN useradd --system --uid 10001 --create-home appuser
 USER appuser
 
-COPY --from=build --chown=appuser /build/services/search-service/target/search-service-*.jar app.jar
+COPY --from=build --chown=appuser /build/services/export-service/target/export-service-*.jar app.jar
 
-EXPOSE 8083
+EXPOSE 8085
 
-# Container defaults. These are overridden by compose, and they differ from application.yml because
-# inside the network the hostnames are service names, not localhost.
 ENV KAFKA_BOOTSTRAP=kafka:19092 \
-    ES_URIS=http://elasticsearch:9200 \
-    SERVER_PORT=8083 \
+    DB_URL=jdbc:postgresql://postgres-audit:5432/audit \
+    ARCHIVE_BASE_URL=http://storage-service:8082 \
+    MINIO_ENDPOINT=http://minio:9000 \
+    MINIO_ACCESS_KEY=minioadmin \
+    MINIO_SECRET_KEY=minioadmin \
+    SERVER_PORT=8085 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=5 \
-  CMD ["sh", "-c", "curl -sf http://localhost:8083/actuator/health | grep -q '\"status\":\"UP\"'"]
+  CMD ["sh", "-c", "curl -sf http://localhost:8085/actuator/health | grep -q '\"status\":\"UP\"'"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

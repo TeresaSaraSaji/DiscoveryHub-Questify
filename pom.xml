@@ -17,6 +17,7 @@
     <module>services/search-service</module>
     <module>services/case-service</module>
     <module>services/hold-service</module>
+    <module>services/export-service</module>
     <module>tools/corpus-generator</module>
   </modules>
 
