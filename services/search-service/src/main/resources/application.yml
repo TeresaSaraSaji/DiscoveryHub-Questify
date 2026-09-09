@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: search
+
+  # Elasticsearch. P3 owns it. The 9.4.x server is pinned to match the client Boot 4.1.1 ships; an
+  # 8.x server refuses a 9.x client outright (README). From your IDE use localhost:9200.
+  elasticsearch:
+    uris: ${ES_URIS:http://localhost:9200}
+    connection-timeout: 5s
+    socket-timeout: 30s
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: p3-search
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Boot 4.1 ships Jackson 3, but Spring Kafka's JsonDeserializer is built against Jackson 2.
+      # Rather than carry two Jackson majors just for Kafka serdes, we use plain String serdes and
+      # parse/serialise JSON in the listeners with the Jackson 3 ObjectMapper Boot auto-configures.
+      # Malformed records are caught in the listener and logged, so one bad message cannot wedge
+      # the consumer.
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+
+discoveryhub:
+  search:
+    # The Elasticsearch index that holds the archived messages. Matches @Document on
+    # CommunicationDocument. Changing it means reindexing.
+    index-name: communications
+    # Snippet window around the first query-term hit in the body. Bounded so a large body does not
+    # ship whole in every search hit.
+    snippet-size: 200
+    # Page size cap. A caller asking for size=10000 would pull the whole mailbox into one response.
+    max-page-size: 100
+    # Cap for the "add all results to case" bulk action. Higher than a page so the action is useful,
+    # but bounded so a runaway query cannot dump a million ids into one audit event.
+    max-bulk-results: 10000
+
+server:
+  port: ${SERVER_PORT:8083}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG

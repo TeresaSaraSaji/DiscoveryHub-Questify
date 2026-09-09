@@ -15,6 +15,7 @@ docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 3x 
 mvn -q package                # build every module
 java -jar services/ingestion-service/target/ingestion-service-0.1.0-SNAPSHOT.jar
 java -jar services/storage-service/target/storage-service-0.1.0-SNAPSHOT.jar
+java -jar services/search-service/target/search-service-0.1.0-SNAPSHOT.jar
 ```
 
 Or run the services in Docker too — one command, nothing installed but Docker:
@@ -50,11 +51,23 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   ├── storage-service/             P2  system of record, retention    :8082
+│   ├── storage-service/            P2  system of record, retention    :8082
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── export-service/             P5  evidence export, audit trail   :8085
+│   ├── search-service/             P3  index, full-text search        :8083
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── case-service/               P4  case lifecycle, custodians, evidence       :8084
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── hold-service/               P4  legal hold, scope resolution, /holds/check :8086
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── export-service/             P5  evidence export, audit trail    :8085
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
@@ -109,19 +122,28 @@ Full write-up in `services/export-service/EXPORT.md`.
 |---|---|---|
 | 8081 | P1 Ingestion | A |
 | 8082 | P2 Archive | A |
+| 8083 | P3 Search | — |
+| 8084 | P4 Case Management | Teresa |
+| 8086 | P4 Legal Hold | Teresa |
 | 8085 | P5 Evidence Export & Audit | E |
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
 | 5433 | PostgreSQL `archive` / `archive` / `archive` | P2 |
-| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 |
+| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 (case) |
 | 5435 | PostgreSQL `audit` / `audit` / `audit` | P5 |
+| 5436 | PostgreSQL `holds` / `holds` / `holds` | P4 (hold) |
 | 27017 | MongoDB | unclaimed |
 | 9200 | Elasticsearch | P3 |
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8083** P3, **8084** P4, **4200** frontend.
+Remaining application port: **4200** frontend.
+
+P4 is two deployables: **case-service** (8084, cases DB) and **hold-service** (8086, holds DB).
+The split keeps case and hold as separate bounded contexts with their own datastores (NFR-1),
+coordinating via `cases.events` (close → release) and the synchronous `GET /holds/check` endpoint
+that P2 calls before deleting anything.
 
 ## Conventions
 

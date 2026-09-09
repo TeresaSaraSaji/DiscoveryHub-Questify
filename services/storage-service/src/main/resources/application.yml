@@ -42,8 +42,9 @@ spring:
 
 discoveryhub:
   archive:
-    # P4 Case & Hold base URL, for the synchronous disposition guard (architecture decision 4).
-    hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
+    # P4 Hold-service base URL, for the synchronous disposition guard (architecture decision 4).
+    # The hold-service owns GET /holds/check; the case-service is a separate deployable on 8084.
+    hold-check-base-url: ${HOLDS_BASE_URL:http://localhost:8086}
     hold-check-timeout: 5s
   retention:
     # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
