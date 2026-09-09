@@ -87,6 +87,15 @@
     </label>
 
     <label class="field">
+      <span>Sort by</span>
+      <select [value]="sort()" (change)="changeSort($any($event.target).value)">
+        <option value="">Best match</option>
+        <option value="RELEVANCE">Relevance</option>
+        <option value="DATE">Newest first</option>
+      </select>
+    </label>
+
+    <label class="field">
       <span>Legal hold</span>
       <select [value]="heldOnly()" (change)="heldOnly.set($any($event.target).value)">
         <option value="">Any</option>

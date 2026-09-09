@@ -58,6 +58,13 @@ export class SearchPage {
   protected readonly heldOnly = signal<'' | 'yes' | 'no'>('');
   protected readonly size = signal(20);
 
+  /**
+   * FR-3.4 asks for sortable results. Empty means "let the query decide": relevance when there is
+   * a keyword to be relevant to, newest-first when there is not — sorting a pure filter by
+   * relevance orders it by nothing at all, since every hit scores the same.
+   */
+  protected readonly sort = signal<'' | 'DATE' | 'RELEVANCE'>('');
+
   protected readonly page = signal(0);
 
   /** What would be sent right now. Also what gets filed to a case, so the two cannot diverge. */
@@ -73,7 +80,7 @@ export class SearchPage {
     onHold: triState(this.heldOnly()),
     page: this.page(),
     size: this.size(),
-    sortBy: this.query().trim() ? 'RELEVANCE' : 'DATE',
+    sortBy: this.sort() || (this.query().trim() ? 'RELEVANCE' : 'DATE'),
     sortDirection: 'DESC',
   }));
 
@@ -133,6 +140,16 @@ export class SearchPage {
     this.run();
   }
 
+  protected changeSort(value: string): void {
+    this.sort.set(value as '' | 'DATE' | 'RELEVANCE');
+    // Only re-runs if something has already been searched. Changing the sort of an empty page
+    // would fire a query the user never asked for, which is the thing this page does not do.
+    if (this.results() !== null) {
+      this.page.set(0);
+      this.run();
+    }
+  }
+
   protected goToPage(next: number): void {
     this.page.set(Math.max(0, next));
     this.run();
@@ -175,6 +192,7 @@ export class SearchPage {
     this.sentBefore.set('');
     this.attachments.set('');
     this.heldOnly.set('');
+    this.sort.set('');
     this.page.set(0);
     this.results.set(null);
     this.failure.set(null);

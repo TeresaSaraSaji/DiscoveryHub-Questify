@@ -281,6 +281,48 @@ describe('search asks for nothing until it is asked', () => {
     expect(host.querySelector('mark')?.textContent?.trim()).toBe('payload');
   });
 
+  /** FR-3.4: sortable results, and changing the sort must not search a page nobody has searched. */
+  it('does not search when the sort changes before anything has been searched', async () => {
+    const fixture = mount(SearchPage);
+    await failEverything(fixture);
+    const http = TestBed.inject(HttpTestingController);
+
+    const page = fixture.componentInstance as unknown as { changeSort(v: string): void };
+    page.changeSort('DATE');
+    settle(fixture);
+
+    http.expectNone((request) => request.url.includes('/search'));
+  });
+
+  it('re-runs with the chosen sort once there are results to re-order', async () => {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as {
+      query: { set(v: string): void };
+      changeSort(v: string): void;
+    };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('atlas');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+    // A keyword search defaults to relevance.
+    const first = http.expectOne('http://localhost:8083/search');
+    expect(first.request.body.sortBy).toBe('RELEVANCE');
+    // Has to resolve: re-sorting is deliberately a no-op until there are results to re-order.
+    first.flush({ results: [], total: 0, page: 0, size: 20, tookMs: 2 });
+    await settleAsync(fixture);
+
+    page.changeSort('DATE');
+    settle(fixture);
+    expect(http.expectOne('http://localhost:8083/search').request.body.sortBy).toBe('DATE');
+  });
+
   it('reports an empty result as an answer, not a failure', async () => {
     const fixture = mount(SearchPage);
     const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };

@@ -52,6 +52,24 @@
   </app-panel>
 
   <app-panel
+    heading="Exports"
+    hint="Completed, of the 50 most recent"
+    service="p5"
+    [source]="exports"
+  >
+    @if (exports.hasValue()) {
+      @let e = exportCounts();
+      <p class="figure">{{ e.completed | number }}</p>
+      <p class="figure__note">
+        {{ e.running | number }} in progress
+        @if (e.failed > 0) {
+          · <span class="tag tag--danger">{{ e.failed }} failed</span>
+        }
+      </p>
+    }
+  </app-panel>
+
+  <app-panel
     heading="Next sweep"
     hint="What retention would delete"
     service="p22"

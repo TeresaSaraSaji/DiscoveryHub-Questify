@@ -11,6 +11,7 @@ import {
   CaseStatus,
   EMPTY_PAGE,
   HoldEntity,
+  ExportJob,
   HoldStatus,
   Page,
 } from '../../core/models';
@@ -73,6 +74,22 @@ export class Dashboard {
 
   protected readonly holds = this.casesApi.holdsResource(this.noCase, this.activeHolds);
   protected readonly holdRows = valueOr(this.holds, [] as HoldEntity[]);
+
+  /**
+   * FR-8.2 names four counts for this page, and this is the fourth. It comes from the job list
+   * rather than a dedicated endpoint because P5 does not expose one, and the list is capped at 50
+   * server-side — so this is "completed of the 50 most recent", which the label says.
+   */
+  protected readonly exports = this.auditApi.exportsResource();
+  private readonly exportRows = valueOr(this.exports, [] as ExportJob[]);
+  protected readonly exportCounts = computed(() => {
+    const jobs = this.exportRows();
+    return {
+      completed: jobs.filter((job) => job.status === 'COMPLETED').length,
+      running: jobs.filter((job) => job.status === 'QUEUED' || job.status === 'RUNNING').length,
+      failed: jobs.filter((job) => job.status === 'FAILED').length,
+    };
+  });
 
   protected readonly audit = this.auditApi.auditResource(this.auditFilter, this.firstPage, 8);
   protected readonly auditRows = valueOr(this.audit, EMPTY_PAGE as Page<AuditEntry>);
