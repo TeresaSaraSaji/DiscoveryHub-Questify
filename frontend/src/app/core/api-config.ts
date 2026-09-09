@@ -6,7 +6,7 @@
  * `window.discoveryhubApi` before the app boots, so a demo can be repointed at another host by
  * editing one file in `dist/` rather than rebuilding.
  */
-export type ServiceKey = 'p1' | 'p2' | 'p22' | 'p4' | 'p5';
+export type ServiceKey = 'p1' | 'p2' | 'p3' | 'p4case' | 'p4hold' | 'p5' | 'p22';
 
 export interface ServiceDescriptor {
   readonly key: ServiceKey;
@@ -19,6 +19,15 @@ export interface ServiceDescriptor {
   /** False for services nobody has written yet, so the UI can say so instead of blaming itself. */
   readonly implemented: boolean;
 }
+
+/**
+ * Seven ports, six deployables plus P4's two halves.
+ *
+ * P4 is deliberately two entries. case-service and hold-service are separate deployables with
+ * separate databases, and the UI has to be able to say which of the two is down: a case list that
+ * loads while every hold check fails is a real and confusing state, and one "P4" badge could not
+ * express it.
+ */
 
 export const SERVICES: readonly ServiceDescriptor[] = [
   {
@@ -38,20 +47,28 @@ export const SERVICES: readonly ServiceDescriptor[] = [
     implemented: true,
   },
   {
-    key: 'p22',
-    code: 'P2.2',
-    name: 'Disposition',
-    defaultBaseUrl: 'http://localhost:8086',
+    key: 'p3',
+    code: 'P3',
+    name: 'Search',
+    defaultBaseUrl: 'http://localhost:8083',
     healthPath: '/actuator/health',
     implemented: true,
   },
   {
-    key: 'p4',
-    code: 'P4',
-    name: 'Case & Hold',
+    key: 'p4case',
+    code: 'P4c',
+    name: 'Case Management',
     defaultBaseUrl: 'http://localhost:8084',
     healthPath: '/actuator/health',
-    implemented: false,
+    implemented: true,
+  },
+  {
+    key: 'p4hold',
+    code: 'P4h',
+    name: 'Legal Hold',
+    defaultBaseUrl: 'http://localhost:8086',
+    healthPath: '/actuator/health',
+    implemented: true,
   },
   {
     key: 'p5',
@@ -59,7 +76,16 @@ export const SERVICES: readonly ServiceDescriptor[] = [
     name: 'Export & Audit',
     defaultBaseUrl: 'http://localhost:8085',
     healthPath: '/actuator/health',
-    implemented: false,
+    implemented: true,
+  },
+  {
+    // 8087, not 8086: hold-service claimed 8086 while this service was on an unmerged branch.
+    key: 'p22',
+    code: 'P2.2',
+    name: 'Disposition',
+    defaultBaseUrl: 'http://localhost:8087',
+    healthPath: '/actuator/health',
+    implemented: true,
   },
 ];
 

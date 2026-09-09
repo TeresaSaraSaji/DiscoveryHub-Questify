@@ -1,14 +1,29 @@
 import { Routes } from '@angular/router';
 
 /**
- * Three pages, lazily loaded, and **no resolvers**.
+ * Five pages, lazily loaded, and **no resolvers**.
  *
  * A resolver would fetch before activating the route, which is the one thing this UI must not do:
- * P4 and P5 are not running, and a route that waited on them would refuse to open a page whose
- * other panels work perfectly. Every request in this app is issued by the panel that needs it,
- * after the page is on screen.
+ * six services on six ports, and a route that waited on any of them would refuse to open a page
+ * whose other panels work perfectly. Every request in this app is issued by the panel that needs
+ * it, after the page is on screen.
  */
 export const routes: Routes = [
+  {
+    path: 'home',
+    title: 'DiscoveryHub',
+    loadComponent: () => import('./pages/dashboard/dashboard').then((m) => m.Dashboard),
+  },
+  {
+    path: 'search',
+    title: 'Search · DiscoveryHub',
+    loadComponent: () => import('./pages/search/search-page').then((m) => m.SearchPage),
+  },
+  {
+    path: 'cases',
+    title: 'Cases & Legal Hold · DiscoveryHub',
+    loadComponent: () => import('./pages/cases/cases-page').then((m) => m.CasesPage),
+  },
   {
     path: 'retention',
     title: 'Retention & Disposition · DiscoveryHub',
@@ -18,15 +33,10 @@ export const routes: Routes = [
       ),
   },
   {
-    path: 'cases',
-    title: 'Case & Hold · DiscoveryHub',
-    loadComponent: () => import('./pages/cases/cases-page').then((m) => m.CasesPage),
-  },
-  {
     path: 'export-audit',
-    title: 'Export & Audit · DiscoveryHub',
+    title: 'Exports & Audit · DiscoveryHub',
     loadComponent: () => import('./pages/export-audit/export-audit').then((m) => m.ExportAudit),
   },
-  { path: '', pathMatch: 'full', redirectTo: 'retention' },
-  { path: '**', redirectTo: 'retention' },
+  { path: '', pathMatch: 'full', redirectTo: 'home' },
+  { path: '**', redirectTo: 'home' },
 ];

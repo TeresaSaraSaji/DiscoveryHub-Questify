@@ -2,29 +2,32 @@ import { HttpClient, httpResource } from '@angular/common/http';
 import { Injectable, Signal, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { baseUrl } from './api-config';
-import { AuditEvent, AuditOutcome, EMPTY_PAGE, ExportJob, ExportRequest, Page } from './models';
+import {
+  AuditEntry,
+  EMPTY_PAGE,
+  ExportDownload,
+  ExportJob,
+  ExportRequest,
+  Page,
+  VerificationResult,
+} from './models';
 
 /**
- * P5 Export & Audit on :8085 — defensible export packages, and the append-only chain of custody.
+ * P5 Export & Audit on :8085.
  *
- * **This service does not exist yet, and unlike P4 its HTTP surface is not specified anywhere in
- * the repository.** What is fixed is the event shape: `contracts/AuditEvent.java`, which every
- * service emits and P5 only appends. The endpoints below are therefore this page's *proposal*,
- * kept deliberately thin so that whoever writes P5 has little to disagree with:
+ * One service, two responsibilities, and they belong together: an export is only defensible if the
+ * trail says who asked for it and what was in it. `/exports` builds packages into MinIO;
+ * `/audit` is the read side of the append-only chain of custody — there are no write endpoints for
+ * it anywhere, by design (FR-7.3).
  *
- * | | |
- * |---|---|
- * | `GET  /audit/events` | filter by `service`, `action`, `outcome`, `subjectId`, `correlationId`; paginated, newest first |
- * | `GET  /audit/events/{subjectId}` | every event about one subject, oldest first — the chain of custody for one message |
- * | `POST /exports` | request a package; **202** with a `QUEUED` job |
- * | `GET  /exports` | job history, paginated |
- * | `GET  /exports/{exportId}` | one job, for polling |
- * | `GET  /exports/{exportId}/package` | the bytes, once `COMPLETED` |
+ * Three things the UI has to respect:
  *
- * Two things are asserted rather than assumed, because the alternative is not defensible:
- * an export job is **asynchronous** (a package over a 12,000-message corpus is not a request), and
- * a completed job carries a **`sha256`** of its manifest. If P5 lands with different paths, this
- * file is the only thing that changes.
+ * - **Export is asynchronous.** `POST /exports` returns 202 and a `QUEUED` job; poll `job(id)`.
+ * - **Download is a link, not bytes.** `/download` returns a presigned MinIO URL that expires in
+ *   15 minutes, so the browser fetches the package directly and this app never proxies it.
+ * - **The digest is worth re-deriving.** `/verify` recomputes every checksum from the package's own
+ *   bytes rather than trusting what the job row claims, which is the only version of this that is
+ *   evidence rather than metadata.
  */
 @Injectable({ providedIn: 'root' })
 export class AuditApi {
@@ -36,59 +39,59 @@ export class AuditApi {
 
   // ------------------------------------------------------------ export (FR-6)
 
-  exportsResource(page: Signal<number>, size = 10) {
-    return httpResource<Page<ExportJob>>(
-      () => ({ url: this.url('/exports'), params: { page: page(), size } }),
-      { defaultValue: EMPTY_PAGE },
-    );
+  /** The 50 most recent jobs. A plain array, not a page — the service caps it server-side. */
+  exportsResource() {
+    return httpResource<ExportJob[]>(() => this.url('/exports'), { defaultValue: [] });
   }
 
+  /**
+   * @param request exactly one scope: a non-empty `messageIds`, or a `custodianId` with an
+   *                optional date range. Neither is a 400.
+   */
   requestExport(request: ExportRequest): Observable<ExportJob> {
     return this.http.post<ExportJob>(this.url('/exports'), request, { timeout: 10_000 });
   }
 
-  export(exportId: string): Observable<ExportJob> {
-    return this.http.get<ExportJob>(this.url(`/exports/${encodeURIComponent(exportId)}`));
+  job(jobId: string): Observable<ExportJob> {
+    return this.http.get<ExportJob>(this.url(`/exports/${encodeURIComponent(jobId)}`));
   }
 
-  /** The finished package. Kept as a plain URL so the browser downloads it rather than the app. */
-  packageUrl(exportId: string): string {
-    return this.url(`/exports/${encodeURIComponent(exportId)}/package`);
+  /** Only a FAILED job can be retried; anything else is a 409. */
+  retry(jobId: string): Observable<ExportJob> {
+    return this.http.post<ExportJob>(this.url(`/exports/${encodeURIComponent(jobId)}/retry`), null);
+  }
+
+  download(jobId: string): Observable<ExportDownload> {
+    return this.http.get<ExportDownload>(
+      this.url(`/exports/${encodeURIComponent(jobId)}/download`),
+    );
+  }
+
+  verify(jobId: string): Observable<VerificationResult> {
+    return this.http.get<VerificationResult>(
+      this.url(`/exports/${encodeURIComponent(jobId)}/verify`),
+      // Re-reads and re-hashes the whole package. Slower than anything else in this app.
+      { timeout: 30_000 },
+    );
   }
 
   // ------------------------------------------------------------ audit (FR-7)
 
+  /** Always newest first — the sort is fixed server-side, there is no client sort parameter. */
   auditResource(filter: Signal<AuditFilter>, page: Signal<number>, size = 25) {
-    return httpResource<Page<AuditEvent>>(
+    return httpResource<Page<AuditEntry>>(
       () => {
         const current = filter();
         const params: Record<string, string | number> = { page: page(), size };
-        if (current.service) {
-          params['service'] = current.service;
+        for (const key of ['service', 'action', 'outcome', 'subjectId'] as const) {
+          const value = current[key].trim();
+          if (value) {
+            params[key] = value;
+          }
         }
-        if (current.action.trim()) {
-          params['action'] = current.action.trim();
-        }
-        if (current.outcome) {
-          params['outcome'] = current.outcome;
-        }
-        if (current.subjectId.trim()) {
-          params['subjectId'] = current.subjectId.trim();
-        }
-        return { url: this.url('/audit/events'), params };
+        return { url: this.url('/audit'), params };
       },
       { defaultValue: EMPTY_PAGE },
-    );
-  }
-
-  /** Every event about one subject, oldest first — the chain of custody for a single message. */
-  chainResource(subjectId: Signal<string>) {
-    return httpResource<AuditEvent[]>(
-      () => {
-        const id = subjectId().trim();
-        return id ? this.url(`/audit/events/${encodeURIComponent(id)}`) : undefined;
-      },
-      { defaultValue: [] },
     );
   }
 }
@@ -96,7 +99,7 @@ export class AuditApi {
 export interface AuditFilter {
   service: string;
   action: string;
-  outcome: AuditOutcome | '';
+  outcome: string;
   subjectId: string;
 }
 

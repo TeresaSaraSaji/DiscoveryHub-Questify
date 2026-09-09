@@ -1,80 +1,97 @@
 <header class="page__head">
   <div>
-    <h1>Export &amp; Audit</h1>
-    <p class="page__lede">Request and download evidence exports, and view all system activity.</p>
+    <h1>Exports &amp; Audit Trail</h1>
+    <p class="page__lede">Request and download evidence packages, and view all system activity.</p>
   </div>
 </header>
 
-<div class="alert alert--info">
-  <strong>P5 is not written yet.</strong>
-  The export and audit panels below call <code>http://localhost:8085</code> and will keep failing
-  until it exists — deliberately, rather than showing data nobody produced. The event shape is fixed
-  by <code>contracts/AuditEvent.java</code>; the paths are this page's proposal, documented in
-  <code>src/app/core/audit.api.ts</code>. Run <code>npm run mock</code> to serve the contract
-  locally. The last panel on this page works today.
-</div>
-
 <div class="grid grid--2">
-  <!-- FR-6 -->
   <app-panel
     heading="Request an export"
-    hint="Request an evidence package. Asynchronous — the job is polled to completion."
+    hint="Queued immediately and built in the background"
     service="p5"
   >
-    <div class="form">
-      <label class="field">
-        <span>Case</span>
-        <input
-          type="text"
-          class="mono"
-          [ngModel]="exportCaseId()"
-          (ngModelChange)="exportCaseId.set($event)"
-          name="exportCaseId"
-          placeholder="case-1"
-          autocomplete="off"
-        />
-      </label>
-
-      <label class="field">
-        <span>Format</span>
-        <select [value]="exportFormat()" (change)="exportFormat.set($any($event.target).value)">
-          @for (format of formats; track format) {
-            <option [value]="format">{{ format }}</option>
-          }
+    <div class="controls controls--wrap">
+      <label class="field field--inline">
+        <span>Scope by</span>
+        <select [value]="scope()" (change)="scope.set($any($event.target).value)">
+          <option value="case">Case + custodian</option>
+          <option value="custodian">Custodian</option>
+          <option value="messages">Specific messages</option>
         </select>
       </label>
+    </div>
 
-      <label class="field">
-        <span>Requested by</span>
-        <input
-          type="text"
-          [ngModel]="requestedBy()"
-          (ngModelChange)="requestedBy.set($event)"
-          name="requestedBy"
-          autocomplete="off"
-        />
-      </label>
+    <div class="form">
+      @if (scope() === 'case') {
+        <label class="field field--span2">
+          <span>Case</span>
+          <select [value]="caseId()" (change)="caseId.set($any($event.target).value)">
+            <option value="">Choose a case…</option>
+            @for (item of caseOptions(); track item.caseId) {
+              <option [value]="item.caseId">{{ item.name }} · {{ item.status }}</option>
+            }
+          </select>
+        </label>
+      }
 
-      <label class="check">
-        <input
-          type="checkbox"
-          [ngModel]="includeAttachments()"
-          (ngModelChange)="includeAttachments.set($event)"
-          name="includeAttachments"
-        />
-        <span>Include attachment bytes</span>
-      </label>
+      @if (scope() === 'case' || scope() === 'custodian') {
+        <label class="field">
+          <span>Custodian</span>
+          <input
+            type="text"
+            class="mono"
+            [ngModel]="custodianId()"
+            (ngModelChange)="custodianId.set($event)"
+            name="custodianId"
+            placeholder="cust-004"
+            autocomplete="off"
+          />
+        </label>
+        <label class="field">
+          <span>From</span>
+          <input type="date" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
+        </label>
+        <label class="field">
+          <span>To</span>
+          <input type="date" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
+        </label>
+      }
+
+      @if (scope() === 'messages') {
+        <label class="field field--span2">
+          <span>Message ids</span>
+          <input
+            type="text"
+            class="mono"
+            [ngModel]="messageIds()"
+            (ngModelChange)="messageIds.set($event)"
+            name="messageIds"
+            placeholder="one or more ids, comma or space separated"
+            autocomplete="off"
+          />
+        </label>
+      }
     </div>
 
     <div class="controls controls--tight">
       <button
         type="button"
         class="btn btn--primary"
-        (click)="requestExport()"
-        [disabled]="requesting() || !exportCaseId().trim()"
+        (click)="request()"
+        [disabled]="requesting() || !canRequest()"
       >
-        {{ requesting() ? 'Requesting…' : 'Request package' }}
+        {{ requesting() ? 'Queuing…' : 'Request export' }}
       </button>
+      @if (!canRequest()) {
+        <span class="dim">
+          @if (scope() === 'messages') {
+            Add at least one message id.
+          } @else {
+            A custodian is required — a case id alone labels the job, it does not select anything.
+          }
+        </span>
+      }
     </div>
 
     <app-alert [failure]="requestFailure()" [success]="requestOk()" />
@@ -82,111 +99,145 @@
     @if (tracked(); as job) {
       <div class="progress">
         <div class="progress__head">
-          <span class="mono">{{ job.exportId }}</span>
-          <span
-            class="tag"
-            [class.tag--ok]="job.status === 'COMPLETED'"
-            [class.tag--danger]="job.status === 'FAILED'"
-            [class.tag--busy]="job.status === 'QUEUED' || job.status === 'RUNNING'"
-          >
-            {{ job.status }}
-          </span>
-          <span class="dim">{{ job.requestedAt | since: 'relative' }}</span>
+          <span class="mono">{{ job.jobId.slice(0, 8) }}…</span>
+          <span [class]="statusClass(job.status)">{{ job.status }}</span>
+          <span class="dim">{{ job.queuedAt | since: 'relative' }}</span>
         </div>
         <dl class="pairs">
-          <dt>messages</dt>
-          <dd>{{ job.messageCount | number }}</dd>
-          @if (job.sha256) {
-            <dt>manifest sha256</dt>
-            <dd class="mono break">{{ job.sha256 }}</dd>
+          <dt>items</dt>
+          <dd>{{ job.itemCount | number }}</dd>
+          <dt>size</dt>
+          <dd>{{ sizeLabel(job.packageSizeBytes) }}</dd>
+          @if (job.packageSha256) {
+            <dt>package sha256</dt>
+            <dd class="mono break">{{ job.packageSha256 }}</dd>
           }
           @if (job.error) {
             <dt>error</dt>
             <dd>{{ job.error }}</dd>
           }
         </dl>
-        @if (job.status === 'COMPLETED') {
-          <a class="btn btn--small" [href]="downloadUrl(job)" download>Download package</a>
+        <div class="controls controls--tight">
+          @if (job.status === 'COMPLETED') {
+            <button type="button" class="btn btn--small" (click)="download(job)">Download</button>
+            <button
+              type="button"
+              class="btn btn--ghost btn--small"
+              (click)="verify(job)"
+              [disabled]="verifying() === job.jobId"
+            >
+              {{ verifying() === job.jobId ? 'Verifying…' : 'Verify checksums' }}
+            </button>
+          }
+          @if (job.status === 'FAILED') {
+            <button type="button" class="btn btn--small" (click)="retry(job)">Retry</button>
+          }
+        </div>
+      </div>
+    }
+
+    <app-alert [failure]="downloadFailure()" />
+    <app-alert [failure]="verifyFailure()" />
+
+    @if (verification(); as result) {
+      <div class="verdict" [class.verdict--held]="!result.valid">
+        @if (result.valid) {
+          <strong>Verified.</strong>
+          {{ result.itemsChecked }} item{{ result.itemsChecked === 1 ? '' : 's' }} and the package
+          digest were re-derived from the package's own bytes and all matched.
+        } @else {
+          <strong>Verification failed.</strong>
+          @if (!result.packageChecksumMatches) {
+            The package digest does not match what the job recorded.
+          }
+          @if (result.itemMismatches.length > 0) {
+            {{ result.itemMismatches.length }} of {{ result.itemsChecked }} items disagree with the
+            manifest.
+          }
         }
       </div>
     }
+
+    <p class="note">
+      The download is an expiring link to object storage, not a copy served through this app.
+    </p>
   </app-panel>
 
   <app-panel
     heading="Export history"
-    hint="Every package ever produced, with its manifest digest."
+    hint="The 50 most recent jobs"
     service="p5"
     [source]="exports"
   >
-    @if (exportRows().content.length === 0 && !exports.isLoading()) {
+    @if (exportRows().length === 0 && !exports.isLoading()) {
       <p class="empty">No export has been requested.</p>
     }
-    <table class="table table--rows">
+    <table class="table">
       <thead>
         <tr>
-          <th>Requested</th>
-          <th>Case</th>
-          <th>Format</th>
-          <th class="num">Messages</th>
+          <th>Queued</th>
+          <th>Job</th>
+          <th class="num">Items</th>
           <th>Status</th>
           <th>Digest</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
-        @for (job of exportRows().content; track job.exportId) {
+        @for (job of exportRows(); track job.jobId) {
           <tr>
-            <td class="dim">{{ job.requestedAt | since }}</td>
-            <td class="mono">{{ job.caseId }}</td>
-            <td>
-              <span class="tag">{{ job.format }}</span>
+            <td class="dim">{{ job.queuedAt | since }}</td>
+            <td class="mono">
+              {{ job.jobId.slice(0, 8) }}…
+              @if (job.attempts > 1) {
+                <span class="tag">{{ job.attempts }} attempts</span>
+              }
             </td>
-            <td class="num">{{ job.messageCount | number }}</td>
+            <td class="num">{{ job.itemCount | number }}</td>
             <td>
-              <span
-                class="tag"
-                [class.tag--ok]="job.status === 'COMPLETED'"
-                [class.tag--danger]="job.status === 'FAILED'"
-                [class.tag--busy]="job.status === 'QUEUED' || job.status === 'RUNNING'"
-              >
-                {{ job.status }}
-              </span>
+              <span [class]="statusClass(job.status)">{{ job.status }}</span>
             </td>
             <td class="mono dim">
-              @if (job.sha256) {
-                {{ job.sha256.slice(0, 12) }}…
+              {{ job.packageSha256 ? job.packageSha256.slice(0, 10) + '…' : '—' }}
+            </td>
+            <td class="cell--actions">
+              @if (job.status === 'COMPLETED') {
+                <button type="button" class="btn btn--ghost btn--small" (click)="download(job)">
+                  Download
+                </button>
+              } @else if (job.status === 'FAILED') {
+                <button type="button" class="btn btn--ghost btn--small" (click)="retry(job)">
+                  Retry
+                </button>
               } @else {
-                —
+                <button type="button" class="btn btn--ghost btn--small" (click)="follow(job.jobId)">
+                  Watch
+                </button>
               }
             </td>
           </tr>
         }
       </tbody>
     </table>
-    <app-paginator
-      [page]="exportRows()"
-      [busy]="exports.isLoading()"
-      (go)="exportsPage.set($event)"
-    />
   </app-panel>
 </div>
 
-<!-- FR-7 -->
 <app-panel
   heading="Audit trail"
-  hint="Append-only system activity. Every service emits its own events."
+  hint="Append-only, newest first. Every service writes its own events."
   service="p5"
-  [source]="events"
+  [source]="audit"
 >
   <div class="controls controls--wrap">
     <label class="field field--inline">
       <span>Service</span>
       <input
         type="text"
-        class="mono input--narrow"
+        class="input--narrow mono"
         [ngModel]="filter().service"
         (ngModelChange)="patchFilter({ service: $event })"
         name="auditService"
-        placeholder="P2.2"
+        placeholder="P5"
         autocomplete="off"
       />
     </label>
@@ -198,21 +249,21 @@
         [ngModel]="filter().action"
         (ngModelChange)="patchFilter({ action: $event })"
         name="auditAction"
-        placeholder="disposition.refused"
+        placeholder="export.completed"
         autocomplete="off"
       />
     </label>
     <label class="field field--inline">
       <span>Outcome</span>
-      <select
-        [value]="filter().outcome"
-        (change)="patchFilter({ outcome: $any($event.target).value })"
-      >
-        <option value="">any</option>
-        @for (outcome of auditOutcomes; track outcome) {
-          <option [value]="outcome">{{ outcome }}</option>
-        }
-      </select>
+      <input
+        type="text"
+        class="input--narrow mono"
+        [ngModel]="filter().outcome"
+        (ngModelChange)="patchFilter({ outcome: $event })"
+        name="auditOutcome"
+        placeholder="SUCCESS"
+        autocomplete="off"
+      />
     </label>
     <label class="field field--inline">
       <span>Subject</span>
@@ -222,7 +273,7 @@
         [ngModel]="filter().subjectId"
         (ngModelChange)="patchFilter({ subjectId: $event })"
         name="auditSubject"
-        placeholder="messageId"
+        placeholder="messageId or caseId"
         autocomplete="off"
       />
     </label>
@@ -233,15 +284,15 @@
       (click)="patchFilter({ outcome: 'REFUSED' })"
       title="A hold blocking a delete is recorded here"
     >
-      Show refusals only
+      Refusals only
     </button>
   </div>
 
-  @if (eventRows().content.length === 0 && !events.isLoading()) {
+  @if (auditRows().content.length === 0 && !audit.isLoading()) {
     <p class="empty">No audit events match.</p>
   }
 
-  <table class="table table--rows">
+  <table class="table">
     <thead>
       <tr>
         <th>When</th>
@@ -254,7 +305,7 @@
       </tr>
     </thead>
     <tbody>
-      @for (event of eventRows().content; track event.eventId) {
+      @for (event of auditRows().content; track event.eventId) {
         <tr>
           <td class="dim">{{ event.occurredAt | since }}</td>
           <td>
@@ -264,18 +315,11 @@
           <td>
             <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
           </td>
-          <td class="mono">
-            <button
-              type="button"
-              class="link"
-              (click)="inspect(event.subjectId)"
-              title="Read P2.2's ledger for this id"
-            >
-              {{ event.subjectId }}
-            </button>
-            <span class="dim">{{ event.subjectType }}</span>
+          <td class="mono dim">
+            {{ event.subjectId ?? '—' }}
+            <div class="dim">{{ event.subjectType }}</div>
           </td>
-          <td>{{ event.actor }}</td>
+          <td class="dim">{{ event.actor }}</td>
           <td class="cell--detail">
             @for (pair of detailPairs(event.detail); track pair.key) {
               <span class="tag mono">{{ pair.key }}={{ pair.value }}</span>
@@ -285,123 +329,9 @@
       }
     </tbody>
   </table>
-  <app-paginator [page]="eventRows()" [busy]="events.isLoading()" (go)="auditPage.set($event)" />
+  <app-paginator [page]="auditRows()" [busy]="audit.isLoading()" (go)="auditPage.set($event)" />
+  <p class="note">
+    There are no write endpoints for this trail anywhere in the system, by design. It is appended to
+    by the services as they work and read here.
+  </p>
 </app-panel>
-
-<div class="grid grid--2">
-  <app-panel
-    heading="Chain of custody, one subject"
-    hint="Every service's events about one subject, oldest first."
-    service="p5"
-    [source]="chain"
-  >
-    <div class="controls controls--tight">
-      <input
-        class="input--wide mono"
-        type="text"
-        [ngModel]="subjectId()"
-        (ngModelChange)="subjectId.set($event)"
-        name="subjectId"
-        placeholder="messageId, caseId, exportId"
-        autocomplete="off"
-      />
-    </div>
-
-    @if (!subjectId().trim()) {
-      <p class="empty">Enter a subject id.</p>
-    } @else if (chainRows().length === 0 && !chain.isLoading()) {
-      <p class="empty">No events recorded about {{ subjectId() }}.</p>
-    } @else {
-      <ol class="timeline">
-        @for (event of chainRows(); track event.eventId) {
-          <li>
-            <div class="timeline__head">
-              <span class="mono">{{ event.action }}</span>
-              <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
-              <span class="tag">{{ event.service }}</span>
-            </div>
-            <div class="dim">
-              {{ event.occurredAt | since }} · {{ event.actor }} ·
-              <span class="mono">{{ event.correlationId }}</span>
-            </div>
-          </li>
-        }
-      </ol>
-    }
-  </app-panel>
-
-  <!-- The part of FR-7 that is already true -->
-  <app-panel
-    heading="Disposition decisions for one message"
-    hint="Recorded at sweep time by P2.2, and survives the message."
-    service="p22"
-  >
-    <div class="controls controls--tight">
-      <input
-        class="input--wide mono"
-        type="text"
-        [ngModel]="ledgerId()"
-        (ngModelChange)="ledgerId.set($event)"
-        name="ledgerId"
-        placeholder="messageId"
-        autocomplete="off"
-      />
-      <button
-        type="button"
-        class="btn btn--primary"
-        (click)="loadLedger()"
-        [disabled]="ledgerBusy()"
-      >
-        {{ ledgerBusy() ? 'Reading…' : 'Read' }}
-      </button>
-    </div>
-
-    <app-alert [failure]="ledgerFailure()" />
-
-    @if (ledger(); as items) {
-      @if (items.length === 0) {
-        <p class="empty">
-          No sweep has ever considered this message. That is a real answer, not a missing one.
-        </p>
-      } @else {
-        <ol class="timeline">
-          @for (item of items; track item.id) {
-            <li>
-              <div class="timeline__head">
-                <span
-                  class="tag"
-                  [class.tag--ok]="item.outcome === 'SKIPPED_HOLD'"
-                  [class.tag--danger]="item.outcome === 'DELETED' || item.outcome === 'FAILED'"
-                  [class.tag--warn]="
-                    item.outcome === 'WOULD_DELETE' || item.outcome === 'DELETE_REQUESTED'
-                  "
-                >
-                  {{ item.outcome }}
-                </span>
-                <span class="mono dim">run {{ item.runId.slice(0, 8) }}…</span>
-              </div>
-              <div class="dim">{{ item.occurredAt | since }}</div>
-              @if (item.reason) {
-                <div>{{ item.reason }}</div>
-              }
-              @if (item.blockingCaseId || item.blockingHoldId) {
-                <div>
-                  @if (item.blockingCaseId) {
-                    <span class="tag mono">case {{ item.blockingCaseId }}</span>
-                  }
-                  @if (item.blockingHoldId) {
-                    <span class="tag mono">hold {{ item.blockingHoldId }}</span>
-                  }
-                </div>
-              }
-            </li>
-          }
-        </ol>
-        <p class="note">
-          This answers both halves of the awkward question — why a message is missing, and why one
-          that should have expired is still here.
-        </p>
-      }
-    }
-  </app-panel>
-</div>

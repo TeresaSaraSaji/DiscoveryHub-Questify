@@ -403,6 +403,7 @@ code {
 }
 
 input[type='text'],
+input[type='date'],
 select,
 .textarea {
   padding: 0.35rem 0.55rem;
@@ -420,6 +421,7 @@ input[type='text']::placeholder,
 }
 
 input[type='text']:focus,
+input[type='date']:focus,
 select:focus,
 .textarea:focus {
   border-color: var(--accent);
@@ -786,4 +788,77 @@ select:focus,
 
 .status__recheck {
   font-size: 0.72rem;
+}
+
+/* ------------------------------------------------------------------ dashboard */
+
+.grid--4 {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+/* Quick links: rows, not tiles. Four large cards at the top of a page push the actual content
+   below the fold to say four things a nav bar already says. */
+.quick {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.quick__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.6rem 0.75rem;
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.quick__item:hover {
+  border-color: var(--accent);
+}
+
+.quick__label {
+  font-size: 0.86rem;
+  font-weight: 550;
+  color: var(--text);
+}
+
+.quick__detail {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+.figure {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.figure--danger {
+  color: var(--danger);
+}
+
+.figure__note {
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ search */
+
+.field--span2 {
+  grid-column: span 2;
+}
+
+.snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.78rem;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }

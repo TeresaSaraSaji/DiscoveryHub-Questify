@@ -1,235 +1,533 @@
 <header class="page__head">
   <div>
-    <h1>Case &amp; Hold</h1>
-    <p class="page__lede">
-      What is under legal hold, and what those holds have saved from destruction.
-    </p>
+    <h1>Cases &amp; Legal Hold</h1>
+    <p class="page__lede">Manage matters, file evidence, and place holds that stop retention.</p>
   </div>
   <label class="field field--inline">
-    <span>Case</span>
-    <input
-      type="text"
-      [ngModel]="caseId()"
-      (ngModelChange)="focusCase($event)"
-      name="caseId"
-      placeholder="all cases"
-      autocomplete="off"
-    />
+    <span>Status</span>
+    <select [value]="statusFilter()" (change)="filterStatus($any($event.target).value)">
+      <option value="">All</option>
+      @for (status of statuses; track status) {
+        <option [value]="status">{{ status }}</option>
+      }
+    </select>
   </label>
 </header>
 
-@if (caseNames().length > 0) {
-  <div class="chips">
-    <button type="button" class="chip" [class.chip--on]="caseId() === ''" (click)="focusCase('')">
-      all cases
-    </button>
-    @for (item of caseNames(); track item.id) {
-      <button
-        type="button"
-        class="chip"
-        [class.chip--on]="caseId() === item.id"
-        (click)="focusCase(item.id)"
-      >
-        {{ item.name }}
-      </button>
+<div class="grid grid--4">
+  <app-panel heading="Cases" hint="Open matters" service="p4case" [source]="caseStats">
+    @if (caseStats.hasValue()) {
+      @let c = caseStats.value();
+      <p class="figure">{{ c.activeCases | number }}</p>
+      <p class="figure__note">
+        {{ c.totalCases | number }} total · {{ c.closedCases | number }} closed
+      </p>
     }
-  </div>
-}
-
-<!-- FR-4.3: holds as scope, before propagation has finished -->
-<app-panel
-  heading="Active holds"
-  hint="Every hold in force, as scope — custodians and a date range."
-  service="p4"
-  [source]="holds"
->
-  @if (visibleHolds().length === 0 && !holds.isLoading()) {
-    <p class="empty">
-      No hold is in force
-      @if (caseId()) {
-        on {{ caseId() }}
-      }
-      . Nothing is protected from the next sweep by a case-level hold.
-    </p>
-  }
-
-  <table class="table table--rows">
-    <thead>
-      <tr>
-        <th>Hold</th>
-        <th>Case</th>
-        <th>Scope</th>
-        <th>Terms</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      @for (hold of visibleHolds(); track hold.holdId) {
-        <tr>
-          <td class="mono">{{ hold.holdId }}</td>
-          <td>
-            <strong>{{ hold.caseName }}</strong
-            ><br />
-            <span class="mono dim">{{ hold.caseId }}</span>
-          </td>
-          <td>
-            {{ holdScope(hold) }}
-            @if (hold.custodianIds.length === 0) {
-              <span class="tag tag--warn" title="An empty custodian list means every custodian">
-                unbounded
-              </span>
-            }
-          </td>
-          <td>
-            @for (term of hold.terms ?? []; track term) {
-              <span class="tag mono">{{ term }}</span>
-            }
-          </td>
-          <td class="cell--actions">
-            <button
-              type="button"
-              class="btn btn--ghost btn--small"
-              (click)="focusCase(hold.caseId)"
-            >
-              Focus
-            </button>
-          </td>
-        </tr>
-      }
-    </tbody>
-  </table>
-
-  <p class="note">
-    A message covered by two holds stays protected until both are released (FR-4.5) — absence from
-    this list is the only way the sweep learns a hold is gone.
-  </p>
-</app-panel>
-
-<div class="grid grid--2">
-  <!-- FR-4.2 -->
-  <app-panel
-    heading="Is this message held?"
-    hint="The per-message guard both services call before any delete."
-    service="p4"
-  >
-    <div class="controls">
-      <input
-        class="input--wide mono"
-        type="text"
-        [ngModel]="checkId()"
-        (ngModelChange)="checkId.set($event)"
-        name="checkId"
-        placeholder="messageId"
-        autocomplete="off"
-      />
-      <button type="button" class="btn btn--primary" (click)="checkHold()" [disabled]="checking()">
-        {{ checking() ? 'Asking…' : 'Check' }}
-      </button>
-    </div>
-
-    <app-alert [failure]="checkFailure()" />
-
-    @if (checkResult() !== null) {
-      <div class="verdict" [class.verdict--held]="checkResult()">
-        @if (checkResult()) {
-          <strong>Held.</strong> A disposition sweep must not delete this message.
-        } @else {
-          <strong>Not held.</strong> Retention alone decides whether this message survives.
-        }
-      </div>
-    }
-
-    <p class="note">
-      Upstream this call fails closed: a 500, a timeout or an empty body is all treated as
-      <em>held</em>. That is why an unreachable P4 makes a sweep delete nothing.
-    </p>
   </app-panel>
 
-  <!-- FR-2.4 vs FR-4.3: membership beats scope -->
-  <app-panel
-    heading="Held-case evidence check"
-    hint="Which of these messages are evidence in a case under hold?"
-    service="p4"
-  >
-    <textarea
-      class="textarea mono"
-      rows="4"
-      [ngModel]="evidenceInput()"
-      (ngModelChange)="evidenceInput.set($event)"
-      name="evidenceInput"
-      placeholder="one messageId per line"
-    ></textarea>
+  <app-panel heading="Holds" hint="In force now" service="p4hold" [source]="holdStats">
+    @if (holdStats.hasValue()) {
+      @let h = holdStats.value();
+      <p class="figure">{{ h.activeHolds | number }}</p>
+      <p class="figure__note">
+        {{ h.resolvingHolds | number }} resolving · {{ h.releasedHolds | number }} released
+      </p>
+    }
+  </app-panel>
 
-    <div class="controls controls--tight">
-      <button
-        type="button"
-        class="btn btn--primary"
-        (click)="runEvidenceCheck()"
-        [disabled]="evidenceBusy()"
-      >
-        {{ evidenceBusy() ? 'Asking…' : 'Check' }}
-      </button>
-      <button type="button" class="btn btn--ghost btn--small" (click)="takeIdsFromArchive()">
-        Fill from the archive list below
-      </button>
-    </div>
+  <app-panel heading="This case" hint="Messages held" service="p4hold" [source]="holdCount">
+    @if (!selected()) {
+      <p class="empty">No case selected.</p>
+    } @else if (holdCount.hasValue()) {
+      <p class="figure">{{ holdCount.value().heldMessages | number }}</p>
+      <p class="figure__note">protected by this case's active holds</p>
+    }
+  </app-panel>
 
-    <app-alert [failure]="evidenceFailure()" />
-
-    @if (evidenceResult(); as protectedItems) {
-      @if (protectedItems.length === 0) {
-        <div class="verdict">
-          <strong>None of the {{ evidenceAsked() }} are protected.</strong> An empty answer is the
-          normal one — it does not mean the call failed.
-        </div>
-      } @else {
-        <table class="table table--tight">
-          <thead>
-            <tr>
-              <th>Message</th>
-              <th>Case</th>
-              <th>Hold</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (item of protectedItems; track item.messageId) {
-              <tr>
-                <td class="mono">{{ item.messageId }}</td>
-                <td>
-                  {{ item.caseName }} <span class="mono dim">{{ item.caseId }}</span>
-                </td>
-                <td class="mono">{{ item.holdId }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-        <p class="note">
-          {{ protectedItems.length }} of {{ evidenceAsked() }} are evidence in a held case.
-          Membership beats scope: these survive even where the hold's own custodian and date range
-          would not cover them.
-        </p>
-      }
+  <app-panel heading="Evidence" hint="Filed on this case" service="p4case" [source]="evidence">
+    @if (!selected()) {
+      <p class="empty">No case selected.</p>
+    } @else {
+      <p class="figure">{{ evidenceRows().length | number }}</p>
+      <p class="figure__note">{{ custodianRows().length | number }} custodians</p>
     }
   </app-panel>
 </div>
 
-<!-- FR-4.6, and the reason this page still works with P4 down -->
-<app-panel
-  heading="What this case's holds have saved"
-  hint="Recorded at sweep time by P2.2. Outlives the hold and the case."
-  service="p22"
-  [source]="protectedItems"
->
-  @if (!caseId()) {
-    <p class="empty">Enter or pick a case above.</p>
-  } @else {
-    @if (protectedRows().content.length === 0 && !protectedItems.isLoading()) {
+<div class="grid grid--2">
+  <app-panel heading="Cases" hint="Select one to work on it" service="p4case" [source]="cases">
+    @if (caseRows().content.length === 0 && !cases.isLoading()) {
+      <p class="empty">No cases match. Open one below.</p>
+    }
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Case</th>
+          <th>Matter</th>
+          <th>Owner</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of caseRows().content; track item.caseId) {
+          <tr
+            class="row--clickable"
+            [class.row--selected]="item.caseId === selected()"
+            (click)="select(item.caseId)"
+          >
+            <td>
+              {{ item.name }}
+              <div class="mono dim">{{ item.caseId.slice(0, 8) }}…</div>
+            </td>
+            <td class="dim">{{ item.matterType }}</td>
+            <td class="dim">{{ item.owner }}</td>
+            <td>
+              <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <app-paginator [page]="caseRows()" [busy]="cases.isLoading()" (go)="casesPage.set($event)" />
+  </app-panel>
+
+  <app-panel heading="Open a case" hint="Starts in DRAFT" service="p4case">
+    <div class="form">
+      <label class="field field--span2">
+        <span>Name</span>
+        <input
+          type="text"
+          [ngModel]="newName()"
+          (ngModelChange)="newName.set($event)"
+          name="newName"
+          placeholder="Regulatory Inquiry"
+          autocomplete="off"
+        />
+      </label>
+      <label class="field">
+        <span>Matter type</span>
+        <select [value]="newMatter()" (change)="newMatter.set($any($event.target).value)">
+          @for (type of matterTypes; track type) {
+            <option [value]="type">{{ type }}</option>
+          }
+        </select>
+      </label>
+      <label class="field">
+        <span>Owner</span>
+        <input
+          type="text"
+          [ngModel]="newOwner()"
+          (ngModelChange)="newOwner.set($event)"
+          name="newOwner"
+          autocomplete="off"
+        />
+      </label>
+      <label class="field field--span2">
+        <span>Description</span>
+        <input
+          type="text"
+          [ngModel]="newDescription()"
+          (ngModelChange)="newDescription.set($event)"
+          name="newDescription"
+          placeholder="Optional"
+          autocomplete="off"
+        />
+      </label>
+    </div>
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="createCase()"
+        [disabled]="creating() || !newName().trim()"
+      >
+        {{ creating() ? 'Opening…' : 'Create case' }}
+      </button>
+    </div>
+    <app-alert [failure]="createFailure()" [success]="createOk()" />
+    <p class="note">
+      A case moves forward one step at a time: DRAFT → ACTIVE → UNDER_REVIEW → CLOSED. Closing it
+      makes it read-only and releases its holds.
+    </p>
+  </app-panel>
+</div>
+
+@if (!selected()) {
+  <app-panel heading="Case detail" hint="Nothing selected yet" service="p4case">
+    <p class="empty">Pick a case above to see its custodians, evidence and holds.</p>
+  </app-panel>
+} @else {
+  <app-panel
+    [heading]="current() ? current()!.name : 'Case detail'"
+    hint="Lifecycle, custodians and evidence"
+    service="p4case"
+    [source]="detail"
+  >
+    @if (current(); as item) {
+      <dl class="pairs">
+        <dt>case id</dt>
+        <dd class="mono">{{ item.caseId }}</dd>
+        <dt>status</dt>
+        <dd>
+          <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
+          @if (readOnly()) {
+            <span class="tag">read-only</span>
+          }
+        </dd>
+        <dt>matter</dt>
+        <dd>{{ item.matterType }}</dd>
+        <dt>owner</dt>
+        <dd>{{ item.owner }}</dd>
+        @if (item.description) {
+          <dt>description</dt>
+          <dd>{{ item.description }}</dd>
+        }
+        <dt>opened</dt>
+        <dd class="dim">{{ item.createdAt | since }}</dd>
+        @if (item.closedAt) {
+          <dt>closed</dt>
+          <dd class="dim">{{ item.closedAt | since }}</dd>
+        }
+      </dl>
+
+      <div class="controls controls--tight">
+        @if (nextStatus(); as next) {
+          <button
+            type="button"
+            class="btn btn--primary btn--small"
+            (click)="advance()"
+            [disabled]="transitioning()"
+          >
+            {{ transitioning() ? 'Moving…' : 'Move to ' + next }}
+          </button>
+        } @else {
+          <span class="dim">This case is closed. Nothing further can be changed on it.</span>
+        }
+      </div>
+      <app-alert [failure]="transitionFailure()" />
+    }
+  </app-panel>
+
+  <div class="grid grid--2">
+    <app-panel
+      heading="Custodians"
+      hint="Whose communications this matter covers"
+      service="p4case"
+      [source]="custodians"
+    >
+      @if (custodianRows().length === 0 && !custodians.isLoading()) {
+        <p class="empty">No custodians on this case yet.</p>
+      }
+      <table class="table table--tight">
+        <tbody>
+          @for (custodian of custodianRows(); track custodian.id) {
+            <tr>
+              <td class="mono">{{ custodian.custodianId }}</td>
+              <td class="dim">added {{ custodian.addedAt | since: 'relative' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <div class="controls controls--tight">
+        <input
+          class="input--wide mono"
+          type="text"
+          [ngModel]="custodianId()"
+          (ngModelChange)="custodianId.set($event)"
+          name="custodianId"
+          placeholder="cust-004"
+          autocomplete="off"
+          [disabled]="readOnly()"
+        />
+        <button
+          type="button"
+          class="btn btn--small"
+          (click)="addCustodian()"
+          [disabled]="readOnly() || addingCustodian() || !custodianId().trim()"
+        >
+          Add
+        </button>
+      </div>
+      <app-alert [failure]="custodianFailure()" [success]="custodianOk()" />
+    </app-panel>
+
+    <app-panel
+      heading="Evidence"
+      hint="Messages filed on this matter"
+      service="p4case"
+      [source]="evidence"
+    >
+      @if (evidenceRows().length === 0 && !evidence.isLoading()) {
+        <p class="empty">
+          No evidence yet. Search for messages and file them from the Search page, or add one by id.
+        </p>
+      }
+      <table class="table table--tight">
+        <thead>
+          <tr>
+            <th>Message</th>
+            <th>Source</th>
+            <th>Added</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (item of evidenceRows(); track item.id) {
+            <tr>
+              <td class="mono">{{ item.messageId }}</td>
+              <td>
+                <span class="tag">{{ item.source }}</span>
+              </td>
+              <td class="dim">{{ item.addedAt | since: 'relative' }}</td>
+              <td class="cell--actions">
+                <button
+                  type="button"
+                  class="btn btn--ghost btn--small"
+                  (click)="removeEvidence(item.messageId)"
+                  [disabled]="readOnly()"
+                >
+                  Remove
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <div class="controls controls--tight">
+        <input
+          class="input--wide mono"
+          type="text"
+          [ngModel]="evidenceId()"
+          (ngModelChange)="evidenceId.set($event)"
+          name="evidenceId"
+          placeholder="messageId"
+          autocomplete="off"
+          [disabled]="readOnly()"
+        />
+        <button
+          type="button"
+          class="btn btn--small"
+          (click)="addEvidence()"
+          [disabled]="readOnly() || addingEvidence() || !evidenceId().trim()"
+        >
+          File
+        </button>
+      </div>
+      <app-alert [failure]="evidenceFailure()" [success]="evidenceOk()" />
+      <p class="note">
+        Filing a message protects it from disposition even where a hold's own custodian and date
+        scope would not cover it.
+      </p>
+    </app-panel>
+  </div>
+
+  <app-panel
+    heading="Legal holds on this case"
+    hint="A hold protects nothing until it reaches ACTIVE"
+    service="p4hold"
+    [source]="holds"
+  >
+    @if (holdRows().length === 0 && !holds.isLoading()) {
       <p class="empty">
-        No sweep has ever been stopped by a hold on {{ caseId() }}. Either nothing in this case has
-        reached its retention cutoff, or no sweep has run.
+        No hold on this case. Nothing here is protected from the next retention sweep.
       </p>
     }
-    <table class="table table--rows">
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Hold</th>
+          <th>Status</th>
+          <th class="num">Messages</th>
+          <th>Scope</th>
+          <th>Placed</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (hold of holdRows(); track hold.holdId) {
+          <tr>
+            <td class="mono">{{ hold.holdId.slice(0, 8) }}…</td>
+            <td>
+              <span [class]="holdStatusClass(hold.status)">{{ hold.status }}</span>
+              @if (hold.error) {
+                <div class="dim">{{ hold.error }}</div>
+              }
+            </td>
+            <td class="num">
+              @if (hold.status === 'RESOLVING') {
+                <span class="dim">—</span>
+              } @else {
+                {{ hold.messageCount | number }}
+              }
+            </td>
+            <td class="dim">
+              @if (hold.dateFrom || hold.dateTo) {
+                {{ hold.dateFrom ? (hold.dateFrom | since: 'clock') : 'the beginning' }} →
+                {{ hold.dateTo ? (hold.dateTo | since: 'clock') : 'now' }}
+              } @else {
+                unbounded dates
+              }
+              @if (hold.searchTerms) {
+                <span class="tag mono">{{ hold.searchTerms }}</span>
+              }
+            </td>
+            <td class="dim">{{ hold.placedAt | since: 'relative' }}</td>
+            <td class="cell--actions">
+              @if (hold.status === 'ACTIVE') {
+                <button type="button" class="btn btn--ghost btn--small" (click)="release(hold)">
+                  Release
+                </button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    @if (resolving()) {
+      <p class="note">
+        <span class="tag tag--busy">resolving</span>
+        A hold is still being expanded to messages. Until it is ACTIVE it stops nothing, and the
+        message count is unknown rather than zero.
+      </p>
+    }
+
+    <p class="note">
+      A hold's custodian list is not returned by the API — the entity exposes it through a method
+      rather than a getter, so it never reaches the wire. Only the dates and terms are shown.
+    </p>
+  </app-panel>
+
+  <div class="grid grid--2">
+    <app-panel
+      heading="Place a hold"
+      hint="Accepted immediately, resolved in the background"
+      service="p4hold"
+    >
+      <div class="form">
+        <label class="field field--span2">
+          <span>Custodians</span>
+          <input
+            type="text"
+            class="mono"
+            [ngModel]="holdCustodians()"
+            (ngModelChange)="holdCustodians.set($event)"
+            name="holdCustodians"
+            placeholder="cust-004, cust-017"
+            autocomplete="off"
+          />
+        </label>
+        <label class="field">
+          <span>From</span>
+          <input
+            type="date"
+            [ngModel]="holdFrom()"
+            (ngModelChange)="holdFrom.set($event)"
+            name="holdFrom"
+          />
+        </label>
+        <label class="field">
+          <span>To</span>
+          <input
+            type="date"
+            [ngModel]="holdTo()"
+            (ngModelChange)="holdTo.set($event)"
+            name="holdTo"
+          />
+        </label>
+        <label class="field field--span2">
+          <span>Search terms</span>
+          <input
+            type="text"
+            [ngModel]="holdTerms()"
+            (ngModelChange)="holdTerms.set($event)"
+            name="holdTerms"
+            placeholder="Optional — widens the scope"
+            autocomplete="off"
+          />
+        </label>
+      </div>
+
+      <div class="controls controls--tight">
+        <button
+          type="button"
+          class="btn btn--primary"
+          (click)="placeHold()"
+          [disabled]="placing() || !holdCustodians().trim() || readOnly()"
+        >
+          {{ placing() ? 'Placing…' : 'Place hold' }}
+        </button>
+      </div>
+
+      <app-alert [failure]="holdFailure()" [success]="holdOk()" />
+
+      @if (readOnly()) {
+        <p class="note">This case is closed, so no new hold can be placed on it.</p>
+      } @else {
+        <p class="note">Leave the dates empty for an unbounded range.</p>
+      }
+    </app-panel>
+
+    <app-panel
+      heading="Is a message held?"
+      hint="The guard P2 and P2.2 call before deleting anything"
+      service="p4hold"
+    >
+      <div class="controls">
+        <input
+          class="input--wide mono"
+          type="text"
+          [ngModel]="checkId()"
+          (ngModelChange)="checkId.set($event)"
+          name="checkId"
+          placeholder="messageId"
+          autocomplete="off"
+        />
+        <button
+          type="button"
+          class="btn btn--primary"
+          (click)="checkHold()"
+          [disabled]="checking() || !checkId().trim()"
+        >
+          {{ checking() ? 'Asking…' : 'Check' }}
+        </button>
+      </div>
+
+      <app-alert [failure]="checkFailure()" />
+
+      @if (checkResult() !== null) {
+        <div class="verdict" [class.verdict--held]="checkResult()">
+          @if (checkResult()) {
+            <strong>Held.</strong> A retention sweep must not delete this message.
+          } @else {
+            <strong>Not held.</strong> Retention alone decides whether it survives.
+          }
+        </div>
+      }
+
+      <p class="note">
+        Upstream this call fails closed: a timeout or an error is treated as <em>held</em>. That is
+        why an unreachable hold-service makes a sweep delete nothing.
+      </p>
+    </app-panel>
+  </div>
+
+  <app-panel
+    heading="What this case's holds have saved"
+    hint="Recorded at sweep time by P2.2, and outlives both the hold and the case"
+    service="p22"
+    [source]="protectedItems"
+  >
+    @if (protectedRows().content.length === 0 && !protectedItems.isLoading()) {
+      <p class="empty">
+        No sweep has ever been stopped by a hold on this case. Either nothing here has reached its
+        retention cutoff, or no sweep has run.
+      </p>
+    }
+    <table class="table">
       <thead>
         <tr>
           <th>Decided</th>
@@ -250,13 +548,11 @@
             <td>
               <span class="tag tag--ok">{{ item.outcome }}</span>
             </td>
-            <td>
+            <td class="dim">
               @if (item.blockingHoldId) {
-                <span class="tag mono">hold {{ item.blockingHoldId }}</span>
+                <span class="tag mono">hold {{ item.blockingHoldId.slice(0, 8) }}…</span>
               }
-              @if (item.reason) {
-                <span class="dim">{{ item.reason }}</span>
-              }
+              {{ item.reason }}
             </td>
           </tr>
         }
@@ -267,90 +563,5 @@
       [busy]="protectedItems.isLoading()"
       (go)="protectedPage.set($event)"
     />
-    <p class="note">
-      This is the defensible answer, and it comes from P2.2 rather than P4 — it survives the hold
-      being released and the case being closed, which is what makes it proof rather than a status
-      display.
-    </p>
-  }
-</app-panel>
-
-<div class="grid grid--2">
-  <app-panel
-    heading="Archive hold flag"
-    hint="The mirrored on_hold flag — the first of five disposition guards."
-    service="p2"
-    [source]="archiveStats"
-  >
-    @if (archiveStats.hasValue()) {
-      @let a = archiveStats.value();
-      <div class="metrics">
-        <div class="metric">
-          <span class="metric__value">{{ a.totalMessages }}</span>
-          <span class="metric__label">messages</span>
-        </div>
-        <div class="metric metric--ok">
-          <span class="metric__value">{{ a.onHold }}</span>
-          <span class="metric__label">flagged on hold</span>
-        </div>
-      </div>
-      <p class="note">
-        Propagation is asynchronous (FR-4.3), so this number lags a freshly placed hold. That lag is
-        exactly what <code>/holds/active</code> and <code>/holds/evidence-check</code> exist to
-        cover.
-      </p>
-    }
   </app-panel>
-
-  <app-panel
-    heading="Find messages to file as evidence"
-    hint="Browse the archive to pick messages to file as evidence."
-    service="p2"
-    [source]="messages"
-  >
-    <div class="controls controls--tight">
-      <input
-        class="input--wide mono"
-        type="text"
-        [ngModel]="custodianId()"
-        (ngModelChange)="searchCustodian($event)"
-        name="custodianId"
-        placeholder="custodianId — blank for all"
-        autocomplete="off"
-      />
-    </div>
-
-    @if (messageRows().content.length === 0 && !messages.isLoading()) {
-      <p class="empty">No messages. Has the corpus been loaded through P1?</p>
-    }
-
-    <table class="table table--tight">
-      <thead>
-        <tr>
-          <th>Sent</th>
-          <th>Custodian</th>
-          <th>Subject</th>
-          <th>Message id</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (message of messageRows().content; track message.messageId) {
-          <tr>
-            <td class="dim">{{ message.sentAt | since: 'clock' }}</td>
-            <td class="mono">{{ message.custodianId }}</td>
-            <td class="cell--subject">
-              <span class="tag">{{ message.type }}</span>
-              {{ message.subject || '(no subject)' }}
-            </td>
-            <td class="mono dim">{{ message.messageId }}</td>
-          </tr>
-        }
-      </tbody>
-    </table>
-    <app-paginator
-      [page]="messageRows()"
-      [busy]="messages.isLoading()"
-      (go)="messagesPage.set($event)"
-    />
-  </app-panel>
-</div>
+}

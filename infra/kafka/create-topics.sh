@@ -25,6 +25,7 @@ TOPICS=(
   # P2's answers back to P2.2, keyed by the same messageId so a receipt cannot overtake a later
   # command for the same message. Matched to disposition.commands: one receipt per command.
   "disposition.results:3"
+  "cases.events:3"
   "export.jobs:3"
   "audit.events:6"
 )

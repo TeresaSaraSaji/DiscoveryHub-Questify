@@ -15,6 +15,7 @@ docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 3x 
 mvn -q package                # build every module
 java -jar services/ingestion-service/target/ingestion-service-0.1.0-SNAPSHOT.jar
 java -jar services/storage-service/target/storage-service-0.1.0-SNAPSHOT.jar
+java -jar services/search-service/target/search-service-0.1.0-SNAPSHOT.jar
 ```
 
 Or run the services in Docker too — one command, nothing installed but Docker:
@@ -54,7 +55,23 @@ DiscoveryHub-Questify/
 │   │   ├── Dockerfile
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── disposition-service/        P2.2 retention and disposition     :8086
+│   ├── search-service/             P3  index, full-text search        :8083
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── case-service/               P4  case lifecycle, custodians, evidence       :8084
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── hold-service/               P4  legal hold, scope resolution, /holds/check :8086
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   ├── export-service/             P5  evidence export, audit trail    :8085
+│   │   ├── Dockerfile
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── disposition-service/        P2.2 retention and disposition     :8087
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
@@ -139,23 +156,33 @@ It needs three endpoints from **P4**, all specified in DISPOSITION.md:
 
 ## Frontend
 
-Angular on **4200**, three pages: retention and disposition, case and hold, export and audit.
-Details in `frontend/README.md`.
+Angular on **4200**. Details in `frontend/README.md`.
 
 ```bash
 cd frontend && npm install && npm start
-npm run mock    # serves the P4 and P5 contracts locally, since neither service exists yet
 ```
 
-**It works with any subset of the services running, including none.** Every region of every page
-issues its own request and renders its own error and retry, because P4 and P5 have not been written
-and a page that waited on them would never open. There are no route resolvers, and a failed request
-is never rendered as an empty result — upstream an unreachable P4 means *held*, so "no holds" and
-"could not ask" are opposite facts and the UI keeps them apart.
+| Page | Reads |
+|---|---|
+| Dashboard | every service, for counts and recent activity |
+| Search | P3 `:8083` |
+| Cases & Holds | P4 case `:8084`, P4 hold `:8086` |
+| Retention & Disposition | P2.2 `:8087`, P2 `:8082` |
+| Exports & Audit | P5 `:8085` |
 
-The three existing services allow any port on the loopback host in their own `CorsConfig`, and
-in `management.endpoints.web.cors` for actuator, which has its own and does not inherit that one.
-Both are governed by `discoveryhub.web.cors.allowed-origins`. Without them a running service and a
+**Search shows nothing until you search.** The index holds the whole corpus, and a screen that
+opens with 12,000 messages on it has answered a question nobody asked. P3 agrees: it rejects a
+query with no criterion at all with a 400.
+
+**It works with any subset of the services running.** Every region of every page issues its own
+request and renders its own error and retry, so one service being down costs you that panel and
+nothing else. There are no route resolvers. A failed request is never rendered as an empty result —
+upstream an unreachable hold-service means *held*, so "no holds" and "could not ask" are opposite
+facts and the UI keeps them apart.
+
+Every service allows any port on the loopback host in its own `CorsConfig`, and in
+`management.endpoints.web.cors` for actuator, which has its own and does not inherit that one. Both
+are governed by `discoveryhub.web.cors.allowed-origins`. Without them a running service and a
 correct URL still fail, as a network error with no status — so the UI reports "not reachable" for a
 service that is answering curl perfectly. If every panel says that at once, it is CORS, not the
 services.
@@ -167,20 +194,36 @@ services.
 | 4200 | Frontend | Sahithi |
 | 8081 | P1 Ingestion | A |
 | 8082 | P2 Archive | A |
-| 8086 | P2.2 Disposition | Saketh |
+| 8083 | P3 Search | — |
+| 8084 | P4 Case Management | Teresa |
+| 8085 | P5 Evidence Export & Audit | E |
+| 8086 | P4 Legal Hold | Teresa |
+| 8087 | P2.2 Disposition | Saketh |
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
 | 5433 | PostgreSQL `archive` / `archive` / `archive` | P2 |
-| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 |
+| 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 (case) |
 | 5435 | PostgreSQL `audit` / `audit` / `audit` | P5 |
-| 5436 | PostgreSQL `disposition` / `disposition` / `disposition` | P2.2 |
+| 5436 | PostgreSQL `holds` / `holds` / `holds` | P4 (hold) |
+| 5437 | PostgreSQL `disposition` / `disposition` / `disposition` | P2.2 |
 | 27017 | MongoDB | unclaimed |
 | 9200 | Elasticsearch | P3 |
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8083** P3, **8084** P4, **8085** P5.
+Every application port is now claimed.
+
+P4 is two deployables: **case-service** (8084, cases DB) and **hold-service** (8086, holds DB).
+The split keeps case and hold as separate bounded contexts with their own datastores (NFR-1),
+coordinating via `cases.events` (close → release) and the synchronous `GET /holds/check` endpoint
+that P2 calls before deleting anything.
+
+**P2.2 moved to 8087, and its database to host port 5437.** It had 8086/5436 first, but
+hold-service claimed both while disposition was still on an unmerged branch. Moving disposition was
+the cheaper fix: hold-service is already on main and `storage-service`'s `HOLDS_BASE_URL` points at
+8086. Only the host port of `postgres-disposition` changed — inside the compose network it is still
+5432, so no service's connection string moved.
 
 ## Conventions
 

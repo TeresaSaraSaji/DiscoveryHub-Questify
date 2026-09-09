@@ -49,7 +49,7 @@ describe('a failing service does not take the others with it', () => {
 
     // P2.2 is not running: the browser reports this as status 0 with no body.
     http
-      .expectOne('http://localhost:8086/retention/policies')
+      .expectOne('http://localhost:8087/retention/policies')
       .error(new ProgressEvent('error'), { status: 0 });
     http.expectOne('http://localhost:8082/stats').flush({ totalMessages: 12_000, onHold: 3 });
     await settle();
@@ -66,7 +66,7 @@ describe('a failing service does not take the others with it', () => {
     await settle();
 
     TestBed.inject(HttpTestingController)
-      .expectOne('http://localhost:8086/retention/policies')
+      .expectOne('http://localhost:8087/retention/policies')
       .error(new ProgressEvent('error'), { status: 0 });
     await settle();
 
@@ -85,7 +85,7 @@ describe('a failing service does not take the others with it', () => {
 
     const http = TestBed.inject(HttpTestingController);
     http
-      .expectOne('http://localhost:8086/retention/policies')
+      .expectOne('http://localhost:8087/retention/policies')
       .error(new ProgressEvent('error'), { status: 0 });
     await settle();
     expect(policies.status()).toBe('error');
@@ -93,7 +93,7 @@ describe('a failing service does not take the others with it', () => {
     // What the Reload button in the panel header does.
     policies.reload();
     await settle();
-    http.expectOne('http://localhost:8086/retention/policies').flush([
+    http.expectOne('http://localhost:8087/retention/policies').flush([
       {
         messageType: 'EMAIL',
         periodSeconds: 220_752_000,
@@ -139,14 +139,16 @@ describe('requests that would be pointless are not made', () => {
     ).toBeTruthy();
   });
 
-  it('does not ask P4 about a message until one is typed', async () => {
+  it('does not ask the hold service about a message until one is typed', async () => {
     const cases = TestBed.inject(CasesApi);
-    const holds = TestBed.runInInjectionContext(() => cases.activeHoldsResource());
+    const holds = TestBed.runInInjectionContext(() =>
+      cases.holdsResource(signal(''), signal('ACTIVE')),
+    );
     await settle();
 
     // The holds list loads on sight; the per-message check is imperative and must not.
     const http = TestBed.inject(HttpTestingController);
-    http.expectOne('http://localhost:8084/holds/active').flush([]);
+    http.expectOne((request) => request.url === 'http://localhost:8086/holds').flush([]);
     await settle();
 
     expect(holds.value()).toEqual([]);
@@ -166,10 +168,14 @@ describe('an empty answer is not a failed one', () => {
     // P2.2 refuse to delete. "No holds are in force" and "we could not ask" are therefore
     // opposite facts, and the UI must never render one as the other.
     const cases = TestBed.inject(CasesApi);
-    const holds = TestBed.runInInjectionContext(() => cases.activeHoldsResource());
+    const holds = TestBed.runInInjectionContext(() =>
+      cases.holdsResource(signal(''), signal('ACTIVE')),
+    );
     await settle();
 
-    TestBed.inject(HttpTestingController).expectOne('http://localhost:8084/holds/active').flush([]);
+    TestBed.inject(HttpTestingController)
+      .expectOne((request) => request.url === 'http://localhost:8086/holds')
+      .flush([]);
     await settle();
 
     expect(holds.status()).toBe('resolved');

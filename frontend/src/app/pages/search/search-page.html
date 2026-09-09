@@ -1,0 +1,251 @@
+<header class="page__head">
+  <div>
+    <h1>Search Messages</h1>
+    <p class="page__lede">Find email and chat messages with filters.</p>
+  </div>
+</header>
+
+<app-panel
+  heading="Search"
+  hint="Full-text across body, subject, sender and recipients"
+  service="p3"
+>
+  <form class="form" (ngSubmit)="submit()">
+    <label class="field field--span2">
+      <span>Keyword</span>
+      <input
+        type="text"
+        [ngModel]="query()"
+        (ngModelChange)="query.set($event)"
+        name="query"
+        placeholder="Search by keyword, sender, subject…"
+        autocomplete="off"
+      />
+    </label>
+
+    <label class="field">
+      <span>Custodian</span>
+      <input
+        type="text"
+        class="mono"
+        [ngModel]="custodian()"
+        (ngModelChange)="custodian.set($event)"
+        name="custodian"
+        placeholder="cust-004"
+        autocomplete="off"
+      />
+    </label>
+
+    <label class="field">
+      <span>Sender</span>
+      <input
+        type="text"
+        [ngModel]="sender()"
+        (ngModelChange)="sender.set($event)"
+        name="sender"
+        placeholder="name@example.com"
+        autocomplete="off"
+      />
+    </label>
+
+    <label class="field">
+      <span>Type</span>
+      <select [value]="type()" (change)="type.set($any($event.target).value)">
+        <option value="">All</option>
+        <option value="EMAIL">Email</option>
+        <option value="CHAT">Chat</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Sent after</span>
+      <input
+        type="date"
+        [ngModel]="sentAfter()"
+        (ngModelChange)="sentAfter.set($event)"
+        name="sentAfter"
+      />
+    </label>
+
+    <label class="field">
+      <span>Sent before</span>
+      <input
+        type="date"
+        [ngModel]="sentBefore()"
+        (ngModelChange)="sentBefore.set($event)"
+        name="sentBefore"
+      />
+    </label>
+
+    <label class="field">
+      <span>Attachments</span>
+      <select [value]="attachments()" (change)="attachments.set($any($event.target).value)">
+        <option value="">Any</option>
+        <option value="yes">Has attachment</option>
+        <option value="no">No attachment</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Legal hold</span>
+      <select [value]="heldOnly()" (change)="heldOnly.set($any($event.target).value)">
+        <option value="">Any</option>
+        <option value="yes">On hold only</option>
+        <option value="no">Not on hold</option>
+      </select>
+    </label>
+  </form>
+
+  <div class="controls controls--tight">
+    <button
+      type="button"
+      class="btn btn--primary"
+      (click)="submit()"
+      [disabled]="!ready() || searching()"
+    >
+      {{ searching() ? 'Searching…' : 'Search' }}
+    </button>
+    <button type="button" class="btn btn--ghost" (click)="reset()">Clear</button>
+    @if (!ready()) {
+      <span class="dim">Enter a keyword or set a filter to search.</span>
+    }
+  </div>
+
+  <app-alert [failure]="failure()" />
+
+  @if (failure()?.kind === 'unreachable' && searching() === false) {
+    <p class="note">Searches are given {{ timeoutSeconds }} seconds before they are abandoned.</p>
+  }
+</app-panel>
+
+@if (results(); as rows) {
+  <app-panel
+    [heading]="'Search results (' + total() + ')'"
+    [hint]="'Answered in ' + tookMs() + ' ms'"
+    service="p3"
+  >
+    @if (rows.length === 0) {
+      <p class="empty">
+        Nothing matched. That is an answer, not a failure — try widening the date range or dropping
+        a filter.
+      </p>
+    } @else {
+      <table class="table">
+        <thead>
+          <!-- No Type column: P3's SearchResult does not carry the message type, only the
+               indexed fields it maps. The type filter still works; the answer just cannot be
+               echoed back per row. -->
+          <tr>
+            <th>Subject</th>
+            <th>From</th>
+            <th>Custodian</th>
+            <th>Sent</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (result of rows; track result.messageId) {
+            <tr>
+              <td class="cell--subject">
+                <strong>{{ result.subject || '(no subject)' }}</strong>
+                @if (result.snippet) {
+                  <div class="dim snippet">{{ plain(result.snippet) }}</div>
+                }
+                <div class="mono dim">{{ result.messageId }}</div>
+              </td>
+              <td class="dim">{{ result.from ?? '—' }}</td>
+              <td class="mono dim">{{ result.custodianId ?? '—' }}</td>
+              <td class="dim">{{ result.sentAt | since: 'clock' }}</td>
+              <td>
+                @if (result.onHold) {
+                  <span class="tag tag--warn">On hold</span>
+                } @else {
+                  <span class="tag tag--ok">Normal</span>
+                }
+                @if (result.attachmentCount > 0) {
+                  <span class="tag" [title]="(result.attachmentFilenames ?? []).join(', ')">
+                    {{ result.attachmentCount }} file{{ result.attachmentCount === 1 ? '' : 's' }}
+                  </span>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <div class="paginator">
+        <button
+          type="button"
+          class="btn btn--ghost btn--small"
+          [disabled]="shownPage() === 0 || searching()"
+          (click)="goToPage(shownPage() - 1)"
+        >
+          Previous
+        </button>
+        <span class="paginator__label">{{ from() }}–{{ to() }} of {{ total() }}</span>
+        <button
+          type="button"
+          class="btn btn--ghost btn--small"
+          [disabled]="shownPage() >= lastPage() || searching()"
+          (click)="goToPage(shownPage() + 1)"
+        >
+          Next
+        </button>
+      </div>
+    }
+  </app-panel>
+
+  @if (rows.length > 0) {
+    <app-panel
+      heading="File these results to a case"
+      hint="Adds the matches as evidence. Applied asynchronously by case-service."
+      service="p3"
+    >
+      <div class="controls controls--wrap">
+        <label class="field field--inline">
+          <span>Case</span>
+          <select [value]="fileCaseId()" (change)="fileCaseId.set($any($event.target).value)">
+            <option value="">Choose a case…</option>
+            @for (item of caseOptions(); track item.caseId) {
+              <option [value]="item.caseId">{{ item.name }} · {{ item.status }}</option>
+            }
+          </select>
+        </label>
+
+        <label class="check">
+          <input
+            type="checkbox"
+            [ngModel]="fileAll()"
+            (ngModelChange)="fileAll.set($event)"
+            name="fileAll"
+          />
+          <span>Every match, not just this page</span>
+        </label>
+
+        <button
+          type="button"
+          class="btn btn--primary"
+          (click)="fileToCase()"
+          [disabled]="!fileCaseId() || filing()"
+        >
+          {{ filing() ? 'Filing…' : 'Add as evidence' }}
+        </button>
+      </div>
+
+      <app-alert [failure]="fileFailure()" [success]="fileOk()" />
+
+      @if (caseOptions().length === 0) {
+        <p class="note">
+          No open case to file into. Closed cases are read-only, so they are not listed.
+        </p>
+      }
+    </app-panel>
+  }
+} @else if (!searching() && !failure()) {
+  <app-panel heading="Search results" hint="Nothing has been searched yet" service="p3">
+    <p class="empty">
+      Results appear here once you search. The index holds the whole corpus, so nothing is shown
+      until you narrow it down.
+    </p>
+  </app-panel>
+}

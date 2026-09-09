@@ -3,8 +3,8 @@
 Retention and disposition (FR-5). Owns the retention policy, the scheduled sweep that destroys
 expired messages, and the ledger that proves what it did.
 
-Port **8086**. Own database **postgres-disposition** on host port 5436. API browsable at
-http://localhost:8086/swagger-ui.html.
+Port **8087**. Own database **postgres-disposition** on host port 5437. API browsable at
+http://localhost:8087/swagger-ui.html.
 
 ```bash
 docker compose up -d postgres-disposition kafka
@@ -113,7 +113,7 @@ nothing and refusing.
 ### Proving it, per case
 
 ```bash
-curl localhost:8086/disposition/cases/case-1/protected
+curl localhost:8087/disposition/cases/case-1/protected
 ```
 
 Everything the holds on one case have saved from disposition, across every run. It outlives both
@@ -273,10 +273,10 @@ Config seeds the table for any type missing a row on startup, and never overwrit
 that drops email retention to two minutes still has it after a restart.
 
 ```bash
-curl localhost:8086/retention/policies
+curl localhost:8087/retention/policies
 
 # ISO-8601 durations. P2555D = seven years, PT2M = two minutes.
-curl -X PUT "localhost:8086/retention/policies/EMAIL?actor=saketh" \
+curl -X PUT "localhost:8087/retention/policies/EMAIL?actor=saketh" \
   -H 'Content-Type: application/json' -d '{"period":"PT2M"}'
 ```
 
@@ -311,8 +311,8 @@ synchronous form holds the connection for the length of the work — over the fu
 the bulk operation NFR-3 says must not time out the UI. Start it asynchronously instead:
 
 ```bash
-curl -X POST "localhost:8086/disposition/runs?async=true&actor=sahithi"
-curl -N localhost:8086/disposition/runs/stream
+curl -X POST "localhost:8087/disposition/runs?async=true&actor=sahithi"
+curl -N localhost:8087/disposition/runs/stream
 ```
 
 ```

@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: hold-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5436/holds}
+    username: holds
+    password: holds
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      group-id: p4-holds
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+
+discoveryhub:
+  holds:
+    # Synchronous integration points. The hold-service resolves a hold's scope by paging through
+    # P2's read API, and asks the case-service whether a case is closed before placing a hold.
+    archive-base-url: ${ARCHIVE_BASE_URL:http://localhost:8082}
+    case-base-url: ${CASES_BASE_URL:http://localhost:8084}
+    integration-timeout: 10s
+    # Page size for scope resolution. P2 caps its list endpoint at 500, so anything above is
+    # silently reduced; this just sets how many messages one round-trip fetches.
+    scope-page-size: 500
+
+server:
+  port: ${SERVER_PORT:8086}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      # Actuator has its own CORS and does not inherit config/CorsConfig: these endpoints are
+      # served by a separate handler mapping that ignores addCorsMappings. Without this the
+      # frontend's status strip reports this service DOWN while it answers every other request.
+      cors:
+        allowed-origin-patterns: ${discoveryhub.web.cors.allowed-origins:http://localhost:[*],http://127.0.0.1:[*]}
+        allowed-methods: GET
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.discoveryhub: DEBUG

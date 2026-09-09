@@ -13,12 +13,14 @@ describe('classify', () => {
     expect(failure.message).toContain('P2.2 Disposition');
   });
 
-  it('says so plainly when the service has not been written yet', () => {
-    const failure = classify(new HttpErrorResponse({ status: 0 }), describeService('p4'));
+  it('names the service and asks the two questions worth asking', () => {
+    const failure = classify(new HttpErrorResponse({ status: 0 }), describeService('p4hold'));
 
     expect(failure.kind).toBe('unreachable');
-    expect(failure.message).toContain('not implemented yet');
-    expect(failure.message).toContain('8084');
+    expect(failure.message).toContain('P4h Legal Hold');
+    // Every service exists now, so "is it running, and does it allow this origin?" is the whole
+    // diagnosis — and the second half is the one that actually catches people out.
+    expect(failure.message).toContain('origin');
   });
 
   it('surfaces the message a service gave rather than inventing one', () => {

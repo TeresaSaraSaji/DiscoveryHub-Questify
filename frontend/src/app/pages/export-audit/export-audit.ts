@@ -1,23 +1,21 @@
 import { DecimalPipe } from '@angular/common';
-import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
 import { AuditApi, AuditFilter, EMPTY_AUDIT_FILTER } from '../../core/audit.api';
-import { DispositionApi } from '../../core/disposition.api';
+import { CasesApi } from '../../core/cases.api';
 import { Failure, classify } from '../../core/failure';
 import {
-  AUDIT_OUTCOMES,
-  AuditEvent,
-  AuditOutcome,
-  DispositionItem,
+  AuditEntry,
+  CaseEntity,
+  CaseStatus,
   EMPTY_PAGE,
-  EXPORT_FORMATS,
-  ExportFormat,
   ExportJob,
   Page,
+  VerificationResult,
 } from '../../core/models';
 import { valueOr } from '../../core/resource-utils';
 import { Alert } from '../../shared/alert';
@@ -26,17 +24,18 @@ import { Panel } from '../../shared/panel';
 import { Since } from '../../shared/since.pipe';
 
 /**
- * Export and audit on one page (FR-6, FR-7).
+ * Export and audit, which are one obligation seen twice.
  *
- * They belong together because an export is only defensible if the audit trail says who asked for
- * it, when, and what was in it. Producing the package and recording that it was produced are two
- * halves of one obligation, and P5 owns both.
+ * A package is only defensible if the trail says who asked for it, when, and what went into it, so
+ * P5 owns both and they share a page. Three properties of that service the UI is built around:
  *
- * P5 does not exist yet, so the first four panels are the contract and nothing else — they fail
- * honestly rather than showing invented data. The last panel is the part that works today: P2.2's
- * disposition ledger is a real chain of custody for one message, written at the time and outliving
- * the message itself. When P5 arrives it supersedes nothing here; it widens it to all five
- * services.
+ * - **Export is asynchronous.** The request returns a QUEUED job; this polls it to a terminal
+ *   state. Packaging a case out of a corpus is not request-sized work.
+ * - **Download is a link, not bytes.** `/download` returns a presigned MinIO URL good for fifteen
+ *   minutes, so the browser fetches the package directly and this app never proxies evidence.
+ * - **The digest is worth re-deriving.** `/verify` recomputes every checksum from the package's own
+ *   bytes rather than trusting the job row, which is the only version of this that is evidence
+ *   rather than metadata. It is a separate button because it is a separate claim.
  */
 @Component({
   selector: 'app-export-audit',
@@ -45,72 +44,93 @@ import { Since } from '../../shared/since.pipe';
 })
 export class ExportAudit {
   private readonly api = inject(AuditApi);
-  private readonly disposition = inject(DispositionApi);
+  private readonly casesApi = inject(CasesApi);
   private readonly destroyRef = inject(DestroyRef);
 
-  protected readonly formats = EXPORT_FORMATS;
-  protected readonly auditOutcomes = AUDIT_OUTCOMES;
+  // ------------------------------------------------------------ requesting an export
 
-  // ------------------------------------------------------------ export (FR-6)
-
-  protected readonly exportCaseId = signal('');
-  protected readonly exportFormat = signal<ExportFormat>('PST');
-  protected readonly includeAttachments = signal(true);
-  protected readonly requestedBy = signal('investigator');
+  /** Exactly one scope. The service returns a 400 if neither is given. */
+  protected readonly scope = signal<'case' | 'custodian' | 'messages'>('case');
+  protected readonly caseId = signal('');
+  protected readonly custodianId = signal('');
+  protected readonly messageIds = signal('');
+  protected readonly from = signal('');
+  protected readonly to = signal('');
 
   protected readonly requesting = signal(false);
   protected readonly requestFailure = signal<Failure | null>(null);
   protected readonly requestOk = signal<string | null>(null);
-  /** The job we are currently following, polled until it reaches a terminal state. */
+
+  private readonly anyStatus = signal<CaseStatus | ''>('');
+  private readonly firstPage = signal(0);
+  private readonly cases = this.casesApi.casesResource(this.anyStatus, this.firstPage, 100);
+  private readonly casePage = valueOr(this.cases, EMPTY_PAGE as Page<CaseEntity>);
+  protected readonly caseOptions = computed(() => this.casePage().content);
+
+  protected readonly exports = this.api.exportsResource();
+  protected readonly exportRows = valueOr(this.exports, [] as ExportJob[]);
   protected readonly tracked = signal<ExportJob | null>(null);
 
-  protected readonly exportsPage = signal(0);
-  protected readonly exports = this.api.exportsResource(this.exportsPage);
-  protected readonly exportRows = valueOr(this.exports, EMPTY_PAGE as Page<ExportJob>);
+  protected readonly verifying = signal<string | null>(null);
+  protected readonly verification = signal<VerificationResult | null>(null);
+  protected readonly verifyFailure = signal<Failure | null>(null);
 
-  // ------------------------------------------------------------ audit (FR-7)
+  protected readonly downloadFailure = signal<Failure | null>(null);
+
+  /** Parsed once here so the button state and the request cannot disagree. */
+  private readonly parsedMessageIds = computed(() =>
+    this.messageIds()
+      .split(/[\s,]+/)
+      .map((id) => id.trim())
+      .filter(Boolean),
+  );
+
+  protected readonly canRequest = computed(() => {
+    if (this.scope() === 'custodian') {
+      return Boolean(this.custodianId().trim());
+    }
+    if (this.scope() === 'messages') {
+      return this.parsedMessageIds().length > 0;
+    }
+    // A case export still needs a concrete scope: P5 takes messageIds or a custodianId, and a
+    // caseId alone is a label on the job, not a selection.
+    return Boolean(this.caseId() && this.custodianId().trim());
+  });
+
+  // ------------------------------------------------------------ audit
 
   protected readonly filter = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
   protected readonly auditPage = signal(0);
-  protected readonly events = this.api.auditResource(this.filter, this.auditPage);
-  protected readonly eventRows = valueOr(this.events, EMPTY_PAGE as Page<AuditEvent>);
-
-  protected readonly subjectId = signal('');
-  protected readonly chain = this.api.chainResource(this.subjectId);
-  protected readonly chainRows = valueOr(this.chain, [] as AuditEvent[]);
-
-  // ------------------------------------------------------------ the trail that exists today
-
-  protected readonly ledgerId = signal('');
-  protected readonly ledgerBusy = signal(false);
-  protected readonly ledger = signal<DispositionItem[] | null>(null);
-  protected readonly ledgerFailure = signal<Failure | null>(null);
+  protected readonly audit = this.api.auditResource(this.filter, this.auditPage);
+  protected readonly auditRows = valueOr(this.audit, EMPTY_PAGE as Page<AuditEntry>);
 
   // ------------------------------------------------------------ actions
 
-  protected requestExport(): void {
-    const caseId = this.exportCaseId().trim();
-    if (!caseId) {
+  protected request(): void {
+    if (!this.canRequest()) {
       return;
     }
     this.requestFailure.set(null);
     this.requestOk.set(null);
+    this.verification.set(null);
     this.requesting.set(true);
 
+    const explicit = this.scope() === 'messages';
     this.api
       .requestExport({
-        caseId,
-        format: this.exportFormat(),
-        includeAttachments: this.includeAttachments(),
-        requestedBy: this.requestedBy(),
+        caseId: this.scope() === 'case' ? this.caseId() || null : null,
+        messageIds: explicit ? this.parsedMessageIds() : [],
+        custodianId: explicit ? null : this.custodianId().trim() || null,
+        from: explicit ? null : toInstant(this.from()),
+        to: explicit ? null : toInstant(this.to()),
       })
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (job) => {
           this.requesting.set(false);
-          this.requestOk.set(`Export ${job.exportId} queued for ${job.caseId}.`);
+          this.requestOk.set(`Export ${job.jobId.slice(0, 8)}… queued.`);
           this.tracked.set(job);
-          this.follow(job.exportId);
+          this.follow(job.jobId);
           this.exports.reload();
         },
         error: (error: unknown) => {
@@ -121,28 +141,76 @@ export class ExportAudit {
   }
 
   /**
-   * Poll one job to completion.
+   * Poll one job to a terminal state.
    *
-   * Packaging a case out of a 12,000-message corpus is not request-sized work, so the request
-   * returns a job and this follows it. A failed poll ends the follow rather than retrying forever:
-   * the job list is still there, and a spinner that never resolves is worse than a stale row.
+   * A failed poll ends the follow rather than retrying forever: the job list is still on screen,
+   * and a spinner that never resolves is worse than a stale row.
    */
-  protected follow(exportId: string): void {
+  protected follow(jobId: string): void {
     timer(0, 2_000)
       .pipe(
-        switchMap(() => this.api.export(exportId)),
+        switchMap(() => this.api.job(jobId)),
         takeWhile((job) => job.status === 'QUEUED' || job.status === 'RUNNING', true),
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe({
         next: (job) => this.tracked.set(job),
         error: () => undefined,
-        complete: () => this.exports.reload(),
+        complete: () => {
+          this.exports.reload();
+          this.audit.reload();
+        },
       });
   }
 
-  protected downloadUrl(job: ExportJob): string {
-    return this.api.packageUrl(job.exportId);
+  /** Fetch the presigned link, then hand it to the browser. */
+  protected download(job: ExportJob): void {
+    this.downloadFailure.set(null);
+    this.api
+      .download(job.jobId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (link) => {
+          window.open(link.url, '_blank', 'noopener');
+          // Downloading is itself an audited act, so the trail below is now out of date.
+          this.audit.reload();
+        },
+        error: (error: unknown) => this.downloadFailure.set(classify(error, describe('p5'))),
+      });
+  }
+
+  protected verify(job: ExportJob): void {
+    this.verifyFailure.set(null);
+    this.verification.set(null);
+    this.verifying.set(job.jobId);
+    this.api
+      .verify(job.jobId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (result) => {
+          this.verifying.set(null);
+          this.verification.set(result);
+        },
+        error: (error: unknown) => {
+          this.verifying.set(null);
+          this.verifyFailure.set(classify(error, describe('p5')));
+        },
+      });
+  }
+
+  protected retry(job: ExportJob): void {
+    this.requestFailure.set(null);
+    this.api
+      .retry(job.jobId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (requeued) => {
+          this.tracked.set(requeued);
+          this.follow(requeued.jobId);
+          this.exports.reload();
+        },
+        error: (error: unknown) => this.requestFailure.set(classify(error, describe('p5'))),
+      });
   }
 
   protected patchFilter(patch: Partial<AuditFilter>): void {
@@ -155,45 +223,48 @@ export class ExportAudit {
     this.filter.set(EMPTY_AUDIT_FILTER);
   }
 
-  protected outcomeClass(outcome: AuditOutcome): string {
-    if (outcome === 'SUCCESS') {
+  protected statusClass(status: ExportJob['status']): string {
+    if (status === 'COMPLETED') {
       return 'tag tag--ok';
     }
-    // A refusal is not a failure, and in this system it is usually the most important event on the
-    // page: a hold blocking a delete lands here.
-    return outcome === 'REFUSED' ? 'tag tag--warn' : 'tag tag--danger';
-  }
-
-  protected loadLedger(): void {
-    const id = this.ledgerId().trim();
-    if (!id) {
-      return;
+    if (status === 'FAILED') {
+      return 'tag tag--danger';
     }
-    this.ledgerFailure.set(null);
-    this.ledger.set(null);
-    this.ledgerBusy.set(true);
-    this.disposition
-      .messageHistory(id)
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (items) => {
-          this.ledgerBusy.set(false);
-          this.ledger.set(items);
-        },
-        error: (error: unknown) => {
-          this.ledgerBusy.set(false);
-          this.ledgerFailure.set(classify(error, describe('p22')));
-        },
-      });
+    return 'tag tag--busy';
   }
 
-  /** Read one message id from the audit trail straight into the P2.2 ledger lookup. */
-  protected inspect(subjectId: string): void {
-    this.ledgerId.set(subjectId);
-    this.loadLedger();
+  protected outcomeClass(outcome: string): string {
+    const value = outcome.toUpperCase();
+    if (value === 'SUCCESS') {
+      return 'tag tag--ok';
+    }
+    // A refusal is deliberate, and usually the most important row on the page.
+    return value === 'REFUSED' ? 'tag tag--warn' : 'tag tag--danger';
   }
 
   protected detailPairs(detail: Record<string, string>): { key: string; value: string }[] {
     return Object.entries(detail ?? {}).map(([key, value]) => ({ key, value }));
   }
+
+  protected sizeLabel(bytes: number | null): string {
+    if (bytes === null || bytes === 0) {
+      return '—';
+    }
+    const units = ['B', 'kB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+  }
+}
+
+function toInstant(value: string): string | null {
+  if (!value.trim()) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

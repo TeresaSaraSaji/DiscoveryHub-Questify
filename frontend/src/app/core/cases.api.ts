@@ -1,58 +1,198 @@
 import { HttpClient, httpResource } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
+import { Injectable, Signal, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { baseUrl } from './api-config';
-import { ActiveHold, EvidenceHold, HoldCheck } from './models';
+import {
+  BulkEvidenceResult,
+  CaseCustodian,
+  CaseEntity,
+  CaseHoldCount,
+  CaseRequest,
+  CaseStats,
+  CaseStatus,
+  EMPTY_PAGE,
+  Evidence,
+  EvidenceSource,
+  HoldCheck,
+  HoldEntity,
+  HoldStats,
+  HoldStatus,
+  Page,
+  PlaceHoldRequest,
+} from './models';
 
 /**
- * P4 Case & Hold on :8084.
+ * P4, both halves of it.
  *
- * **This service does not exist yet.** The three endpoints below are the contract specified in
- * `services/disposition-service/DISPOSITION.md` ("What P4 has to provide"), which P2 and P2.2
- * already call. Nothing here is stubbed or faked: every request goes to the real port and fails
- * honestly until someone ships the service, at which point this page starts working with no
- * change. `npm run mock` serves the same contract locally if you want to see the page populated.
+ * case-service on :8084 owns the case lifecycle, custodians and evidence. hold-service on :8086
+ * owns holds, scope resolution and the `/holds/check` guard that P2 and P2.2 call before deleting
+ * anything. They are separate deployables with separate databases, so this client keeps them
+ * separate too — every method says which one it is talking to, and the UI can report one down
+ * while the other works.
  *
- * Note that on the backend, an unreachable P4 means *held* — both P2 and P2.2 fail closed and
- * refuse to delete. A UI that quietly showed "no holds" when P4 was down would tell the exact
- * opposite story to the one the system is acting on, so the panels distinguish "no holds" from
- * "could not ask".
+ * Two facts about hold-service that the UI has to be honest about:
+ *
+ * - **Placing a hold is asynchronous.** `POST /holds` returns 202 and a hold in `RESOLVING`; a
+ *   worker resolves the scope and flips it to `ACTIVE` with a `messageCount`. Until then the hold
+ *   protects nothing, and `messageCount` is 0 because it is unknown, not because it is zero.
+ * - **A hold's custodian scope is not on the wire.** See `HoldEntity` in `models.ts`.
  */
 @Injectable({ providedIn: 'root' })
 export class CasesApi {
   private readonly http = inject(HttpClient);
 
-  private url(path: string): string {
-    return `${baseUrl('p4')}${path}`;
+  private caseUrl(path: string): string {
+    return `${baseUrl('p4case')}${path}`;
   }
 
-  /** Every hold in force, as scope — custodians and a date range, never expanded to messages. */
-  activeHoldsResource() {
-    return httpResource<ActiveHold[]>(() => this.url('/holds/active'), { defaultValue: [] });
+  private holdUrl(path: string): string {
+    return `${baseUrl('p4hold')}${path}`;
   }
 
-  /** The per-message guard. Anything other than `{"held": false}` is treated as held upstream. */
-  checkHold(messageId: string): Observable<HoldCheck> {
-    return this.http.get<HoldCheck>(this.url('/holds/check'), { params: { messageId } });
+  // ------------------------------------------------------------ cases (:8084)
+
+  casesResource(status: Signal<CaseStatus | ''>, page: Signal<number>, size = 20) {
+    return httpResource<Page<CaseEntity>>(
+      () => {
+        const filter = status();
+        return {
+          url: this.caseUrl('/cases'),
+          params: { page: page(), size, ...(filter ? { status: filter } : {}) },
+        };
+      },
+      { defaultValue: EMPTY_PAGE },
+    );
   }
+
+  caseStatsResource() {
+    return httpResource<CaseStats>(() => this.caseUrl('/cases/stats'));
+  }
+
+  caseResource(caseId: Signal<string>) {
+    return httpResource<CaseEntity>(() => {
+      const id = caseId().trim();
+      return id ? this.caseUrl(`/cases/${encodeURIComponent(id)}`) : undefined;
+    });
+  }
+
+  custodiansResource(caseId: Signal<string>) {
+    return httpResource<CaseCustodian[]>(
+      () => {
+        const id = caseId().trim();
+        return id ? this.caseUrl(`/cases/${encodeURIComponent(id)}/custodians`) : undefined;
+      },
+      { defaultValue: [] },
+    );
+  }
+
+  evidenceResource(caseId: Signal<string>) {
+    return httpResource<Evidence[]>(
+      () => {
+        const id = caseId().trim();
+        return id ? this.caseUrl(`/cases/${encodeURIComponent(id)}/evidence`) : undefined;
+      },
+      { defaultValue: [] },
+    );
+  }
+
+  createCase(request: CaseRequest): Observable<CaseEntity> {
+    return this.http.post<CaseEntity>(this.caseUrl('/cases'), request);
+  }
+
+  /** Forward one step only. Anything else is a 409 with `from` and `to` in the problem detail. */
+  transition(caseId: string, targetStatus: CaseStatus): Observable<CaseEntity> {
+    return this.http.post<CaseEntity>(
+      this.caseUrl(`/cases/${encodeURIComponent(caseId)}/transitions`),
+      { targetStatus },
+    );
+  }
+
+  /** Idempotent: re-adding an existing custodian returns the existing row. */
+  addCustodian(caseId: string, custodianId: string): Observable<CaseCustodian> {
+    return this.http.post<CaseCustodian>(
+      this.caseUrl(`/cases/${encodeURIComponent(caseId)}/custodians`),
+      { custodianId },
+    );
+  }
+
+  addEvidence(caseId: string, messageId: string, source: EvidenceSource): Observable<Evidence> {
+    return this.http.post<Evidence>(this.caseUrl(`/cases/${encodeURIComponent(caseId)}/evidence`), {
+      messageId,
+      source,
+      searchRef: null,
+    });
+  }
+
+  addEvidenceBatch(caseId: string, messageIds: string[]): Observable<BulkEvidenceResult> {
+    return this.http.post<BulkEvidenceResult>(
+      this.caseUrl(`/cases/${encodeURIComponent(caseId)}/evidence/batch`),
+      { messageIds, source: 'SEARCH', searchRef: null },
+    );
+  }
+
+  removeEvidence(caseId: string, messageId: string): Observable<void> {
+    return this.http.delete<void>(
+      this.caseUrl(
+        `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(messageId)}`,
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ holds (:8086)
 
   /**
-   * "Of these messages, which are evidence in a case that is under hold?"
+   * Holds for one case, or every hold in a status.
    *
-   * A bulk POST rather than a query string because a sweep carries up to `batch-size` ids. Only
-   * protected messages come back, so an empty array is the normal answer and does not mean the
-   * call failed.
+   * With neither filter the service defaults to `status=ACTIVE`, which is the useful default: a
+   * released hold protects nothing and a resolving one does not protect anything yet.
    */
-  evidenceCheck(messageIds: string[]): Observable<EvidenceHold[]> {
-    return this.http.post<EvidenceHold[]>(this.url('/holds/evidence-check'), { messageIds });
+  holdsResource(caseId: Signal<string>, status: Signal<HoldStatus | ''>) {
+    return httpResource<HoldEntity[]>(
+      () => {
+        const id = caseId().trim();
+        const filter = status();
+        const params: Record<string, string> = {};
+        if (id) {
+          params['caseId'] = id;
+        } else if (filter) {
+          params['status'] = filter;
+        }
+        return { url: this.holdUrl('/holds'), params };
+      },
+      { defaultValue: [] },
+    );
   }
-}
 
-/**
- * Holds on one case, filtered from `/holds/active` rather than by calling a per-case endpoint the
- * contract does not promise. A blank id means "all cases".
- */
-export function holdsForCase(holds: readonly ActiveHold[], caseId: string): ActiveHold[] {
-  const id = caseId.trim();
-  return id ? holds.filter((hold) => hold.caseId === id) : [...holds];
+  holdStatsResource() {
+    return httpResource<HoldStats>(() => this.holdUrl('/holds/stats'));
+  }
+
+  caseHoldCountResource(caseId: Signal<string>) {
+    return httpResource<CaseHoldCount>(() => {
+      const id = caseId().trim();
+      return id ? this.holdUrl(`/holds/case/${encodeURIComponent(id)}/count`) : undefined;
+    });
+  }
+
+  /** 202 and a `RESOLVING` hold. Poll `hold(id)` until it reaches ACTIVE. */
+  placeHold(request: PlaceHoldRequest): Observable<HoldEntity> {
+    return this.http.post<HoldEntity>(this.holdUrl('/holds'), request);
+  }
+
+  hold(holdId: string): Observable<HoldEntity> {
+    return this.http.get<HoldEntity>(this.holdUrl(`/holds/${encodeURIComponent(holdId)}`));
+  }
+
+  /** Idempotent on an already-released hold; 409 while it is still RESOLVING. */
+  release(holdId: string, reason: string | null): Observable<HoldEntity> {
+    return this.http.post<HoldEntity>(
+      this.holdUrl(`/holds/${encodeURIComponent(holdId)}/release`),
+      { reason },
+    );
+  }
+
+  /** The guard the rest of the system trusts. Fails closed upstream: unreachable means held. */
+  checkHold(messageId: string): Observable<HoldCheck> {
+    return this.http.get<HoldCheck>(this.holdUrl('/holds/check'), { params: { messageId } });
+  }
 }

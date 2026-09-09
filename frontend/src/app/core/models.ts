@@ -154,31 +154,203 @@ export interface ArchivedMessage {
   labels: string[];
 }
 
-// ---------------------------------------------------------------- P4 case & hold
+// ---------------------------------------------------------------- P3 search
 
-/** `GET /holds/active` — a hold expressed as scope, never expanded to messages. */
-export interface ActiveHold {
-  holdId: string;
-  caseId: string;
-  caseName: string;
-  /** `[]` means every custodian. */
-  custodianIds: string[];
-  from: string | null;
-  to: string | null;
-  terms?: string[];
+export type SortBy = 'RELEVANCE' | 'DATE';
+export type SortDirection = 'ASC' | 'DESC';
+
+/**
+ * `POST /search` body.
+ *
+ * P3 refuses a request with no criterion at all with a 400, which is the same rule this UI wants:
+ * the index holds the whole corpus, and a screen that opens with 12,000 messages on it has
+ * answered a question nobody asked.
+ */
+export interface SearchRequest {
+  query?: string | null;
+  custodianIds?: string[];
+  type?: MessageType | null;
+  /** Sender address. Distinct from `custodianIds`, which is the mailbox owner. */
+  from?: string | null;
+  sentAfter?: string | null;
+  sentBefore?: string | null;
+  labels?: string[];
+  /** Tri-state: null is no filter at all, not false. */
+  hasAttachment?: boolean | null;
+  onHold?: boolean | null;
+  page?: number;
+  /** Asking for more than 100 is silently clamped to 100 by the service. */
+  size?: number;
+  sortBy?: SortBy;
+  sortDirection?: SortDirection;
 }
 
-/** `GET /holds/check?messageId=` */
+/** Not a Spring `Page` — P3 returns its own record, with the elapsed time it took. */
+export interface SearchResponse {
+  results: SearchResult[];
+  /** Total hits for the whole query, not this page. */
+  total: number;
+  page: number;
+  size: number;
+  tookMs: number;
+}
+
+export interface SearchResult {
+  messageId: string;
+  externalId: string | null;
+  custodianId: string | null;
+  from: string | null;
+  to: string[] | null;
+  subject: string | null;
+  sentAt: string | null;
+  /** Window around the first body match. Contains `<em>` markup from Elasticsearch. */
+  snippet: string;
+  highlights: string[] | null;
+  score: number;
+  onHold: boolean;
+  attachmentCount: number;
+  attachmentFilenames: string[] | null;
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  caseId: string | null;
+  /** The serialised `SearchRequest`, replayed by `POST /search/saved/{id}/run`. */
+  requestJson: string;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface BulkAddToCaseResponse {
+  caseId: string;
+  added: number;
+  messageIds: string[];
+  truncated: boolean;
+}
+
+// ---------------------------------------------------------------- P4 case management
+
+export type CaseStatus = 'DRAFT' | 'ACTIVE' | 'UNDER_REVIEW' | 'CLOSED';
+export type MatterType = 'INVESTIGATION' | 'LITIGATION' | 'REGULATORY_INQUIRY';
+export type EvidenceSource = 'MANUAL' | 'SEARCH';
+
+export const CASE_STATUSES: readonly CaseStatus[] = ['DRAFT', 'ACTIVE', 'UNDER_REVIEW', 'CLOSED'];
+export const MATTER_TYPES: readonly MatterType[] = [
+  'INVESTIGATION',
+  'LITIGATION',
+  'REGULATORY_INQUIRY',
+];
+
+/** Forward only, one step at a time. The service refuses anything else with a 409. */
+export const NEXT_STATUS: Readonly<Record<CaseStatus, CaseStatus | null>> = {
+  DRAFT: 'ACTIVE',
+  ACTIVE: 'UNDER_REVIEW',
+  UNDER_REVIEW: 'CLOSED',
+  CLOSED: null,
+};
+
+export interface CaseEntity {
+  caseId: string;
+  name: string;
+  description: string | null;
+  matterType: MatterType;
+  owner: string;
+  status: CaseStatus;
+  createdAt: string;
+  updatedAt: string | null;
+  closedAt: string | null;
+}
+
+export interface CaseRequest {
+  name: string;
+  description: string | null;
+  matterType: MatterType;
+  owner: string;
+}
+
+export interface CaseStats {
+  totalCases: number;
+  /** ACTIVE + UNDER_REVIEW. */
+  activeCases: number;
+  closedCases: number;
+}
+
+export interface CaseCustodian {
+  id: number;
+  caseId: string;
+  custodianId: string;
+  addedAt: string;
+}
+
+export interface Evidence {
+  id: number;
+  caseId: string;
+  messageId: string;
+  source: EvidenceSource;
+  searchRef: string | null;
+  addedBy: string | null;
+  addedAt: string;
+}
+
+export interface BulkEvidenceResult {
+  requested: number;
+  added: number;
+  alreadyPresent: number;
+}
+
+// ---------------------------------------------------------------- P4 legal hold
+
+export type HoldStatus = 'RESOLVING' | 'ACTIVE' | 'RELEASED' | 'FAILED';
+
+export const HOLD_STATUSES: readonly HoldStatus[] = ['RESOLVING', 'ACTIVE', 'RELEASED', 'FAILED'];
+
+/**
+ * `HoldEntity` as it actually arrives.
+ *
+ * Note the absence of `custodians`. The entity stores them as a comma-separated column and exposes
+ * them through `custodianList()`, which is a method and not a getter, so Jackson omits it — there
+ * is no field on the wire at all. A hold's custodian scope is therefore not readable from the API
+ * today, and the UI says so rather than rendering an empty list as "no custodians".
+ */
+export interface HoldEntity {
+  holdId: string;
+  caseId: string;
+  dateFrom: string | null;
+  dateTo: string | null;
+  searchTerms: string | null;
+  status: HoldStatus;
+  placedAt: string;
+  resolvedAt: string | null;
+  releasedAt: string | null;
+  releasedReason: string | null;
+  /** Messages the resolver matched. 0 until the hold leaves RESOLVING. */
+  messageCount: number;
+  error: string | null;
+}
+
+export interface PlaceHoldRequest {
+  caseId: string;
+  custodians: string[];
+  dateFrom: string | null;
+  dateTo: string | null;
+  searchTerms: string | null;
+}
+
 export interface HoldCheck {
   held: boolean;
 }
 
-/** One entry from `POST /holds/evidence-check`. Only protected messages come back. */
-export interface EvidenceHold {
-  messageId: string;
-  holdId: string;
+export interface HoldStats {
+  activeHolds: number;
+  resolvingHolds: number;
+  releasedHolds: number;
+  failedHolds: number;
+}
+
+export interface CaseHoldCount {
   caseId: string;
-  caseName: string;
+  heldMessages: number;
 }
 
 // ---------------------------------------------------------------- P5 export & audit
@@ -186,45 +358,58 @@ export interface EvidenceHold {
 export type ExportStatus = 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 
 export interface ExportJob {
-  exportId: string;
-  caseId: string;
-  format: ExportFormat;
+  jobId: string;
+  caseId: string | null;
+  /** Verbatim JSON of the submitted request, as the service received it. */
+  requestedScope: string;
   status: ExportStatus;
-  requestedAt: string;
-  completedAt: string | null;
-  messageCount: number;
-  /** Manifest digest — what makes the package defensible. */
-  sha256: string | null;
-  sizeBytes: number | null;
-  requestedBy: string;
+  itemCount: number;
+  objectKey: string | null;
+  /** SHA-256 of the .zip. What makes the package defensible. */
+  packageSha256: string | null;
+  packageSizeBytes: number | null;
+  attempts: number;
   error: string | null;
+  queuedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
-export type ExportFormat = 'PST' | 'EML' | 'CSV' | 'JSON';
-
-export const EXPORT_FORMATS: readonly ExportFormat[] = ['PST', 'EML', 'CSV', 'JSON'];
-
+/** Exactly one scope: a non-empty `messageIds`, or a `custodianId` with an optional date range. */
 export interface ExportRequest {
-  caseId: string;
-  format: ExportFormat;
-  includeAttachments: boolean;
-  requestedBy: string;
+  caseId: string | null;
+  messageIds: string[];
+  custodianId: string | null;
+  from: string | null;
+  to: string | null;
 }
 
-/** `contracts/AuditEvent.java`. */
-export interface AuditEvent {
+/** `GET /exports/{jobId}/download` hands back an expiring link, not the bytes. */
+export interface ExportDownload {
+  jobId: string;
+  url: string;
+  packageSha256: string | null;
+  sizeBytes: number;
+}
+
+/** `GET /exports/{jobId}/verify` — checksums re-derived from the package's own bytes (FR-6.5). */
+export interface VerificationResult {
+  valid: boolean;
+  packageChecksumMatches: boolean;
+  itemMismatches: string[];
+  itemsChecked: number;
+}
+
+export interface AuditEntry {
   eventId: string;
   occurredAt: string;
   service: string;
   action: string;
-  outcome: AuditOutcome;
+  /** Free text, not an enum, on this service. SUCCESS / REFUSED / FAILURE by convention. */
+  outcome: string;
   subjectType: string;
-  subjectId: string;
+  subjectId: string | null;
   actor: string;
-  correlationId: string;
+  correlationId: string | null;
   detail: Record<string, string>;
 }
-
-export type AuditOutcome = 'SUCCESS' | 'REFUSED' | 'FAILURE';
-
-export const AUDIT_OUTCOMES: readonly AuditOutcome[] = ['SUCCESS', 'REFUSED', 'FAILURE'];

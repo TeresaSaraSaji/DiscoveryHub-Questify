@@ -8,10 +8,7 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "check": "ng build && ng test --no-watch",
-    "mock": "node mock/p4-p5-mock.mjs",
-    "mock:p4": "node mock/p4-p5-mock.mjs --only p4",
-    "mock:p5": "node mock/p4-p5-mock.mjs --only p5"
+    "check": "ng build && ng test --no-watch"
   },
   "private": true,
   "packageManager": "npm@11.19.0",

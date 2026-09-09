@@ -19,20 +19,32 @@ interface NavItem {
 export class App {
   protected readonly nav: readonly NavItem[] = [
     {
+      path: '/home',
+      label: 'Home',
+      hint: 'What is here, and what is happening to it',
+      icon: 'M2 7l6-4.5L14 7v6.5H2z',
+    },
+    {
+      path: '/search',
+      label: 'Search',
+      hint: 'Full-text across the corpus — P3',
+      icon: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.5 10.5 14 14',
+    },
+    {
+      path: '/cases',
+      label: 'Cases & Holds',
+      hint: 'Matters, evidence and legal holds — P4',
+      icon: 'M6 3h4v2h3v8H3V5h3z',
+    },
+    {
       path: '/retention',
-      label: 'Retention & Disposition',
+      label: 'Retention',
       hint: 'Retention policy, sweeps and the ledger — P2.2',
       icon: 'M2 4h12M2 8h12M2 12h7',
     },
     {
-      path: '/cases',
-      label: 'Case & Hold',
-      hint: 'Legal holds and what they have protected — P4, P2.2',
-      icon: 'M6 3h4v2h3v8H3V5h3zm0 2h4V4H6z',
-    },
-    {
       path: '/export-audit',
-      label: 'Export & Audit',
+      label: 'Exports & Audit',
       hint: 'Evidence packages and the chain of custody — P5',
       icon: 'M8 2v7m0 0 3-3m-3 3L5 6M3 11v2h10v-2',
     },

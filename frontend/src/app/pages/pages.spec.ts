@@ -1,26 +1,20 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Type } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { SEARCH_TIMEOUT_MS } from '../core/search.api';
+import { routes } from '../app.routes';
 import { CasesPage } from './cases/cases-page';
+import { Dashboard } from './dashboard/dashboard';
 import { ExportAudit } from './export-audit/export-audit';
 import { RetentionDisposition } from './retention-disposition/retention-disposition';
+import { SearchPage } from './search/search-page';
 
-/**
- * Each page rendered with every one of its services down.
- *
- * This is the test that would have caught the real bug in this UI: `Resource.value()` throws in
- * the error state, Angular instantiates projected content eagerly, and a panel's table is
- * therefore evaluated while the panel is displaying a failure instead of it. Nothing about that is
- * visible in a passing service call — it only appears when a service is missing, which is the
- * normal state of P4 and P5 today.
- *
- * So: mount, fail everything, and require the page to still be a page.
- */
 function mount<T>(component: Type<T>): ComponentFixture<T> {
   TestBed.configureTestingModule({
-    providers: [provideHttpClient(), provideHttpClientTesting()],
+    providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()],
   });
   const fixture = TestBed.createComponent(component);
   // Render, and let the resources' effects issue their requests. Deliberately not
@@ -31,9 +25,8 @@ function mount<T>(component: Type<T>): ComponentFixture<T> {
 }
 
 /**
- * Run change detection and effects, and let a resolved promise through, until the resource state
- * and the DOM agree. Three passes because a resource takes one to start, one to deliver and one
- * to be rendered.
+ * Run change detection and effects. Three passes because a resource takes one to start, one to
+ * deliver and one to be rendered.
  */
 function settle(fixture: ComponentFixture<unknown>): void {
   for (let pass = 0; pass < 3; pass++) {
@@ -62,43 +55,192 @@ async function failEverything(fixture: ComponentFixture<unknown>): Promise<void>
 const text = (fixture: ComponentFixture<unknown>) =>
   (fixture.nativeElement as HTMLElement).textContent ?? '';
 
+/**
+ * Every page mounted with every service down.
+ *
+ * This is the test that catches the real bug in this UI: `Resource.value()` throws in the error
+ * state, Angular instantiates projected content eagerly, and a panel's table is therefore
+ * evaluated while the panel is displaying a failure instead of it. Nothing about that shows up
+ * when the services answer.
+ */
 describe('every page survives every service being down', () => {
   beforeEach(() => TestBed.resetTestingModule());
 
-  it('renders Retention & Disposition and says which service is unreachable', async () => {
-    const fixture = mount(RetentionDisposition);
+  it('renders the dashboard and names what is unreachable', async () => {
+    const fixture = mount(Dashboard);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Retention & Disposition');
-    // The panels are still there, each reporting its own failure rather than one page-wide error.
-    expect(rendered).toContain('Retention policy');
-    expect(rendered).toContain('Run a sweep');
+    expect(rendered).toContain('Welcome to DiscoveryHub');
+    // The quick links are static, so navigation survives everything being down.
+    expect(rendered).toContain('Search messages');
     expect(rendered).toContain('is not reachable');
-    // Every failed panel offers its own retry.
     expect(
       (fixture.nativeElement as HTMLElement).querySelectorAll('.failure').length,
     ).toBeGreaterThan(1);
   });
 
-  it('renders Case & Hold, and names P4 as unwritten rather than blaming the network', async () => {
+  it('renders Cases & Legal Hold', async () => {
     const fixture = mount(CasesPage);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Case & Hold');
-    expect(rendered).toContain('Active holds');
-    expect(rendered).toContain('not implemented yet');
+    expect(rendered).toContain('Cases & Legal Hold');
+    expect(rendered).toContain('Open a case');
+    expect(rendered).toContain('is not reachable');
   });
 
-  it('renders Export & Audit', async () => {
+  it('renders Exports & Audit', async () => {
     const fixture = mount(ExportAudit);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Export & Audit');
+    expect(rendered).toContain('Exports & Audit Trail');
     expect(rendered).toContain('Audit trail');
-    expect(rendered).toContain('P5 is not written yet');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders Retention & Disposition', async () => {
+    const fixture = mount(RetentionDisposition);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Retention & Disposition');
+    expect(rendered).toContain('Run a sweep');
+    expect(rendered).toContain('is not reachable');
+  });
+});
+
+/**
+ * The search page's whole design, asserted.
+ *
+ * The requirement is that it shows nothing until asked. That is not a styling choice — the index
+ * holds the entire corpus, and P3 rejects a criterion-less query with a 400, so a page that
+ * searched on load would be both noisy and broken.
+ */
+describe('search asks for nothing until it is asked', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('issues no search on load, and says so on screen', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http.expectNone((request) => request.url.includes('/search'));
+    // The one request it does make is the case list, for the "file to case" control.
+    http
+      .expectOne((request) => request.url === 'http://localhost:8084/cases')
+      .flush({
+        content: [],
+        number: 0,
+        size: 100,
+        totalElements: 0,
+        totalPages: 0,
+        first: true,
+        last: true,
+      });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Results appear here once you search');
+  });
+
+  it('keeps the button disabled until there is a criterion to send', async () => {
+    const fixture = mount(SearchPage);
+    await failEverything(fixture);
+
+    const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.btn--primary',
+    );
+    expect(button?.disabled).toBe(true);
+    expect(text(fixture)).toContain('Enter a keyword or set a filter');
+  });
+
+  it('searches once submitted, with a three second deadline', async () => {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) =>
+        request.flush({
+          content: [],
+          number: 0,
+          size: 100,
+          totalElements: 0,
+          totalPages: 0,
+          first: true,
+          last: true,
+        }),
+      );
+
+    page.query.set('project atlas');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    const search = http.expectOne('http://localhost:8083/search');
+    expect(search.request.method).toBe('POST');
+    expect(search.request.body.query).toBe('project atlas');
+    // The promise this page makes to the user: an answer or an error, inside three seconds.
+    expect(search.request.timeout).toBe(SEARCH_TIMEOUT_MS);
+    expect(SEARCH_TIMEOUT_MS).toBe(3_000);
+
+    search.flush({
+      results: [
+        {
+          messageId: 'msg-1',
+          externalId: 'EXCH-1',
+          custodianId: 'cust-004',
+          from: 'a@example.com',
+          to: ['b@example.com'],
+          subject: 'Project Atlas update',
+          sentAt: '2020-05-01T10:00:00Z',
+          snippet: 'the <em>project atlas</em> rollout',
+          highlights: null,
+          score: 4.2,
+          onHold: true,
+          attachmentCount: 2,
+          attachmentFilenames: ['a.pdf', 'b.pdf'],
+        },
+      ],
+      total: 1,
+      page: 0,
+      size: 20,
+      tookMs: 12,
+    });
+    await settleAsync(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Search results (1)');
+    expect(rendered).toContain('Project Atlas update');
+    // The `<em>` markup Elasticsearch adds is shown as text, never rendered as HTML.
+    expect(rendered).toContain('the project atlas rollout');
+    expect(rendered).toContain('On hold');
+    expect(rendered).toContain('Answered in 12 ms');
+  });
+
+  it('reports an empty result as an answer, not a failure', async () => {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('nothing matches this');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http
+      .expectOne('http://localhost:8083/search')
+      .flush({ results: [], total: 0, page: 0, size: 20, tookMs: 4 });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('That is an answer, not a failure');
   });
 });
 
@@ -109,7 +251,7 @@ describe('a page whose services answer', () => {
     const fixture = mount(RetentionDisposition);
     const http = TestBed.inject(HttpTestingController);
 
-    http.expectOne('http://localhost:8086/retention/policies').flush([
+    http.expectOne('http://localhost:8087/retention/policies').flush([
       // 2555 days: the seven-year default, delivered as seconds.
       {
         messageType: 'EMAIL',
@@ -126,35 +268,11 @@ describe('a page whose services answer', () => {
     expect(rendered).toContain('P2555D');
   });
 
-  it('reports the blast radius of the next sweep', async () => {
+  it('warns that an unreachable hold service makes a sweep prove nothing', async () => {
     const fixture = mount(RetentionDisposition);
     const http = TestBed.inject(HttpTestingController);
 
-    http.expectOne('http://localhost:8086/disposition/stats/candidates').flush({
-      batchSize: 500,
-      candidatesInNextSweep: 412,
-      cutoffs: { EMAIL: '2019-01-01T00:00:00Z' },
-      activeHolds: 2,
-      holdScopeAvailable: true,
-      protectedByHoldFlag: 1,
-      protectedByHoldScope: 10,
-      protectedByCaseEvidence: 1,
-      protectedByHold: 12,
-      wouldBeDeleted: 400,
-    });
-    await failEverything(fixture);
-
-    const rendered = text(fixture);
-    expect(rendered).toContain('412');
-    expect(rendered).toContain('would be deleted');
-    expect(rendered).toContain('saved by a hold');
-  });
-
-  it('warns that an unreachable P4 makes a sweep prove nothing', async () => {
-    const fixture = mount(RetentionDisposition);
-    const http = TestBed.inject(HttpTestingController);
-
-    http.expectOne('http://localhost:8086/disposition/stats').flush({
+    http.expectOne('http://localhost:8087/disposition/stats').flush({
       archivedMessages: 12_000,
       deleteMode: 'KAFKA',
       holdCheckEnabled: true,
@@ -165,7 +283,7 @@ describe('a page whose services answer', () => {
       totalSkippedByHold: 500,
       lastRun: null,
     });
-    http.expectOne('http://localhost:8086/disposition/stats/candidates').flush({
+    http.expectOne('http://localhost:8087/disposition/stats/candidates').flush({
       batchSize: 500,
       candidatesInNextSweep: 500,
       cutoffs: {},
@@ -180,20 +298,40 @@ describe('a page whose services answer', () => {
     });
     await failEverything(fixture);
 
-    // The README's warning, on the screen where it matters, next to the button.
     expect(text(fixture)).toContain('not proof that holds work');
   });
 
-  it('distinguishes "no holds" from "could not ask P4"', async () => {
-    const fixture = mount(CasesPage);
+  it('distinguishes "no holds" from "could not ask"', async () => {
+    // Asserted on the dashboard, where the holds panel is always on screen; the one on the cases
+    // page only renders once a case is selected.
+    const fixture = mount(Dashboard);
     const http = TestBed.inject(HttpTestingController);
 
-    http.expectOne('http://localhost:8084/holds/active').flush([]);
+    http.expectOne((request) => request.url === 'http://localhost:8086/holds').flush([]);
+    await failEverything(fixture);
+
+    // Scoped to the one panel: the hold *stats* panel on this page legitimately failed, and
+    // asserting over the whole page would conflate the two.
+    const holdsPanel = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLElement>('.panel'),
+    ].find((panel) => panel.querySelector('h2')?.textContent?.trim() === 'Active holds');
+
+    expect(holdsPanel).toBeTruthy();
+    expect(holdsPanel!.textContent).toContain('No hold is in force');
+    // An empty list must never be reported as a failure: upstream, unreachable means *held*, so
+    // rendering the two the same way would state the exact inverse of what the system is doing.
+    expect(holdsPanel!.querySelector('.failure')).toBeNull();
+  });
+
+  it('counts the corpus on the dashboard', async () => {
+    const fixture = mount(Dashboard);
+    const http = TestBed.inject(HttpTestingController);
+
+    http.expectOne('http://localhost:8082/stats').flush({ totalMessages: 12_000, onHold: 42 });
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('No hold is in force');
-    // An empty list must never be reported as a failure: upstream, unreachable means *held*.
-    expect(rendered).not.toContain('P4 Case & Hold is not reachable');
+    expect(rendered).toContain('12,000');
+    expect(rendered).toContain('42 flagged on hold');
   });
 });

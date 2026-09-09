@@ -21,10 +21,11 @@ describe('the shell', () => {
 
     expect(
       [...shell.querySelectorAll('.nav__link')].map((link) => link.textContent?.trim()),
-    ).toEqual(['Retention & Disposition', 'Case & Hold', 'Export & Audit']);
+    ).toEqual(['Home', 'Search', 'Cases & Holds', 'Retention', 'Exports & Audit']);
 
-    // Five services, always listed — including the two nobody has written, because "which of
-    // these is even running?" is the first question anyone asks of this system.
-    expect(shell.querySelectorAll('.status__item')).toHaveLength(5);
+    // Seven pills for six deployables: P4 is case-service and hold-service, listed separately
+    // because a case list that loads while every hold check fails is a real state, and one "P4"
+    // badge could not express it.
+    expect(shell.querySelectorAll('.status__item')).toHaveLength(7);
   });
 });

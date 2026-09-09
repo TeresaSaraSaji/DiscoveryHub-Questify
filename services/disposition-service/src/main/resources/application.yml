@@ -5,7 +5,7 @@ spring:
   # This service's own database (NFR-1). Flyway and JPA bind here because the bean is @Primary;
   # see config/DataSourceConfig for why both datasources have to be declared by hand.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5436/disposition}
+    url: ${DB_URL:jdbc:postgresql://localhost:5437/disposition}
     username: ${DB_USER:disposition}
     password: ${DB_PASSWORD:disposition}
 
@@ -118,7 +118,7 @@ discoveryhub:
 
     archive:
       # P4 Case & Hold, for the hold check.
-      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
+      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8086}
 
       # P2's archive database. Read for the eligibility query; written only by the single guarded
       # DELETE in archive/JdbcMessageDeleter, and only in ARCHIVE_DB delete mode. No Flyway and no
@@ -135,7 +135,7 @@ discoveryhub:
           pool-name: archive-readwrite
 
 server:
-  port: ${SERVER_PORT:8086}
+  port: ${SERVER_PORT:8087}
 
 management:
   endpoints:
