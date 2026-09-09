@@ -70,7 +70,7 @@ public class CaseController {
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", required = false) Integer size) {
         int pageSize = cap(size == null ? props.defaultPageSize() : size);
-        return service.listCases(status, PageRequest.of(page, pageSize));
+        return service.listCases(status, PageRequest.of(Math.max(0, page), pageSize));
     }
 
     @GetMapping("/stats")

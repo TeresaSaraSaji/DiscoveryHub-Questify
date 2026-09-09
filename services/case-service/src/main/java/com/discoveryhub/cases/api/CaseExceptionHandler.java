@@ -2,6 +2,7 @@ package com.discoveryhub.cases.api;
 
 import com.discoveryhub.cases.lifecycle.CaseReadOnlyException;
 import com.discoveryhub.cases.lifecycle.IllegalCaseTransitionException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -30,6 +31,33 @@ public class CaseExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
         problem.setTitle("Case is read-only");
         problem.setProperty("caseId", ex.caseId());
+        return problem;
+    }
+
+    /**
+     * {@code CaseBuilder} validates a new/updated case's invariants (non-blank name/owner, a
+     * matter type) by throwing {@link IllegalArgumentException} — without this handler, that
+     * propagates past Spring's default mapping as an unhandled 500, indistinguishable from a
+     * real server fault. Bad input from the caller is a 400.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ProblemDetail badRequest(IllegalArgumentException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setTitle("Invalid case request");
+        return problem;
+    }
+
+    /**
+     * M1 fix: {@code CaseEntity.version} turns a lost update between two concurrent requests on
+     * the same case into this exception instead of a silent overwrite. 409, not 500 — the
+     * request conflicted with a concurrent change, and retrying against the current state is the
+     * right recovery, same as the other conflict cases this handler maps.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ProblemDetail concurrentModification(OptimisticLockingFailureException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "case was modified concurrently; reload and retry");
+        problem.setTitle("Concurrent modification");
         return problem;
     }
 }

@@ -82,6 +82,42 @@ class CaseServiceTest {
     }
 
     @Test
+    void theCaseEventAndTheAuditEventForOneActionShareTheSameCorrelationId() {
+        // C1 regression: CaseAuditEvents used to default correlationId to the caseId, so the
+        // CaseEvent on cases.events and the AuditEvent on audit.events for one user action could
+        // never be joined by correlationId, breaking cross-service audit correlation.
+        when(cases.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.createCase(new CaseRequest("Q3 review", "desc", MatterType.INVESTIGATION, "owner"));
+
+        ArgumentCaptor<CaseEvent> caseEvent = ArgumentCaptor.forClass(CaseEvent.class);
+        verify(publisher).publishCaseEvent(caseEvent.capture());
+        ArgumentCaptor<AuditEvent> auditEvent = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(publisher).publishAudit(auditEvent.capture());
+
+        assertThat(auditEvent.getValue().correlationId()).isEqualTo(caseEvent.getValue().correlationId());
+        // And that shared id must not just be the caseId (the bug this pins) — it should be a
+        // freshly generated per-action id.
+        assertThat(auditEvent.getValue().correlationId()).isNotEqualTo(caseEvent.getValue().caseId());
+    }
+
+    @Test
+    void theCaseEventAndTheAuditEventForATransitionShareTheSameCorrelationId() {
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(cases.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transition("case-1", CaseStatus.ACTIVE);
+
+        ArgumentCaptor<CaseEvent> caseEvent = ArgumentCaptor.forClass(CaseEvent.class);
+        verify(publisher).publishCaseEvent(caseEvent.capture());
+        ArgumentCaptor<AuditEvent> auditEvent = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(publisher).publishAudit(auditEvent.capture());
+
+        assertThat(auditEvent.getValue().correlationId()).isEqualTo(caseEvent.getValue().correlationId());
+    }
+
+    @Test
     void transitionDraftToActiveUpdatesStatusAndPublishesTransitioned() {
         CaseEntity entity = draft();
         when(cases.findById("case-1")).thenReturn(Optional.of(entity));
@@ -123,6 +159,25 @@ class CaseServiceTest {
 
         verify(cases, never()).save(any());
         verify(publisher, never()).publishCaseEvent(any());
+    }
+
+    @Test
+    void transitionOnAClosedCaseIsRefusedAsReadOnlyWithAMutationRefusedAudit() {
+        // M5 fix: a transition attempted on an already-closed case must be refused the same way
+        // every other mutation on a closed case is — a mutation-refused audit and
+        // CaseReadOnlyException — not IllegalCaseTransitionException with no refusal audit at all.
+        CaseEntity closed = new CaseEntity("case-1", "n", "d", MatterType.LITIGATION, "o",
+                CaseStatus.CLOSED, Instant.now());
+        when(cases.findById("case-1")).thenReturn(Optional.of(closed));
+
+        assertThatThrownBy(() -> service.transition("case-1", CaseStatus.ACTIVE))
+                .isInstanceOf(CaseReadOnlyException.class);
+
+        verify(cases, never()).save(any());
+        ArgumentCaptor<AuditEvent> auditEvent = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(publisher).publishAudit(auditEvent.capture());
+        assertThat(auditEvent.getValue().action()).isEqualTo("case.mutation-refused");
+        assertThat(auditEvent.getValue().outcome()).isEqualTo(AuditEvent.Outcome.REFUSED);
     }
 
     @Test
@@ -256,9 +311,8 @@ class CaseServiceTest {
 
     @Test
     void addCustodianWithBlankIdThrowsBadRequest() {
-        CaseEntity entity = draft();
-        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
-
+        // m8 fix: request validation now happens before the case (and its read-only state) is
+        // even looked up, so cases.findById is never called for a malformed request.
         assertThatThrownBy(() -> service.addCustodian("case-1", new AddCustodianRequest("  ")))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
                 .satisfies(ex -> {
@@ -266,13 +320,26 @@ class CaseServiceTest {
                             (org.springframework.web.server.ResponseStatusException) ex;
                     assertThat(rse.getStatusCode().value()).isEqualTo(400);
                 });
+        verify(cases, never()).findById(any());
+    }
+
+    @Test
+    void addCustodianWithBlankIdReturns400EvenThoughItWouldAlsoFailAsReadOnlyIfCheckedLater() {
+        // m8 fix: a malformed request is a 400 regardless of what case state it would have hit
+        // next — validation happens before the case (and its read-only state) is ever loaded, so
+        // this never has a chance to be misreported as 409 just because the case is closed.
+        assertThatThrownBy(() -> service.addCustodian("closed-case", new AddCustodianRequest("  ")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(ex -> {
+                    org.springframework.web.server.ResponseStatusException rse =
+                            (org.springframework.web.server.ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode().value()).isEqualTo(400);
+                });
+        verify(cases, never()).findById(any());
     }
 
     @Test
     void addEvidenceWithBlankMessageIdThrowsBadRequest() {
-        CaseEntity entity = draft();
-        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
-
         assertThatThrownBy(() -> service.addEvidence("case-1", new AddEvidenceRequest("  ", null, null)))
                 .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
                 .satisfies(ex -> {
@@ -280,6 +347,7 @@ class CaseServiceTest {
                             (org.springframework.web.server.ResponseStatusException) ex;
                     assertThat(rse.getStatusCode().value()).isEqualTo(400);
                 });
+        verify(cases, never()).findById(any());
     }
 
     @Test
@@ -306,6 +374,40 @@ class CaseServiceTest {
                 new AddEvidenceBatchRequest(java.util.Arrays.asList("msg-1", "  ", "msg-2"), EvidenceSource.SEARCH, null));
 
         assertThat(result.added()).isEqualTo(2);
+    }
+
+    @Test
+    void addEvidenceBatchDoesNotCountBlankMessageIdsAsAlreadyPresent() {
+        // m1 regression: alreadyPresent must only count messageIds that were genuinely on the
+        // case before this batch — a blank id is skipped for a different reason and must not be
+        // folded into the same count.
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(evidence.findMessageIdsByCaseId("case-1")).thenReturn(List.of());
+        when(evidence.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        BulkEvidenceResult result = service.addEvidenceBatch("case-1",
+                new AddEvidenceBatchRequest(java.util.Arrays.asList("msg-1", "  ", "msg-2"), EvidenceSource.SEARCH, null));
+
+        assertThat(result.added()).isEqualTo(2);
+        assertThat(result.alreadyPresent()).isZero();
+    }
+
+    @Test
+    void addEvidenceBatchDoesNotCountIntraBatchDuplicatesAsAlreadyPresent() {
+        // m1 regression: a messageId repeated within the same batch (but not previously on the
+        // case) is an intra-batch duplicate, not something that was "already present" before
+        // this batch ran.
+        CaseEntity entity = draft();
+        when(cases.findById("case-1")).thenReturn(Optional.of(entity));
+        when(evidence.findMessageIdsByCaseId("case-1")).thenReturn(List.of());
+        when(evidence.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        BulkEvidenceResult result = service.addEvidenceBatch("case-1",
+                new AddEvidenceBatchRequest(List.of("msg-1", "msg-1"), EvidenceSource.SEARCH, null));
+
+        assertThat(result.added()).isEqualTo(1);
+        assertThat(result.alreadyPresent()).isZero();
     }
 
     @Test

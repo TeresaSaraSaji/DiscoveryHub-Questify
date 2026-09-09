@@ -58,7 +58,7 @@ public final class CaseBuilder {
         if (matterType == null) {
             throw new IllegalArgumentException("matterType is required");
         }
-        String trimmedDescription = description == null || description.isBlank() ? null : description;
+        String trimmedDescription = description == null || description.isBlank() ? null : description.trim();
         return new CaseEntity(
                 UUID.randomUUID().toString(),
                 name.trim(),
