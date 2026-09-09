@@ -1,7 +1,7 @@
 package com.discoveryhub.disposition.archive;
 
+import com.discoveryhub.contracts.DeleteCommand;
 import com.discoveryhub.disposition.domain.ArchiveCandidate;
-import com.discoveryhub.disposition.messaging.DeleteCommand;
 import com.discoveryhub.disposition.messaging.DispositionKafkaPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,14 +17,15 @@ import java.time.Instant;
  * <p>This is where this service is meant to end up. It restores the property NFR-1 actually cares
  * about — only P2 writes to P2's tables — and it makes the delete path resilient in the way NFR-2
  * asks for: with P2 down, commands queue on the topic and are applied when it returns, instead of
- * the sweep failing. It needs one consumer on P2's side, which is not this service's to write.
- * DISPOSITION.md carries the contract and a sketch of that listener.
+ * the sweep failing.
  *
- * <p>The honest cost of the switch: a published command is not a completed delete. The ledger
- * records {@link DeleteResult#REQUESTED} and the item stays in that state, because P2 does not
- * report back. Closing that loop needs a {@code disposition.results} topic, which is deliberately
- * not built on speculation — it would be a topic nothing produces to, which is precisely what the
- * disabled topic auto-create in this repo exists to prevent.
+ * <p>A published command is still not a completed delete, so the ledger records
+ * {@link DeleteResult#REQUESTED} here rather than claiming the message is gone. It does not stay
+ * in that state: P2's listener answers on {@code disposition.results} with a
+ * {@link com.discoveryhub.contracts.DeleteReceipt}, and
+ * {@link com.discoveryhub.disposition.messaging.DeleteReceiptListener} settles the ledger row to
+ * the outcome P2 actually achieved. The asynchrony is visible in the ledger — briefly REQUESTED,
+ * then DELETED or SKIPPED_HOLD — which is honest about a delete that genuinely is asynchronous.
  */
 @Component
 @ConditionalOnProperty(prefix = "discoveryhub.disposition", name = "delete-mode", havingValue = "KAFKA")

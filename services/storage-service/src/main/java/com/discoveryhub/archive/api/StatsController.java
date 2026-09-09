@@ -1,6 +1,5 @@
 package com.discoveryhub.archive.api;
 
-import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.archive.repository.MessageRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,7 +26,10 @@ public class StatsController {
     @GetMapping
     public Map<String, Object> stats() {
         long total = messages.count();
-        long onHold = messages.findAll().stream().filter(MessageEntity::isOnHold).count();
+        // Counted in the database, against idx_messages_on_hold. The previous findAll().stream()
+        // loaded all 10,000 messages — bodies, to/cc lists and all — into the heap to count a
+        // boolean, on an endpoint the dashboard polls.
+        long onHold = messages.countByOnHoldTrue();
         Map<String, Object> out = new HashMap<>();
         out.put("totalMessages", total);
         out.put("onHold", onHold);

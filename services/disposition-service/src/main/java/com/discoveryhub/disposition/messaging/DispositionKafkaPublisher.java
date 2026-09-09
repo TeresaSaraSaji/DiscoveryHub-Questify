@@ -1,6 +1,7 @@
 package com.discoveryhub.disposition.messaging;
 
 import com.discoveryhub.contracts.AuditEvent;
+import com.discoveryhub.contracts.DeleteCommand;
 import com.discoveryhub.contracts.Topics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

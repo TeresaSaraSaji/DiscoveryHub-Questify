@@ -68,6 +68,18 @@ public class DispositionItemEntity {
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
 
+    /**
+     * When P2 confirmed what became of a {@code DELETE_REQUESTED} row, and null until it does.
+     *
+     * <p>Separate from {@code occurredAt} rather than overwriting it, because the gap between the
+     * two is the thing worth measuring: {@code occurredAt} is when this service decided to destroy
+     * the message, {@code settledAt} is when it actually happened. In {@code KAFKA} delete mode
+     * they are minutes apart if P2 is down, and a row where {@code settledAt} is still null hours
+     * later is the signal that P2 is not consuming.
+     */
+    @Column(name = "settled_at")
+    private Instant settledAt;
+
     protected DispositionItemEntity() {
         // JPA
     }
@@ -93,6 +105,28 @@ public class DispositionItemEntity {
         this.occurredAt = Instant.now();
     }
 
+    /**
+     * Record what P2 finally did with a message this run asked it to delete.
+     *
+     * <p>The only mutation this entity permits, and it is confined to one transition:
+     * {@link DispositionOutcome#DELETE_REQUESTED} to whatever P2 reported. A ledger row that could
+     * be edited freely would be worthless as evidence, and the transition is guarded here rather
+     * than in the listener so no future caller can rewrite a settled outcome — a replayed receipt
+     * on an at-least-once topic must not turn a recorded refusal back into a deletion.
+     *
+     * @return true if this call settled the row; false if it was already settled and nothing
+     *         changed, which is the normal answer to a redelivered receipt
+     */
+    public boolean settle(DispositionOutcome outcome, String reason, Instant settledAt) {
+        if (this.outcome != DispositionOutcome.DELETE_REQUESTED) {
+            return false;
+        }
+        this.outcome = outcome;
+        this.reason = reason;
+        this.settledAt = settledAt;
+        return true;
+    }
+
     public Long getId() { return id; }
 
     public String getRunId() { return runId; }
@@ -116,4 +150,6 @@ public class DispositionItemEntity {
     public String getBlockingCaseId() { return blockingCaseId; }
 
     public Instant getOccurredAt() { return occurredAt; }
+
+    public Instant getSettledAt() { return settledAt; }
 }

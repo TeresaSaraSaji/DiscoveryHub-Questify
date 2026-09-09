@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Turns a {@link SearchRequest} into a Spring Data Elasticsearch {@link Query}.
@@ -39,6 +40,9 @@ import java.util.Locale;
  */
 @Component
 public class SearchQueryBuilder {
+
+    /** Criteria.contains cannot take a term with a blank in it — see the query build below. */
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private final SearchProperties properties;
 
@@ -88,12 +92,38 @@ public class SearchQueryBuilder {
             // Text match. Lower-casing the term against the lower-cased stored value (see
             // CommunicationDocumentMapper.fromMessage) keeps a search for "alice" matching
             // From: Alice@firm.test the same way it already matches that address in to/cc.
-            Criteria text = new Criteria("body").contains(term)
-                    .or(new Criteria("subject").contains(term))
-                    .or(new Criteria("from").contains(term.toLowerCase(Locale.ROOT)))
-                    .or(new Criteria("to").contains(term))
-                    .or(new Criteria("cc").contains(term));
-            criteria = new Criteria().subCriteria(text);
+            //
+            // Split on whitespace, and AND the words together. Criteria.contains builds a wildcard
+            // query, and Spring Data Elasticsearch refuses a wildcard containing a blank —
+            // `*quarterly report*` throws InvalidDataAccessApiUsageException("Cannot constructQuery
+            // ... Use expression or multiple clauses instead"), which surfaced as a 500 on every
+            // multi-word search. A two-word phrase is the most ordinary query there is, so this is
+            // the "multiple clauses" the exception asks for: each word must appear somewhere in the
+            // message, though not necessarily in the same field, which is the useful reading of
+            // "quarterly report from alice".
+            // Each word becomes its own OR group, and the groups are added as sibling
+            // sub-criteria of one field-less root, which is how Spring Data Elasticsearch ANDs
+            // them. Note `and(Criteria)` is *not* the way to do it: it asserts the criteria has a
+            // field, and these groups deliberately do not have one.
+            Criteria text = new Criteria();
+            boolean any = false;
+            for (String word : WHITESPACE.split(term.trim())) {
+                if (word.isEmpty()) {
+                    continue;
+                }
+                text = text.subCriteria(new Criteria("body").contains(word)
+                        .or(new Criteria("subject").contains(word))
+                        .or(new Criteria("from").contains(word.toLowerCase(Locale.ROOT)))
+                        .or(new Criteria("to").contains(word))
+                        .or(new Criteria("cc").contains(word)));
+                any = true;
+            }
+            // A query of nothing but whitespace leaves no clause at all rather than an empty one,
+            // so the filters below still decide the result instead of a field-less criteria
+            // reaching Elasticsearch and failing there.
+            if (any) {
+                criteria = text;
+            }
         }
 
         List<String> custodianIds = request.custodianIds();

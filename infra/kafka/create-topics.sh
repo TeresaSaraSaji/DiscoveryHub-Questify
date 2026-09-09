@@ -19,6 +19,12 @@ TOPICS=(
   "messages.archived:6"
   "holds.commands:3"
   "holds.events:3"
+  # Keyed by messageId, so three partitions give P2's consumer parallelism while keeping every
+  # command for one message ordered.
+  "disposition.commands:3"
+  # P2's answers back to P2.2, keyed by the same messageId so a receipt cannot overtake a later
+  # command for the same message. Matched to disposition.commands: one receipt per command.
+  "disposition.results:3"
   "cases.events:3"
   "export.jobs:3"
   "audit.events:6"

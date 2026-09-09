@@ -33,3 +33,8 @@ target/
 
 # macOS
 .DS_Store
+
+# Attachment bytes written by P2's blob storage (discoveryhub.archive.storage.local.base-dir,
+# ./data/attachments by default). Runtime data, not source: a corpus load puts 1,304 files and
+# several MB here, and the V5 backfill migration recreates them from the database on demand.
+data/

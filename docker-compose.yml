@@ -13,10 +13,11 @@
 #   9092  Kafka              8090  Kafka UI
 #   6379  Redis (P1)         9200  Elasticsearch (P3)
 #   5433  Postgres (P2)      5434  Postgres (P4)      5435  Postgres (P5)
-#   27017 MongoDB            9000  MinIO API          9001  MinIO console
+#   5436  Postgres (P2.2)    27017 MongoDB
+#   9000  MinIO API          9001  MinIO console
 #
 # Application ports, as services arrive
-#   8081 P1  8082 P2  8083 P3  8084 P4  8085 P5  4200 frontend
+#   8081 P1  8082 P2  8083 P3  8084 P4  8085 P5  8086 P2.2  4200 frontend
 
 name: discoveryhub
 
@@ -79,7 +80,7 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # Creates the six topics, then exits. Re-running is a no-op.
+  # Creates the topics, then exits. Re-running is a no-op.
   kafka-init:
     image: apache/kafka:4.2.1
     container_name: discoveryhub-kafka-init
@@ -157,6 +158,29 @@ services:
       - postgres-cases-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cases -d cases"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # P2.2 Disposition. Its own instance, not a schema in postgres-archive: P2.2 reads and deletes
+  # from the archive, but its retention policy and run ledger are its own, and two Flyway
+  # histories in one database would make P2 fail on startup under ddl-auto: validate.
+  # 5437, not 5436: postgres-holds took 5436 while this service was on an unmerged branch. Only
+  # the host port moved — inside the network it is still 5432, so no service config changed.
+  postgres-disposition:
+    image: postgres:17.11
+    container_name: discoveryhub-postgres-disposition
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_DB: disposition
+      POSTGRES_USER: disposition
+      POSTGRES_PASSWORD: disposition
+    volumes:
+      - postgres-disposition-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U disposition -d disposition"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -319,6 +343,11 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-archive:5432/archive
+      # P4, for the hold guard P2 applies to every delete command it consumes from
+      # disposition.commands. Wrong or unset, every check fails closed and P2 refuses every
+      # disposition — which is indistinguishable from holds working, so it is set explicitly here
+      # as well as in the Dockerfile.
+      CASES_BASE_URL: http://cases-service:8084
       SERVER_PORT: 8082
       # The hold-service owns /holds/check; inside the Docker network it is reachable by service
       # name. The storage-service's disposition job calls this before deleting anything.
@@ -384,7 +413,6 @@ services:
     ports:
       - "8086:8086"
     environment:
-      KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-holds:5432/holds
       SERVER_PORT: 8086
       CASES_BASE_URL: http://case-service:8084
@@ -420,9 +448,42 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # P2.2 Retention & Disposition — retention policy, the sweep, and the ledger. Owner: Saketh.
+  #
+  # On 8087, not 8086: the hold-service claimed 8086 while this service was still on an unmerged
+  # branch, so the two collided on both the HTTP port and Postgres 5436. Moving this one was the
+  # cheaper resolution — hold-service is already merged and storage-service's HOLDS_BASE_URL
+  # points at 8086.
+  disposition-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/disposition-service/Dockerfile
+    container_name: discoveryhub-disposition
+    ports:
+      - "8087:8087"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-disposition:5432/disposition
+      # P2's archive: read for the eligibility query, written by the one guarded DELETE in
+      # ARCHIVE_DB delete mode.
+      ARCHIVE_DB_URL: jdbc:postgresql://postgres-archive:5432/archive
+      # The hold guard. hold-service owns /holds/check.
+      CASES_BASE_URL: http://hold-service:8086
+      SERVER_PORT: 8087
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-disposition:
+        condition: service_healthy
+      postgres-archive:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:
+  postgres-disposition-data:
   postgres-cases-data:
   postgres-audit-data:
   postgres-holds-data:

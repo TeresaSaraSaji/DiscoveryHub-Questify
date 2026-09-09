@@ -5,7 +5,7 @@ spring:
   # This service's own database (NFR-1). Flyway and JPA bind here because the bean is @Primary;
   # see config/DataSourceConfig for why both datasources have to be declared by hand.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5436/disposition}
+    url: ${DB_URL:jdbc:postgresql://localhost:5437/disposition}
     username: ${DB_USER:disposition}
     password: ${DB_PASSWORD:disposition}
 
@@ -26,6 +26,19 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    consumer:
+      # Only one topic is consumed: disposition.results, P2's answers to this service's delete
+      # commands. Earliest, because a receipt missed while this service was down leaves a ledger
+      # row stuck at DELETE_REQUESTED forever — there is no later event that would correct it.
+      group-id: p2.2-disposition
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # Per-record ack: the offset for a receipt is committed only once it has been applied to the
+      # ledger, so a failure mid-batch redelivers that receipt rather than losing it. Safe because
+      # settlement is idempotent (DispositionItemEntity.settle).
+      ack-mode: record
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       # Plain String serdes, with JSON done by hand in DispositionKafkaPublisher: Spring Kafka's
@@ -47,10 +60,15 @@ discoveryhub:
         CHAT: P1095D    # three years
 
   disposition:
-    # ARCHIVE_DB deletes from P2's database directly; KAFKA publishes to disposition.commands and
-    # lets P2 own the write. KAFKA is the intended destination and needs one consumer on P2's side
-    # — see DISPOSITION.md. Switching is this line and nothing else.
-    delete-mode: ARCHIVE_DB
+    # KAFKA publishes to disposition.commands and lets P2 own the write; ARCHIVE_DB deletes from
+    # P2's database directly. KAFKA is now the default: P2 has the consumer
+    # (archive/DispositionCommandListener) and answers on disposition.results, so the ledger is
+    # settled with what P2 actually did rather than stopping at DELETE_REQUESTED.
+    #
+    # This restores the property NFR-1 cares about — only P2 writes P2's tables — and the NFR-2
+    # one: with P2 down, commands queue on the topic and apply when it returns instead of the
+    # sweep failing. ARCHIVE_DB remains for a P2-less local run; see DISPOSITION.md.
+    delete-mode: KAFKA
 
     # Candidates per run, oldest first. The corpus is 10,000+ messages (NFR-3); a bounded sweep
     # keeps memory flat and progress monotonic, and the cron picks up the remainder.
@@ -100,7 +118,7 @@ discoveryhub:
 
     archive:
       # P4 Case & Hold, for the hold check.
-      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8084}
+      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8086}
 
       # P2's archive database. Read for the eligibility query; written only by the single guarded
       # DELETE in archive/JdbcMessageDeleter, and only in ARCHIVE_DB delete mode. No Flyway and no
@@ -117,13 +135,21 @@ discoveryhub:
           pool-name: archive-readwrite
 
 server:
-  port: ${SERVER_PORT:8086}
+  port: ${SERVER_PORT:8087}
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info,metrics
+      # Actuator has its own CORS, and config/CorsConfig does not reach it: these endpoints are
+      # served by a separate handler mapping that ignores addCorsMappings. Without this the
+      # frontend's status strip reports every service DOWN — it polls /actuator/health, the
+      # browser refuses the response for want of a header, and a service that is up and answering
+      # every other request looks dead. Same property as CorsConfig, so one setting governs both.
+      cors:
+        allowed-origin-patterns: ${discoveryhub.web.cors.allowed-origins:http://localhost:[*],http://127.0.0.1:[*]}
+        allowed-methods: GET
   endpoint:
     health:
       show-details: always

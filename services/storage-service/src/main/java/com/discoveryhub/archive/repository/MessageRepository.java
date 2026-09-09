@@ -1,7 +1,6 @@
 package com.discoveryhub.archive.repository;
 
 import com.discoveryhub.archive.domain.MessageEntity;
-import com.discoveryhub.contracts.MessageType;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -10,7 +9,6 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,10 +18,10 @@ public interface MessageRepository extends JpaRepository<MessageEntity, String> 
 
     /**
      * Same lookup as {@link #findById}, but takes a row lock for the rest of the transaction.
-     * Deletion callers use this instead of {@code findById} between the P4 hold check and the
-     * actual delete, so a concurrent {@code HoldsEventListener} update to {@code onHold} for the
-     * same row cannot land in the window between "P4 said not held" and "row removed" — the
-     * listener's {@code save} blocks until this transaction commits or rolls back.
+     * Deletion callers use this instead of {@code findById} between the hold check and the actual
+     * delete, so a concurrent {@code HoldsEventListener} update to {@code onHold} for the same row
+     * cannot land in the window between "not held" and "row removed" — the listener's
+     * {@code save} blocks until this transaction commits or rolls back.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from MessageEntity m where m.messageId = :messageId")
@@ -36,18 +34,13 @@ public interface MessageRepository extends JpaRepository<MessageEntity, String> 
     Page<MessageEntity> findByCustodianId(String custodianId, Pageable pageable);
 
     /**
-     * Messages past their type-specific retention and not currently held — the disposition
-     * candidate set. Eligibility is computed here rather than stored, so a retention config change
-     * (e.g. minutes for the demo, FR-5.1) takes effect on the next run without a backfill.
+     * The on-hold figure on the dashboard (FR-8.2), counted in the database against
+     * {@code idx_messages_on_hold} rather than by loading rows to count a boolean.
      */
-    @Query("""
-            select m from MessageEntity m
-            where m.onHold = false
-              and ((m.type = :email and m.sentAt <= :emailCutoff)
-                or (m.type = :chat  and m.sentAt <= :chatCutoff))
-            """)
-    List<MessageEntity> findDispositionEligible(@Param("email") MessageType email,
-                                                @Param("chat") MessageType chat,
-                                                @Param("emailCutoff") Instant emailCutoff,
-                                                @Param("chatCutoff") Instant chatCutoff);
+    long countByOnHoldTrue();
+
+    // No eligibility query here. Finding what is past retention is P2.2's job — it computes the
+    // cutoffs from the policy it owns and asks this service to delete through
+    // disposition.commands. `findDispositionEligible` existed for P2's own sweep and went with it;
+    // leaving it behind would be a standing invitation to write a second one.
 }

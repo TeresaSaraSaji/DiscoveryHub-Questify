@@ -20,9 +20,12 @@ import java.util.Optional;
  * without a transaction — a controller method calling them directly throws
  * {@code TransactionRequiredException} <i>after</i> the blob deletions have already happened.
  *
- * <p>Shares its hold semantics with {@link DispositionService}: the local {@code on_hold} flag is
- * the fast path, the P4 call is authoritative, and an unreachable P4 counts as held so nothing
- * unverified is ever destroyed (FR-4.2).
+ * <p>Shares its hold semantics with {@link DispositionCommandListener}, which applies P2.2's
+ * disposition decisions: the local {@code on_hold} flag is the fast path, the hold-service call is
+ * authoritative, and an unreachable hold-service counts as held so nothing unverified is ever
+ * destroyed (FR-4.2). The two are kept separate because they answer to different callers — this
+ * one maps to HTTP status codes, that one to a {@code DeleteReceipt} whose reason string ends up in
+ * P2.2's ledger — but the row-and-blob mechanics below must stay identical in both.
  */
 @Service
 public class MessageDeletionService {
