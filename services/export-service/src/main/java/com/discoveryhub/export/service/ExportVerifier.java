@@ -56,7 +56,9 @@ public class ExportVerifier {
         }
 
         List<String> mismatches = new ArrayList<>();
+        java.util.Set<String> manifestPaths = new java.util.HashSet<>();
         for (ManifestItem item : manifest.items()) {
+            manifestPaths.add(item.path());
             byte[] bytes = entries.get(item.path());
             if (bytes == null) {
                 mismatches.add(item.path() + ": missing from the package");
@@ -65,6 +67,17 @@ public class ExportVerifier {
             String actual = sha256Hex(bytes);
             if (!actual.equalsIgnoreCase(item.sha256())) {
                 mismatches.add(item.path() + ": manifest says " + item.sha256() + ", package contains " + actual);
+            }
+        }
+
+        // Entries in the zip that the manifest never mentions are just as much tampering as a
+        // missing or altered one (FR-6.5) — without this check, an attacker who can also forge
+        // the whole-package checksum (e.g. an insider with direct DB access to packageSha256)
+        // could add arbitrary files and still pass verification, since the loop above only ever
+        // checks what the manifest lists, never what the zip actually contains.
+        for (String name : entries.keySet()) {
+            if (!"manifest.json".equals(name) && !manifestPaths.contains(name)) {
+                mismatches.add(name + ": present in the package but not listed in the manifest");
             }
         }
 

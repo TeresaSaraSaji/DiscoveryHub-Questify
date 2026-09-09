@@ -72,6 +72,25 @@ class ExportVerifierTest {
     }
 
     @Test
+    void anEntryAddedToThePackageButNotListedInTheManifestIsDetected() throws IOException {
+        // Me2 regression: the verifier previously only checked "does every manifest item match a
+        // package entry?" and never the reverse — an attacker who can also forge the whole-package
+        // checksum (e.g. direct DB access to packageSha256) could add arbitrary entries and still
+        // pass verification, since nothing ever compared the zip's actual entry set to the manifest.
+        byte[] messageBytes = "{\"messageId\":\"m-1\"}".getBytes();
+        Built built = buildPackage(List.of(
+                ManifestItem.message("m-1", "messages/m-1.json", sha256(messageBytes), messageBytes.length)),
+                List.of("messages/m-1.json"), List.of(messageBytes));
+
+        byte[] withExtraEntry = addEntry(built.bytes(), "attachments/../evil.exe", "payload".getBytes());
+
+        VerificationResult result = verifier.verify(withExtraEntry, sha256(withExtraEntry));
+
+        assertThat(result.valid()).isFalse();
+        assertThat(result.itemMismatches()).anyMatch(m -> m.contains("evil.exe") && m.contains("not listed"));
+    }
+
+    @Test
     void missingManifestFailsCleanly() throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(buffer)) {
@@ -102,6 +121,24 @@ class ExportVerifierTest {
         }
         byte[] bytes = buffer.toByteArray();
         return new Built(bytes, sha256(bytes));
+    }
+
+    /** Rebuilds the zip with one extra entry appended, leaving every existing entry untouched. */
+    private byte[] addEntry(byte[] original, String path, byte[] content) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        try (var in = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(original));
+             ZipOutputStream out = new ZipOutputStream(buffer)) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = in.getNextEntry()) != null) {
+                out.putNextEntry(new ZipEntry(entry.getName()));
+                out.write(in.readAllBytes());
+                out.closeEntry();
+            }
+            out.putNextEntry(new ZipEntry(path));
+            out.write(content);
+            out.closeEntry();
+        }
+        return buffer.toByteArray();
     }
 
     /** Rebuilds the zip with one entry's content swapped, leaving every other entry byte-identical. */

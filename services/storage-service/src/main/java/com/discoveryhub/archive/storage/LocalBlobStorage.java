@@ -41,12 +41,17 @@ public class LocalBlobStorage implements BlobStorage {
 
     @Override
     public String store(String messageId, String attachmentId, byte[] bytes) {
-        Path dir = baseDir.resolve(messageId);
-        Path file = dir.resolve(attachmentId);
+        // messageId/attachmentId come off the wire (messages.ingested), not from a trusted
+        // internal source — validate them the same way resolve() validates a stored location,
+        // so a value containing ".." cannot write outside baseDir before load()/delete() ever get
+        // a chance to reject it on the read side.
+        String location = messageId + "/" + attachmentId;
+        Path file = resolve(location);
+        Path dir = file.getParent();
         try {
             Files.createDirectories(dir);
             Files.write(file, bytes == null ? new byte[0] : bytes);
-            return messageId + "/" + attachmentId;
+            return location;
         } catch (IOException ex) {
             throw new UncheckedIOException("failed writing attachment " + file, ex);
         }

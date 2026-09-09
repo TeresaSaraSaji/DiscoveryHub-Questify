@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -76,6 +77,7 @@ class DispositionServiceTest {
     void deletesPastRetentionWhenNotHeld() {
         MessageEntity old = pastRetention("EXCH-1", false);
         when(messages.findDispositionEligible(any(), any(), any(), any())).thenReturn(List.of(old));
+        when(messages.findByIdForUpdate(old.getMessageId())).thenReturn(Optional.of(old));
         when(holdCheck.isHeld(old.getMessageId())).thenReturn(false);
 
         DispositionRunEntity run = service.runOnce();
@@ -97,6 +99,7 @@ class DispositionServiceTest {
     void skipsMessageThatP4SaysIsHeld() {
         MessageEntity old = pastRetention("EXCH-2", false);
         when(messages.findDispositionEligible(any(), any(), any(), any())).thenReturn(List.of(old));
+        when(messages.findByIdForUpdate(old.getMessageId())).thenReturn(Optional.of(old));
         when(holdCheck.isHeld(old.getMessageId())).thenReturn(true);
 
         DispositionRunEntity run = service.runOnce();
@@ -112,6 +115,7 @@ class DispositionServiceTest {
     void failsClosedWhenP4IsUnreachable() {
         MessageEntity old = pastRetention("EXCH-3", false);
         when(messages.findDispositionEligible(any(), any(), any(), any())).thenReturn(List.of(old));
+        when(messages.findByIdForUpdate(old.getMessageId())).thenReturn(Optional.of(old));
         // HoldCheckClient returns true on a communication failure; DispositionService must honour it.
         when(holdCheck.isHeld(old.getMessageId())).thenReturn(true);
 
@@ -127,6 +131,7 @@ class DispositionServiceTest {
     void skipsMessageWhoseLocalHoldFlagIsSetWithoutCallingP4() {
         MessageEntity held = pastRetention("EXCH-4", true);
         when(messages.findDispositionEligible(any(), any(), any(), any())).thenReturn(List.of(held));
+        when(messages.findByIdForUpdate(held.getMessageId())).thenReturn(Optional.of(held));
 
         service.runOnce();
 
@@ -145,6 +150,42 @@ class DispositionServiceTest {
         assertThat(run.getDeletedCount()).isZero();
         assertThat(run.getSkippedHoldCount()).isZero();
         verify(messages, never()).delete(any(MessageEntity.class));
+    }
+
+    @Test
+    void aCandidateAlreadyDeletedByTheTimeTheLockIsAcquiredIsSkippedRatherThanFailingTheRun() {
+        // findDispositionEligible's snapshot can be stale by the time the loop gets to a
+        // candidate (e.g. DELETE /messages/{id} raced ahead of it). findByIdForUpdate returning
+        // empty must be treated as "already gone", not as a null-pointer or a failed run.
+        MessageEntity old = pastRetention("EXCH-5", false);
+        when(messages.findDispositionEligible(any(), any(), any(), any())).thenReturn(List.of(old));
+        when(messages.findByIdForUpdate(old.getMessageId())).thenReturn(Optional.empty());
+
+        DispositionRunEntity run = service.runOnce();
+
+        assertThat(run.getStatus()).isEqualTo(DispositionStatus.COMPLETED);
+        assertThat(run.getDeletedCount()).isZero();
+        assertThat(run.getSkippedHoldCount()).isZero();
+        verify(holdCheck, never()).isHeld(anyString());
+        verify(messages, never()).delete(any(MessageEntity.class));
+    }
+
+    @Test
+    void aSecondConcurrentRunOnceCallIsRefusedWhileASweepIsInProgress() {
+        // Simulate "already running" by flipping the guard directly rather than trying to race two
+        // real threads through a mocked repository — the guard itself is what is under test here.
+        when(messages.findDispositionEligible(any(), any(), any(), any())).thenAnswer(inv -> {
+            assertThatCallingRunOnceWhileAlreadyRunningIsRefused();
+            return List.of();
+        });
+
+        service.runOnce();
+    }
+
+    private void assertThatCallingRunOnceWhileAlreadyRunningIsRefused() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(service::runOnce)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already running");
     }
 
     /** Builds an email message sent 10 minutes ago — past the 2-minute email retention. */

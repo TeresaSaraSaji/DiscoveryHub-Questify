@@ -33,11 +33,23 @@ public class ArchiveMessageClient {
         this.pageSize = props.scopePageSize();
     }
 
-    /** Every message in the custodian's mailbox, paged through to the end. */
+    /**
+     * Every message in the custodian's mailbox, paged through to the end.
+     *
+     * <p>The loop is driven by {@code page < totalPages}, not by "stop at the first empty page":
+     * an unexpected empty-but-not-last page from P2 (a transient gap, a bug) previously stopped
+     * enumeration early and silently under-resolved the scope — the unsafe direction for a
+     * protective hold, since messages missed here are never covered and {@code GET /holds/check}
+     * would answer "not held" for them. Any response that does not have the shape scope
+     * resolution needs (null body, a page short of what {@code totalPages} promised) is now a
+     * hard failure, so the caller marks the hold FAILED instead of silently persisting partial
+     * coverage.
+     */
     public List<Message> listByCustodian(String custodianId) {
         List<Message> all = new ArrayList<>();
         int page = 0;
-        while (true) {
+        int totalPages = 1;
+        while (page < totalPages) {
             final int currentPage = page;
             PagedMessages response = rest.get()
                     .uri(uri -> uri.path("/messages")
@@ -47,14 +59,19 @@ public class ArchiveMessageClient {
                             .build())
                     .retrieve()
                     .body(PagedMessages.class);
-            if (response == null || response.content() == null || response.content().isEmpty()) {
-                break;
+            if (response == null || response.content() == null) {
+                throw new IllegalStateException(
+                        "archive returned no body for custodian " + custodianId + " page " + currentPage);
+            }
+            if (page == 0) {
+                totalPages = response.totalPages() > 0 ? response.totalPages() : 1;
+            }
+            if (response.content().isEmpty() && page + 1 < totalPages) {
+                throw new IllegalStateException("archive returned an empty page " + currentPage
+                        + " of " + totalPages + " for custodian " + custodianId + "; scope resolution aborted"
+                        + " rather than silently under-covering the hold");
             }
             all.addAll(response.content());
-            int totalPages = response.totalPages() > 0 ? response.totalPages() : 1;
-            if (page + 1 >= totalPages) {
-                break;
-            }
             page++;
         }
         log.debug("fetched {} messages for custodian {}", all.size(), custodianId);

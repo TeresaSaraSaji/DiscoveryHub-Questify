@@ -102,6 +102,25 @@ class LocalBlobStorageTest {
     }
 
     @Test
+    void storeRefusesAMessageIdThatEscapesTheBaseDirectory() {
+        // messageId/attachmentId come straight off messages.ingested, not from a trusted internal
+        // id generator by the time they reach this class — a malicious or buggy upstream value
+        // containing ".." must not be allowed to write outside baseDir, matching the guard load()
+        // and delete() already apply on the read side.
+        assertThatThrownBy(() -> storage.store("../../etc", "passwd", "pwned".getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("escapes base dir");
+        assertThat(tmp.resolve("etc/passwd")).doesNotExist();
+    }
+
+    @Test
+    void storeRefusesAnAttachmentIdThatEscapesTheBaseDirectory() {
+        assertThatThrownBy(() -> storage.store("m-1", "../../evil", "pwned".getBytes(StandardCharsets.UTF_8)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("escapes base dir");
+    }
+
+    @Test
     void loadRejectsANullLocation() {
         assertThatThrownBy(() -> storage.load(null)).isInstanceOf(NullPointerException.class);
     }

@@ -42,6 +42,22 @@ class CommunicationDocumentMapperTest {
     }
 
     @Test
+    void fromMessageLowerCasesFromForCaseInsensitiveMatching() {
+        // M4 regression: `from` is a Keyword field, so its wildcard/exact match is case-sensitive
+        // against the raw stored string, unlike to/cc's analyzed Text match. Lower-casing at
+        // index time (matched by SearchQueryBuilder lower-casing the query term) keeps a search
+        // for "alice" matching From: Alice@Firm.Test the same way it already matches to/cc.
+        Message mixedCase = new Message(
+                "msg-2", "ext-2", "EXCHANGE", MessageType.EMAIL, "custodian-1",
+                "Alice@Firm.Test", List.of("to@firm.test"), List.of(), "subject", "body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(), List.of());
+
+        CommunicationDocument doc = mapper.fromMessage(mixedCase);
+
+        assertThat(doc.getFrom()).isEqualTo("alice@firm.test");
+    }
+
+    @Test
     void fromMessageMapsEveryFieldAndDefaultsOnHoldToFalse() {
         CommunicationDocument doc = mapper.fromMessage(message);
 

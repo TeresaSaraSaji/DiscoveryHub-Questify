@@ -1,5 +1,6 @@
 package com.discoveryhub.holds.command;
 
+import com.discoveryhub.holds.client.CaseStatusClient;
 import com.discoveryhub.holds.domain.HoldCoverageEntity;
 import com.discoveryhub.holds.domain.HoldEntity;
 import com.discoveryhub.holds.domain.HoldScope;
@@ -39,6 +40,7 @@ class PlaceHoldCommandTest {
     @Mock HoldRepository holds;
     @Mock HoldCoverageRepository coverage;
     @Mock HoldKafkaPublisher publisher;
+    @Mock CaseStatusClient caseStatus;
 
     private HoldEventFactory eventFactory = new HoldEventFactory();
     private HoldAuditEvents audit = new HoldAuditEvents();
@@ -53,7 +55,7 @@ class PlaceHoldCommandTest {
 
     private PlaceHoldCommand command() {
         return new PlaceHoldCommand(hold, "corr-1", resolver, holds, coverage,
-                publisher, eventFactory, audit);
+                publisher, eventFactory, audit, caseStatus);
     }
 
     @Test
@@ -98,5 +100,57 @@ class PlaceHoldCommandTest {
 
         assertThat(hold.getStatus()).isEqualTo(HoldStatus.FAILED);
         verify(coverage, never()).saveAll(any());
+    }
+
+    @Test
+    void redeliveredCommandOnAnAlreadyActiveHoldIsANoop() {
+        hold.setStatus(HoldStatus.ACTIVE);
+
+        command().execute();
+
+        verify(resolver, never()).resolve(any(), any());
+        verify(coverage, never()).saveAll(any());
+        verify(holds, never()).save(any());
+        verify(publisher, never()).publishHoldEvent(any());
+        verify(publisher, never()).publishAudit(any());
+    }
+
+    @Test
+    void redeliveredCommandOnAnAlreadyFailedHoldIsANoop() {
+        hold.setStatus(HoldStatus.FAILED);
+
+        command().execute();
+
+        verify(resolver, never()).resolve(any(), any());
+        verify(publisher, never()).publishAudit(any());
+    }
+
+    @Test
+    void caseClosedWhileResolvingReleasesInsteadOfActivating() {
+        when(resolver.resolve("hold-1", hold.toScope())).thenReturn(List.of("m1", "m2"));
+        when(caseStatus.isCaseClosed("case-1")).thenReturn(true);
+
+        command().execute();
+
+        assertThat(hold.getStatus()).isEqualTo(HoldStatus.RELEASED);
+        assertThat(hold.getReleasedAt()).isNotNull();
+        assertThat(hold.getResolvedAt()).isNotNull();
+        // Coverage is still persisted for the record...
+        verify(coverage).saveAll(any());
+        // ...but no "placed" events go out, since the case is already closed and the hold never
+        // becomes ACTIVE.
+        verify(publisher, never()).publishHoldEvent(any());
+        verify(publisher).publishAudit(any());
+    }
+
+    @Test
+    void caseOpenActivatesNormally() {
+        when(resolver.resolve("hold-1", hold.toScope())).thenReturn(List.of("m1"));
+        when(caseStatus.isCaseClosed("case-1")).thenReturn(false);
+
+        command().execute();
+
+        assertThat(hold.getStatus()).isEqualTo(HoldStatus.ACTIVE);
+        verify(publisher).publishHoldEvent(any());
     }
 }

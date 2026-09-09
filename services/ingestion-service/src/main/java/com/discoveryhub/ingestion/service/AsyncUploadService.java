@@ -15,8 +15,9 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -35,11 +36,22 @@ import java.util.concurrent.TimeUnit;
  * <p>The pool is small and its queue is bounded by rejection rather than by growth: concurrent
  * uploads each hold a chunk of messages in memory, and an unbounded queue would accept work it
  * cannot run and then run out of heap. Refusing a request outright is the honest failure.
+ *
+ * <p>That bound is a real {@link LinkedBlockingQueue} capacity, not just the fixed pool size:
+ * {@code Executors.newFixedThreadPool} backs its pool with an <i>unbounded</i> queue, so every
+ * submission used to be accepted no matter how many were already waiting — the queue "bound"
+ * described above was aspirational, and {@link #submit} spooling a temp file to disk before
+ * queuing meant an unbounded number of them could pile up under load. Building the executor
+ * directly with a capacity-limited queue and {@link ThreadPoolExecutor.AbortPolicy} makes
+ * {@link RejectedExecutionException} in {@link #submit} actually reachable.
  */
 @Service
 public class AsyncUploadService {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncUploadService.class);
+
+    /** Queued-but-not-yet-running work allowed on top of the worker threads themselves. */
+    private static final int QUEUE_CAPACITY_PER_WORKER = 4;
 
     private final UploadService uploadService;
     private final UploadJobStore jobs;
@@ -51,8 +63,10 @@ public class AsyncUploadService {
         this.uploadService = uploadService;
         this.jobs = jobs;
         this.clock = clock;
-        this.executor = Executors.newFixedThreadPool(workers, Thread.ofPlatform()
-                .name("upload-", 0).daemon(true).factory());
+        this.executor = new ThreadPoolExecutor(workers, workers, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(workers * QUEUE_CAPACITY_PER_WORKER),
+                Thread.ofPlatform().name("upload-", 0).daemon(true).factory(),
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     /**
@@ -62,7 +76,15 @@ public class AsyncUploadService {
      */
     public UploadJob submit(String filename, InputStream in) throws IOException {
         Path spooled = Files.createTempFile("dh-upload-", ".json");
-        Files.copy(in, spooled, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        try {
+            Files.copy(in, spooled, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // The temp file was created but never became a job the run()/submit() finally
+            // blocks below would clean up — without this, a client disconnecting mid-upload (or
+            // any other read failure) leaked one temp file per occurrence.
+            Files.deleteIfExists(spooled);
+            throw e;
+        }
 
         String jobId = UUID.randomUUID().toString();
         UploadJob job = UploadJob.running(jobId, filename, clock.instant());

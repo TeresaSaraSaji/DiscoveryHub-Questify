@@ -77,6 +77,42 @@ class PackageBuilderTest {
                 .hasMessageContaining("gone");
     }
 
+    @Test
+    void aMaliciousMessageIdCannotEscapeTheMessagesDirectory() throws IOException {
+        // Zip-slip guard: messageId/attachmentId are as untrusted as filename (message-schema.md)
+        // and were not sanitised at all before this — a value containing "../" must not produce a
+        // zip entry outside messages/ (e.g. overwriting manifest.json on extraction).
+        String maliciousId = "../../manifest.json";
+        byte[] attachmentBytes = "bytes".getBytes();
+        String attachmentSha256 = sha256(attachmentBytes);
+        Attachment attachment = new Attachment("../../evil", "figures.csv", "text/csv", 20, attachmentSha256, null);
+        Message message = new Message(maliciousId, "EXCH-1", "EXCHANGE", MessageType.EMAIL, "custodian-1",
+                "from@x.com", List.of("to@x.com"), List.of(), "subj", "body",
+                Instant.parse("2024-05-11T21:37:00Z"), "thread-1", null, List.of(attachment), List.of());
+        when(archive.findMessage(maliciousId)).thenReturn(Optional.of(message));
+        when(archive.fetchAttachmentBytes(maliciousId, "../../evil")).thenReturn(attachmentBytes);
+
+        PackageResult result = builder.build("job-4", "case-1", List.of(maliciousId));
+
+        // The actual zip-slip property that matters: no entry has a "/" or "\" beyond the fixed
+        // messages/ or attachments/ prefix, so nothing can resolve outside its own directory on
+        // extraction — regardless of what literal characters the (flattened) id contains.
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(result.zipBytes()))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                String name = entry.getName();
+                if (name.equals("manifest.json")) {
+                    continue;
+                }
+                String prefix = name.startsWith("messages/") ? "messages/"
+                        : name.startsWith("attachments/") ? "attachments/" : null;
+                assertThat(prefix).as("entry %s must live under messages/ or attachments/", name).isNotNull();
+                String remainder = name.substring(prefix.length());
+                assertThat(remainder).doesNotContain("/").doesNotContain("\\");
+            }
+        }
+    }
+
     private Manifest readManifest(byte[] zipBytes) throws IOException {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
             ZipEntry entry;

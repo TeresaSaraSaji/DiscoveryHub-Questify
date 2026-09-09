@@ -6,6 +6,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 
@@ -49,6 +50,17 @@ public class CaseEntity {
     @Column(name = "closed_at")
     private Instant closedAt;
 
+    /**
+     * Optimistic lock (M1 fix). {@code updateCase} and {@code transition} are both
+     * read-modify-write with no other synchronization; without this, two concurrent requests
+     * against the same case can both read the same state, both pass their checks, and the
+     * second save silently overwrites the first with no error. JPA checks this column on every
+     * UPDATE and throws {@code OptimisticLockingFailureException} (mapped to 409) on a conflict.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
+
     protected CaseEntity() {
         // JPA
     }
@@ -64,8 +76,9 @@ public class CaseEntity {
         this.createdAt = createdAt;
     }
 
+    // No setCaseId: the primary key is assigned once by CaseBuilder and must never be
+    // reassigned on a managed entity (m5 fix) — that would desync the entity from its DB row.
     public String getCaseId() { return caseId; }
-    public void setCaseId(String caseId) { this.caseId = caseId; }
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -82,12 +95,15 @@ public class CaseEntity {
     public CaseStatus getStatus() { return status; }
     public void setStatus(CaseStatus status) { this.status = status; }
 
+    // No setCreatedAt: like caseId, this is stamped once at creation by CaseBuilder and is
+    // immutable-by-intent (m5 fix).
     public Instant getCreatedAt() { return createdAt; }
-    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 
     public Instant getClosedAt() { return closedAt; }
     public void setClosedAt(Instant closedAt) { this.closedAt = closedAt; }
+
+    public long getVersion() { return version; }
 }

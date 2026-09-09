@@ -23,7 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Retention and disposition (FR-5). Finds messages past their type-specific retention, asks P4
@@ -34,11 +36,24 @@ import java.util.UUID;
  * and the run continues — one unreachable check must not abort the whole sweep, and it must never
  * let a held message be deleted. If P4 is down for the entire run the run still completes, having
  * skipped everything; that is the correct, safe behaviour.
+ *
+ * <p>Each candidate is re-loaded with {@link MessageRepository#findByIdForUpdate} right before
+ * its P4 check, taking a row lock for the rest of this transaction. Without it, a concurrent
+ * {@code HoldsEventListener} update could apply a hold to a message between "P4 said not held"
+ * and the delete a few lines later; the lock makes that update wait instead.
+ *
+ * <p>{@link #running} prevents two sweeps from overlapping <i>within this JVM</i> — a manual
+ * {@code POST /disposition/runs} firing while the scheduled cron tick is mid-sweep would otherwise
+ * process the same candidates twice, doubling deletes and audit rows. It does not prevent two
+ * separate instances of this service from both running a sweep at once; that would need a
+ * database-level advisory lock, which is a deliberate follow-up rather than done here.
  */
 @Service
 public class DispositionService {
 
     private static final Logger log = LoggerFactory.getLogger(DispositionService.class);
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final MessageRepository messages;
     private final AttachmentRepository attachments;
@@ -66,9 +81,31 @@ public class DispositionService {
         this.storage = storage;
     }
 
-    /** Run a full disposition sweep. Returns the persisted run record (already COMPLETED/FAILED). */
+    /**
+     * Run a full disposition sweep. Returns the persisted run record (already COMPLETED/FAILED).
+     *
+     * <p>The running-guard is checked and released around the transactional body rather than in a
+     * separate method: {@code @Transactional} on a method only takes effect through Spring's
+     * proxy, and a self-invoked call (this class calling its own method) bypasses the proxy
+     * entirely, silently dropping the transaction. Keeping everything in this one proxied method
+     * avoids that trap.
+     *
+     * @throws IllegalStateException if a sweep is already running in this JVM (see class javadoc)
+     */
     @Transactional
     public DispositionRunEntity runOnce() {
+        if (!running.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "a disposition sweep is already running; refusing to start a second one");
+        }
+        try {
+            return doRunOnce();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    private DispositionRunEntity doRunOnce() {
         String runId = UUID.randomUUID().toString();
         Instant startedAt = Instant.now();
         DispositionRunEntity run = new DispositionRunEntity(runId, startedAt, DispositionStatus.RUNNING);
@@ -88,7 +125,19 @@ public class DispositionService {
         List<DispositionItemEntity> itemRecords = new ArrayList<>();
 
         try {
-            for (MessageEntity m : eligible) {
+            for (MessageEntity candidate : eligible) {
+                // Re-fetch under a row lock rather than trust the snapshot from
+                // findDispositionEligible: without the lock, a concurrent HoldsEventListener could
+                // place a hold on this exact message between the P4 check below and the delete
+                // that follows it, and this transaction would never see it. The lock makes that
+                // update block until this transaction is done.
+                Optional<MessageEntity> locked = messages.findByIdForUpdate(candidate.getMessageId());
+                if (locked.isEmpty()) {
+                    // Already deleted by something else (e.g. DELETE /messages/{id}) since the
+                    // candidate list was built.
+                    continue;
+                }
+                MessageEntity m = locked.get();
                 // The local on_hold flag is a fast-path skip; the authoritative check is the P4 call.
                 if (m.isOnHold()) {
                     itemRecords.add(skip(runId, m, "local hold flag set"));

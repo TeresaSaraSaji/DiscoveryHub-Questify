@@ -18,12 +18,10 @@ import java.util.Optional;
  * the wired command, and runs it. The listener knows nothing about how a hold is placed or
  * released — that lives in the command — so the trigger is decoupled from the work.
  *
- * <p>Idempotency: a hold that is already {@code ACTIVE} when a {@code PLACE} command is re-delivered
- * (after a restart, say) is a no-op — the command runs, the resolver returns the same scope, and
- * the coverage rows hit the primary key and are silently upserted. A hold that is already
- * {@code RELEASED} when a {@code RELEASE} is re-delivered re-publishes release events, which P2
- * treats as a no-op decrement-below-zero (clamped). The safe direction in both cases is toward
- * holding, not toward deletion.
+ * <p>Idempotency: {@link PlaceHoldCommand} and {@link ReleaseHoldCommand} each guard on the hold's
+ * current status, so a redelivered {@code PLACE} for a hold that is no longer {@code RESOLVING},
+ * or a redelivered {@code RELEASE} for a hold that is already {@code RELEASED}, is a no-op — it
+ * does not re-resolve scope, re-persist coverage, or re-publish events.
  */
 @Component
 public class HoldCommandListener {
@@ -57,8 +55,11 @@ public class HoldCommandListener {
         try {
             factory.forMessage(message, maybeHold.get()).execute();
         } catch (Exception ex) {
-            // A command that throws does not wedge the consumer: the hold's own status reflects the
-            // failure (the command sets it), and the next command on the topic is still processed.
+            // A command that throws does not wedge the consumer: the next command on the topic is
+            // still processed. This does not guarantee the hold's own status reflects the failure —
+            // if the exception came from persisting the status change itself (e.g. a DB error in
+            // holds.save), the in-memory entity was mutated but the row was not, so the hold can be
+            // left in its prior status with no record of this attempt beyond this log line.
             log.error("hold command {} for hold {} threw: {}", message.type(), message.holdId(), ex.toString(), ex);
         }
     }

@@ -1,5 +1,6 @@
 package com.discoveryhub.holds.command;
 
+import com.discoveryhub.holds.client.CaseStatusClient;
 import com.discoveryhub.holds.domain.HoldCoverageEntity;
 import com.discoveryhub.holds.domain.HoldEntity;
 import com.discoveryhub.holds.domain.HoldStatus;
@@ -29,6 +30,18 @@ import java.util.List;
  * full-corpus hold does not time out the UI (FR-4.3, NFR-3). The command carries its dependencies
  * by reference — it is constructed on the consumer side by {@link HoldCommandFactory}, not
  * serialised to Kafka.
+ *
+ * <p>Idempotency: a {@code PLACE} redelivered for a hold that is no longer {@code RESOLVING} is a
+ * no-op — re-running it would re-resolve the scope against the archive's <i>current</i> state
+ * (breaking the "frozen at placement time" invariant), re-persist coverage, and re-publish a
+ * {@code placed} event per message, double-incrementing P2's mirrored hold count.
+ *
+ * <p>Closed-case race (FR-2.4): {@code POST /holds} checks the case is open before enqueuing this
+ * command, but the case can close while the command is in flight. Re-checking here, right before
+ * the hold would otherwise become {@code ACTIVE}, closes that window: if the case closed in the
+ * meantime, the hold is resolved (coverage is persisted, for the record) and released immediately
+ * instead of activated, so it never ends up {@code ACTIVE} on a case that is already closed and
+ * will not see a {@code case.closed} event to release it later.
  */
 public final class PlaceHoldCommand implements HoldCommand {
 
@@ -42,11 +55,13 @@ public final class PlaceHoldCommand implements HoldCommand {
     private final HoldKafkaPublisher publisher;
     private final HoldEventFactory eventFactory;
     private final HoldAuditEvents audit;
+    private final CaseStatusClient caseStatus;
 
     public PlaceHoldCommand(HoldEntity hold, String correlationId,
                             HoldScopeResolver resolver, HoldRepository holds,
                             HoldCoverageRepository coverage, HoldKafkaPublisher publisher,
-                            HoldEventFactory eventFactory, HoldAuditEvents audit) {
+                            HoldEventFactory eventFactory, HoldAuditEvents audit,
+                            CaseStatusClient caseStatus) {
         this.hold = hold;
         this.correlationId = correlationId;
         this.resolver = resolver;
@@ -55,6 +70,7 @@ public final class PlaceHoldCommand implements HoldCommand {
         this.publisher = publisher;
         this.eventFactory = eventFactory;
         this.audit = audit;
+        this.caseStatus = caseStatus;
     }
 
     @Override
@@ -69,6 +85,11 @@ public final class PlaceHoldCommand implements HoldCommand {
 
     @Override
     public void execute() {
+        if (hold.getStatus() != HoldStatus.RESOLVING) {
+            log.info("hold {} PLACE command redelivered but hold is already {}; ignoring",
+                    hold.getHoldId(), hold.getStatus());
+            return;
+        }
         try {
             List<String> messageIds = resolver.resolve(hold.getHoldId(), hold.toScope());
             Instant now = Instant.now();
@@ -77,10 +98,27 @@ public final class PlaceHoldCommand implements HoldCommand {
                 rows.add(new HoldCoverageEntity(hold.getHoldId(), messageId, now));
             }
             coverage.saveAll(rows);
-
-            hold.setStatus(HoldStatus.ACTIVE);
             hold.setResolvedAt(now);
             hold.setMessageCount(messageIds.size());
+
+            if (caseStatus.isCaseClosed(hold.getCaseId())) {
+                // The case closed while this command was in flight. It will not see a
+                // case.closed event (that was already consumed, or never mattered because the
+                // hold did not exist yet when it fired), so release now rather than activate —
+                // the unsafe outcome here is an ACTIVE hold on a closed case that nothing will
+                // ever release.
+                hold.setStatus(HoldStatus.RELEASED);
+                hold.setReleasedAt(now);
+                hold.setReleasedReason("case closed while hold was resolving");
+                holds.save(hold);
+                publisher.publishAudit(audit.holdFailed(hold.getHoldId(), hold.getCaseId(),
+                        "case closed while resolving; released without activation"));
+                log.warn("hold {} resolved {} messages but case {} is closed; releasing without activation",
+                        hold.getHoldId(), messageIds.size(), hold.getCaseId());
+                return;
+            }
+
+            hold.setStatus(HoldStatus.ACTIVE);
             holds.save(hold);
 
             for (String messageId : messageIds) {

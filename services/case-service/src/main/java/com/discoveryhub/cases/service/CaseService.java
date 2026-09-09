@@ -26,6 +26,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -33,6 +35,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -82,8 +85,10 @@ public class CaseService {
                 .build();
         cases.save(entity);
         String correlationId = correlation();
-        publisher.publishCaseEvent(caseEvents.created(entity.getCaseId(), entity.getStatus(), correlationId));
-        publisher.publishAudit(audit.caseCreated(entity.getCaseId(), entity.getName()));
+        publishAfterCommit(() -> {
+            publisher.publishCaseEvent(caseEvents.created(entity.getCaseId(), entity.getStatus(), correlationId));
+            publisher.publishAudit(audit.caseCreated(entity.getCaseId(), entity.getName(), correlationId));
+        });
         log.info("created case {} ({})", entity.getCaseId(), entity.getName());
         return entity;
     }
@@ -106,7 +111,7 @@ public class CaseService {
             entity.setName(request.name().trim());
         }
         if (request.description() != null) {
-            entity.setDescription(request.description().isBlank() ? null : request.description());
+            entity.setDescription(request.description().isBlank() ? null : request.description().trim());
         }
         if (request.matterType() != null) {
             entity.setMatterType(request.matterType());
@@ -116,8 +121,11 @@ public class CaseService {
         }
         entity.setUpdatedAt(Instant.now());
         cases.save(entity);
-        publisher.publishCaseEvent(caseEvents.updated(entity.getCaseId(), entity.getStatus(), correlation()));
-        publisher.publishAudit(audit.caseUpdated(entity.getCaseId(), "metadata"));
+        String correlationId = correlation();
+        publishAfterCommit(() -> {
+            publisher.publishCaseEvent(caseEvents.updated(entity.getCaseId(), entity.getStatus(), correlationId));
+            publisher.publishAudit(audit.caseUpdated(entity.getCaseId(), "metadata", correlationId));
+        });
         return entity;
     }
 
@@ -125,6 +133,13 @@ public class CaseService {
     public CaseEntity transition(String caseId, CaseStatus target) {
         CaseEntity entity = requireCase(caseId);
         CaseStatus from = entity.getStatus();
+        // A transition attempted on an already-closed case is refused the same way every other
+        // mutation on a closed case is (M5 fix): requireMutable publishes the mutation-refused
+        // audit and throws CaseReadOnlyException, rather than letting ClosedState's
+        // IllegalCaseTransitionException escape with no refusal audit at all — a closed case being
+        // read-only is one invariant, and every attempt to violate it should be recorded the same
+        // way regardless of which endpoint tried.
+        requireMutable(entity);
         CaseState current = CaseStateFactory.forStatus(from);
         CaseState next = current.transitionTo(target); // throws on illegal transition
         entity.setStatus(next.status());
@@ -135,13 +150,16 @@ public class CaseService {
         cases.save(entity);
 
         String correlationId = correlation();
-        if (next.status() == CaseStatus.CLOSED) {
-            publisher.publishCaseEvent(caseEvents.closed(entity.getCaseId(), from, correlationId));
-            publisher.publishAudit(audit.caseClosed(entity.getCaseId()));
-        } else {
-            publisher.publishCaseEvent(caseEvents.transitioned(entity.getCaseId(), from, next.status(), correlationId));
-            publisher.publishAudit(audit.caseTransitioned(entity.getCaseId(), from.name(), next.status().name()));
-        }
+        publishAfterCommit(() -> {
+            if (next.status() == CaseStatus.CLOSED) {
+                publisher.publishCaseEvent(caseEvents.closed(entity.getCaseId(), from, correlationId));
+                publisher.publishAudit(audit.caseClosed(entity.getCaseId(), correlationId));
+            } else {
+                publisher.publishCaseEvent(caseEvents.transitioned(entity.getCaseId(), from, next.status(), correlationId));
+                publisher.publishAudit(
+                        audit.caseTransitioned(entity.getCaseId(), from.name(), next.status().name(), correlationId));
+            }
+        });
         log.info("transitioned case {} {} -> {}", caseId, from, next.status());
         return entity;
     }
@@ -150,19 +168,25 @@ public class CaseService {
 
     @Transactional
     public CaseCustodianEntity addCustodian(String caseId, AddCustodianRequest request) {
-        CaseEntity entity = requireCase(caseId);
-        requireMutable(entity);
+        // Validate the request before the read-only check (m8 fix): a malformed request is a 400
+        // regardless of case state, and should not be reported as a 409 just because the case
+        // also happens to be closed.
         if (request.custodianId() == null || request.custodianId().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "custodianId is required");
         }
-        return custodians.findByCaseIdAndCustodianId(caseId, request.custodianId())
-                .orElseGet(() -> {
-                    CaseCustodianEntity saved = custodians.save(
-                            new CaseCustodianEntity(caseId, request.custodianId(), Instant.now()));
-                    publisher.publishAudit(audit.custodianAdded(caseId, request.custodianId()));
-                    log.debug("attached custodian {} to case {}", request.custodianId(), caseId);
-                    return saved;
-                });
+        CaseEntity entity = requireCase(caseId);
+        requireMutable(entity);
+        Optional<CaseCustodianEntity> existing = custodians.findByCaseIdAndCustodianId(caseId, request.custodianId());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        CaseCustodianEntity saved = custodians.save(
+                new CaseCustodianEntity(caseId, request.custodianId(), Instant.now()));
+        String correlationId = correlation();
+        publishAfterCommit(() ->
+                publisher.publishAudit(audit.custodianAdded(caseId, request.custodianId(), correlationId)));
+        log.debug("attached custodian {} to case {}", request.custodianId(), caseId);
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -180,19 +204,23 @@ public class CaseService {
 
     @Transactional
     public EvidenceEntity addEvidence(String caseId, AddEvidenceRequest request) {
-        CaseEntity entity = requireCase(caseId);
-        requireMutable(entity);
+        // Validate before the read-only check (m8 fix) — see addCustodian.
         if (request.messageId() == null || request.messageId().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "messageId is required");
         }
-        return evidence.findByCaseIdAndMessageId(caseId, request.messageId())
-                .orElseGet(() -> {
-                    EvidenceEntity saved = evidence.save(new EvidenceEntity(
-                            caseId, request.messageId(), request.source(), request.searchRef(), null, Instant.now()));
-                    publisher.publishAudit(audit.evidenceAdded(caseId, request.messageId(), request.source().name()));
-                    log.debug("added evidence {} to case {}", request.messageId(), caseId);
-                    return saved;
-                });
+        CaseEntity entity = requireCase(caseId);
+        requireMutable(entity);
+        Optional<EvidenceEntity> existing = evidence.findByCaseIdAndMessageId(caseId, request.messageId());
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        EvidenceEntity saved = evidence.save(new EvidenceEntity(
+                caseId, request.messageId(), request.source(), request.searchRef(), null, Instant.now()));
+        String correlationId = correlation();
+        publishAfterCommit(() -> publisher.publishAudit(
+                audit.evidenceAdded(caseId, request.messageId(), request.source().name(), correlationId)));
+        log.debug("added evidence {} to case {}", request.messageId(), caseId);
+        return saved;
     }
 
     @Transactional
@@ -203,26 +231,37 @@ public class CaseService {
         if (messageIds == null || messageIds.isEmpty()) {
             return new BulkEvidenceResult(0, 0, 0);
         }
-        Set<String> existing = new HashSet<>(evidence.findMessageIdsByCaseId(caseId));
+        // preExisting is the immutable snapshot of what was on the case before this batch;
+        // seenInThisBatch tracks ids handled so far within this loop, so an intra-batch duplicate
+        // can be told apart from one that was genuinely already present beforehand (m1 fix).
+        Set<String> preExisting = new HashSet<>(evidence.findMessageIdsByCaseId(caseId));
+        Set<String> seenInThisBatch = new HashSet<>();
         int added = 0;
+        int alreadyPresent = 0;
         Instant now = Instant.now();
         EvidenceSource source = request.source();
         for (String messageId : messageIds) {
-            if (messageId == null || messageId.isBlank() || existing.contains(messageId)) {
+            if (messageId == null || messageId.isBlank() || !seenInThisBatch.add(messageId)) {
                 continue;
             }
-            existing.add(messageId);
+            if (preExisting.contains(messageId)) {
+                alreadyPresent++;
+                continue;
+            }
             evidence.save(new EvidenceEntity(caseId, messageId, source, request.searchRef(), null, now));
             added++;
         }
         if (added > 0) {
+            String correlationId = correlation();
+            int addedCount = added;
             // One aggregate audit event for a bulk add rather than one per item: a saved-search page
             // is a single investigator action, and "add all results" could be thousands of items.
-            publisher.publishAudit(audit.evidenceAdded(caseId, added + " items", source.name()));
+            publishAfterCommit(() -> publisher.publishAudit(
+                    audit.evidenceAdded(caseId, addedCount + " items", source.name(), correlationId)));
         }
         log.info("bulk add to case {}: requested={}, added={}, alreadyPresent={}",
-                caseId, messageIds.size(), added, messageIds.size() - added);
-        return new BulkEvidenceResult(messageIds.size(), added, messageIds.size() - added);
+                caseId, messageIds.size(), added, alreadyPresent);
+        return new BulkEvidenceResult(messageIds.size(), added, alreadyPresent);
     }
 
     @Transactional(readOnly = true)
@@ -239,7 +278,8 @@ public class CaseService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "evidence not on case: " + messageId);
         }
         evidence.deleteByCaseIdAndMessageId(caseId, messageId);
-        publisher.publishAudit(audit.evidenceRemoved(caseId, messageId));
+        String correlationId = correlation();
+        publishAfterCommit(() -> publisher.publishAudit(audit.evidenceRemoved(caseId, messageId, correlationId)));
     }
 
     // ---------------------------------------------------------------------- stats
@@ -262,9 +302,33 @@ public class CaseService {
 
     private void requireMutable(CaseEntity entity) {
         if (CaseStateFactory.forStatus(entity.getStatus()).isReadOnly()) {
-            publisher.publishAudit(audit.mutationRefused(entity.getCaseId(), "case is closed"));
+            publisher.publishAudit(audit.mutationRefused(entity.getCaseId(), "case is closed", correlation()));
             throw new CaseReadOnlyException(entity.getCaseId());
         }
+    }
+
+    /**
+     * Runs {@code action} after this transaction commits, or immediately if no transaction is
+     * active (e.g. a unit test with mocked repositories). Publishing case events and audit events
+     * before commit meant a rolled-back transaction could leave a "ghost" {@code case.closed} (or
+     * any other) event on the wire — hold-service would then release holds for a case that, as
+     * far as the case-service's own database is concerned, never actually closed. Deferring the
+     * publish until the transaction is durably committed closes that half of the dual-write
+     * problem; a send that fails after commit is still only logged, same as the rest of this
+     * codebase's fire-and-forget publishers — an outbox table would be needed to close that half
+     * too, and is a deliberate follow-up rather than done here.
+     */
+    private void publishAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private static String correlation() {

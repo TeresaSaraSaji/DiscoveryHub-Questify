@@ -117,4 +117,34 @@ class ReleaseHoldCommandTest {
         assertThat(cmd.holdId()).isEqualTo("hold-1");
         assertThat(cmd.type()).isEqualTo(HoldCommandMessage.TYPE_RELEASE);
     }
+
+    @Test
+    void redeliveredCommandOnAnAlreadyReleasedHoldIsANoopAndDoesNotOverwriteReleasedAt() {
+        HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.RELEASED, Instant.now());
+        Instant originalReleasedAt = Instant.parse("2024-01-01T00:00:00Z");
+        hold.setReleasedAt(originalReleasedAt);
+        hold.setReleasedReason("original release");
+
+        command(hold, "redelivered release").execute();
+
+        assertThat(hold.getReleasedAt()).isEqualTo(originalReleasedAt);
+        assertThat(hold.getReleasedReason()).isEqualTo("original release");
+        verify(holds, never()).save(any());
+        verify(coverage, never()).findMessageIdsByHoldId(any());
+        verify(publisher, never()).publishHoldEvent(any());
+        verify(publisher, never()).publishAudit(any());
+    }
+
+    @Test
+    void releaseCommandOnAResolvingHoldIsRefused() {
+        HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.RESOLVING, Instant.now());
+
+        command(hold, "premature release").execute();
+
+        assertThat(hold.getStatus()).isEqualTo(HoldStatus.RESOLVING);
+        verify(holds, never()).save(any());
+        verify(coverage, never()).findMessageIdsByHoldId(any());
+        verify(publisher, never()).publishHoldEvent(any());
+        verify(publisher, never()).publishAudit(any());
+    }
 }

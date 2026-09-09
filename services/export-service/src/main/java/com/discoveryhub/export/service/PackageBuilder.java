@@ -55,7 +55,7 @@ public class PackageBuilder {
 
     private void writeMessage(ZipOutputStream zip, List<ManifestItem> items, Message message) throws IOException {
         byte[] bytes = json.writerWithDefaultPrettyPrinter().writeValueAsBytes(message);
-        String path = "messages/" + message.messageId() + ".json";
+        String path = "messages/" + sanitiseId(message.messageId()) + ".json";
         putEntry(zip, path, bytes);
         items.add(ManifestItem.message(message.messageId(), path, sha256Hex(bytes), bytes.length));
     }
@@ -72,7 +72,7 @@ public class PackageBuilder {
                     + " sha256 mismatch: archive claims " + attachment.sha256()
                     + ", fetched bytes hash to " + actualSha256);
         }
-        String path = "attachments/" + attachment.attachmentId() + "_" + sanitise(attachment.filename());
+        String path = "attachments/" + sanitiseId(attachment.attachmentId()) + "_" + sanitise(attachment.filename());
         putEntry(zip, path, bytes);
         items.add(ManifestItem.attachment(messageId, attachment.attachmentId(), path, actualSha256, bytes.length));
     }
@@ -94,6 +94,20 @@ public class PackageBuilder {
         String base = filename == null ? "attachment" : filename;
         String stripped = base.replaceAll("[\\\\/\u0000]", "_").strip();
         return stripped.isEmpty() ? "attachment" : stripped;
+    }
+
+    /**
+     * messageId/attachmentId are as untrusted as filenames (message-schema.md) — both are used
+     * directly in a zip entry path, and unlike {@code filename} they were not sanitised at all
+     * before this. An id containing {@code ../} would be a zip-slip entry (e.g.
+     * {@code attachments/../manifest.json}, overwriting the manifest itself on extraction). In
+     * normal operation these ids are deterministic UUIDs, so the guard should never actually fire
+     * — but the zip path must not depend on that being true.
+     */
+    private static String sanitiseId(String id) {
+        String base = id == null ? "unknown" : id;
+        String stripped = base.replaceAll("[\\\\/\u0000]", "_").strip();
+        return stripped.isEmpty() || stripped.equals(".") || stripped.equals("..") ? "unknown" : stripped;
     }
 
     private static String sha256Hex(byte[] bytes) {

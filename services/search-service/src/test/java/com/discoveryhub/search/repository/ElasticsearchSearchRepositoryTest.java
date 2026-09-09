@@ -112,9 +112,43 @@ class ElasticsearchSearchRepositoryTest {
     @Test
     void indexSavesTheDocumentToTheConfiguredIndex() {
         CommunicationDocument doc = document("msg-1");
+        when(operations.get(eq("msg-1"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(null);
 
         repository.index(doc);
 
+        verify(operations).save(eq(doc), any(IndexCoordinates.class));
+    }
+
+    @Test
+    void indexDoesNotClobberAnOnHoldFlagAlreadySetOnAReindex() {
+        // C2 regression: a re-index (consumer restart replaying messages.archived, a redelivery)
+        // must not reset onHold to the mapper's default of false and lose what setHold wrote.
+        CommunicationDocument incoming = document("msg-1");
+        assertThat(incoming.isOnHold()).isFalse();
+        CommunicationDocument existing = document("msg-1");
+        existing.setOnHold(true);
+        Instant holdUpdatedAt = Instant.parse("2024-06-01T00:00:00Z");
+        existing.setHoldUpdatedAt(holdUpdatedAt);
+        when(operations.get(eq("msg-1"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(existing);
+
+        repository.index(incoming);
+
+        assertThat(incoming.isOnHold()).isTrue();
+        assertThat(incoming.getHoldUpdatedAt()).isEqualTo(holdUpdatedAt);
+        verify(operations).save(eq(incoming), any(IndexCoordinates.class));
+    }
+
+    @Test
+    void indexOfABrandNewDocumentLeavesOnHoldFalse() {
+        CommunicationDocument doc = document("msg-new");
+        when(operations.get(eq("msg-new"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(null);
+
+        repository.index(doc);
+
+        assertThat(doc.isOnHold()).isFalse();
         verify(operations).save(eq(doc), any(IndexCoordinates.class));
     }
 
@@ -124,10 +158,12 @@ class ElasticsearchSearchRepositoryTest {
         assertThat(doc.isOnHold()).isFalse();
         when(operations.get(eq("msg-1"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
                 .thenReturn(doc);
+        Instant occurredAt = Instant.parse("2024-06-01T00:00:00Z");
 
-        repository.setHold("msg-1", true);
+        repository.setHold("msg-1", true, occurredAt);
 
         assertThat(doc.isOnHold()).isTrue();
+        assertThat(doc.getHoldUpdatedAt()).isEqualTo(occurredAt);
         verify(operations).save(eq(doc), any(IndexCoordinates.class));
     }
 
@@ -136,29 +172,70 @@ class ElasticsearchSearchRepositoryTest {
         when(operations.get(eq("missing"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
                 .thenReturn(null);
 
-        repository.setHold("missing", true);
+        repository.setHold("missing", true, Instant.now());
 
         verify(operations, never()).save(any(), any(IndexCoordinates.class));
     }
 
     @Test
-    void setHoldByCustodianUpdatesEveryDocumentInTheMailbox() {
+    void setHoldIgnoresAStaleEventOlderThanTheStoredHoldUpdatedAt() {
+        // M1 regression: an out-of-order redelivery (e.g. a rebalance replaying an older event
+        // after a newer one already applied) must not un-hold or re-hold a message.
+        CommunicationDocument doc = document("msg-1");
+        doc.setOnHold(true);
+        Instant newer = Instant.parse("2024-06-02T00:00:00Z");
+        doc.setHoldUpdatedAt(newer);
+        when(operations.get(eq("msg-1"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(doc);
+        Instant staleEvent = Instant.parse("2024-06-01T00:00:00Z");
+
+        repository.setHold("msg-1", false, staleEvent);
+
+        assertThat(doc.isOnHold()).isTrue();
+        assertThat(doc.getHoldUpdatedAt()).isEqualTo(newer);
+        verify(operations, never()).save(any(), any(IndexCoordinates.class));
+    }
+
+    @Test
+    void setHoldAppliesAnEventNewerThanTheStoredHoldUpdatedAt() {
+        CommunicationDocument doc = document("msg-1");
+        doc.setOnHold(true);
+        Instant older = Instant.parse("2024-06-01T00:00:00Z");
+        doc.setHoldUpdatedAt(older);
+        when(operations.get(eq("msg-1"), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(doc);
+        Instant newerEvent = Instant.parse("2024-06-02T00:00:00Z");
+
+        repository.setHold("msg-1", false, newerEvent);
+
+        assertThat(doc.isOnHold()).isFalse();
+        assertThat(doc.getHoldUpdatedAt()).isEqualTo(newerEvent);
+        verify(operations).save(eq(doc), any(IndexCoordinates.class));
+    }
+
+    @Test
+    void setHoldByCustodianStreamsRatherThanLoadingTheWholeMailboxAsOnePage() {
+        // M2 regression: setHoldByCustodian must scroll (searchForStream), the same as
+        // searchMessageIds does, rather than materialising every hit via operations.search.
         CommunicationDocument doc = document("msg-1");
         assertThat(doc.isOnHold()).isFalse();
 
         @SuppressWarnings("unchecked")
-        SearchHits<CommunicationDocument> hits = mock(SearchHits.class);
+        SearchHitsIterator<CommunicationDocument> stream = mock(SearchHitsIterator.class);
+        when(operations.searchForStream(any(Query.class), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
+                .thenReturn(stream);
         @SuppressWarnings("unchecked")
         SearchHit<CommunicationDocument> hit = mock(SearchHit.class);
-        when(operations.search(any(Query.class), eq(CommunicationDocument.class), any(IndexCoordinates.class)))
-                .thenReturn(hits);
-        when(hits.getSearchHits()).thenReturn(List.of(hit));
         when(hit.getContent()).thenReturn(doc);
+        when(stream.hasNext()).thenReturn(true, false);
+        when(stream.next()).thenReturn(hit);
 
-        repository.setHoldByCustodian("custodian-1", true);
+        repository.setHoldByCustodian("custodian-1", true, Instant.parse("2024-06-01T00:00:00Z"));
 
         assertThat(doc.isOnHold()).isTrue();
         verify(operations).save(eq(doc), any(IndexCoordinates.class));
+        verify(operations, never()).search(any(Query.class), eq(CommunicationDocument.class), any(IndexCoordinates.class));
+        verify(stream).close();
     }
 
     @Test
