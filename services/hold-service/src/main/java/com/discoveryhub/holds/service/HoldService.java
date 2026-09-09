@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
@@ -63,7 +65,16 @@ public class HoldService {
         this.caseStatus = caseStatus;
     }
 
-    /** Place a hold. Returns the hold in {@code RESOLVING} status; the worker resolves it async. */
+    /**
+     * Place a hold. Returns the hold in {@code RESOLVING} status; the worker resolves it async.
+     *
+     * <p>The {@code PLACE} command is enqueued only after this transaction commits (see
+     * {@link #publishAfterCommit}), never before. Publishing before commit would let the worker
+     * consume the command and look up a hold row that is not yet durable — {@code findById} would
+     * come up empty, the command would be skipped, and the hold would stay {@code RESOLVING}
+     * forever, with {@code GET /holds/check} answering "not held" for a hold that was never
+     * resolved.
+     */
     @Transactional
     public HoldEntity placeHold(String caseId, HoldScope scope) {
         if (caseStatus.isCaseClosed(caseId)) {
@@ -72,9 +83,30 @@ public class HoldService {
         HoldEntity hold = HoldBuilder.create().caseId(caseId).scope(scope).build();
         holds.save(hold);
         String correlationId = UUID.randomUUID().toString();
-        commandPublisher.publish(new HoldCommandMessage(hold.getHoldId(), HoldCommandMessage.TYPE_PLACE, correlationId));
+        HoldCommandMessage command =
+                new HoldCommandMessage(hold.getHoldId(), HoldCommandMessage.TYPE_PLACE, correlationId);
+        publishAfterCommit(() -> commandPublisher.publish(command));
         log.info("placed hold {} on case {} (RESOLVING, async)", hold.getHoldId(), caseId);
         return hold;
+    }
+
+    /**
+     * Runs {@code action} after this transaction commits, or immediately if no transaction is
+     * active (e.g. a unit test with a mocked repository layer). This is the same guard the
+     * storage-service's {@code AttachmentStore.deleteAfterCommit} uses, applied here to keep a
+     * Kafka command from being visible to a consumer before the row it references is durable.
+     */
+    private void publishAfterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     /** Manually release a hold. Synchronous: coverage is local, so this is a status flip + events. */
@@ -87,6 +119,10 @@ public class HoldService {
         if (hold.getStatus() == HoldStatus.RESOLVING) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "hold is still resolving, cannot release yet: " + holdId);
+        }
+        if (hold.getStatus() == HoldStatus.FAILED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "hold failed to place and was never active, cannot release: " + holdId);
         }
         List<String> messageIds = coverage.findMessageIdsByHoldId(holdId);
         hold.setStatus(HoldStatus.RELEASED);
@@ -118,13 +154,13 @@ public class HoldService {
         return holds.findByStatus(status);
     }
 
+    /**
+     * Distinct held-message count for a case (FR-4.4). Counts distinct message ids, not a per-hold
+     * sum: overlapping active holds (FR-4.5) that both cover the same message must not double it.
+     */
     @Transactional(readOnly = true)
     public long heldMessageCountForCase(String caseId) {
-        long count = 0;
-        for (HoldEntity hold : holds.findByCaseIdAndStatus(caseId, HoldStatus.ACTIVE)) {
-            count += coverage.countByHoldId(hold.getHoldId());
-        }
-        return count;
+        return coverage.countDistinctMessageIdsByCaseIdAndActiveHolds(caseId);
     }
 
     @Transactional(readOnly = true)

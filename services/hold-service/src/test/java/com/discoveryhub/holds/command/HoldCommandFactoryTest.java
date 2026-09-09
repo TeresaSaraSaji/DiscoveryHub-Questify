@@ -8,6 +8,7 @@ import com.discoveryhub.holds.messaging.HoldEventFactory;
 import com.discoveryhub.holds.messaging.HoldKafkaPublisher;
 import com.discoveryhub.holds.repository.HoldCoverageRepository;
 import com.discoveryhub.holds.repository.HoldRepository;
+import com.discoveryhub.holds.client.CaseStatusClient;
 import com.discoveryhub.holds.scope.HoldScopeResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,13 +35,14 @@ class HoldCommandFactoryTest {
     @Mock HoldRepository holds;
     @Mock HoldCoverageRepository coverage;
     @Mock HoldKafkaPublisher publisher;
+    @Mock CaseStatusClient caseStatus;
 
     private HoldCommandFactory factory;
 
     @BeforeEach
     void setUp() {
         factory = new HoldCommandFactory(resolver, holds, coverage, publisher,
-                new HoldEventFactory(), new HoldAuditEvents());
+                new HoldEventFactory(), new HoldAuditEvents(), caseStatus);
     }
 
     private HoldEntity hold(String id) {

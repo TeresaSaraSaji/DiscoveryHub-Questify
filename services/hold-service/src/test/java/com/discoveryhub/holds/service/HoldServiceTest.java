@@ -121,16 +121,39 @@ class HoldServiceTest {
     }
 
     @Test
-    void heldMessageCountSumsActiveHoldCoverage() {
-        HoldEntity h1 = new HoldEntity("h1", "case-1", HoldStatus.ACTIVE, Instant.now());
-        HoldEntity h2 = new HoldEntity("h2", "case-1", HoldStatus.ACTIVE, Instant.now());
-        when(holds.findByCaseIdAndStatus("case-1", HoldStatus.ACTIVE)).thenReturn(List.of(h1, h2));
-        when(coverage.countByHoldId("h1")).thenReturn(5L);
-        when(coverage.countByHoldId("h2")).thenReturn(3L);
+    void releaseFailedHoldIsRejected() {
+        HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.FAILED, Instant.now());
+        when(holds.findById("hold-1")).thenReturn(Optional.of(hold));
+
+        assertThatThrownBy(() -> service.releaseHold("hold-1", null))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(409));
+        verify(holds, never()).save(any());
+    }
+
+    @Test
+    void heldMessageCountUsesDistinctCountAcrossActiveHolds() {
+        when(coverage.countDistinctMessageIdsByCaseIdAndActiveHolds("case-1")).thenReturn(8L);
 
         long count = service.heldMessageCountForCase("case-1");
 
         assertThat(count).isEqualTo(8);
+        verify(coverage).countDistinctMessageIdsByCaseIdAndActiveHolds("case-1");
+    }
+
+    @Test
+    void heldMessageCountDoesNotDoubleCountMessagesCoveredByOverlappingHolds() {
+        // Two active holds on the same case that both cover the same message must count it once,
+        // not twice — this is what the distinct query (verified by the repository) guarantees.
+        // Regression coverage for the previous per-hold-sum bug: verify the service delegates to
+        // the distinct-count query rather than summing per-hold counts itself.
+        when(coverage.countDistinctMessageIdsByCaseIdAndActiveHolds("case-1")).thenReturn(1L);
+
+        long count = service.heldMessageCountForCase("case-1");
+
+        assertThat(count).isEqualTo(1);
+        verify(coverage, never()).countByHoldId(any());
+        verify(holds, never()).findByCaseIdAndStatus(any(), any());
     }
 
     @Test
@@ -186,7 +209,7 @@ class HoldServiceTest {
 
     @Test
     void heldMessageCountForCaseWithNoActiveHoldsReturnsZero() {
-        when(holds.findByCaseIdAndStatus("case-1", HoldStatus.ACTIVE)).thenReturn(List.of());
+        when(coverage.countDistinctMessageIdsByCaseIdAndActiveHolds("case-1")).thenReturn(0L);
 
         long count = service.heldMessageCountForCase("case-1");
 

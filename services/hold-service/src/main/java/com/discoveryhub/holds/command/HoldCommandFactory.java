@@ -1,5 +1,6 @@
 package com.discoveryhub.holds.command;
 
+import com.discoveryhub.holds.client.CaseStatusClient;
 import com.discoveryhub.holds.domain.HoldEntity;
 import com.discoveryhub.holds.messaging.HoldAuditEvents;
 import com.discoveryhub.holds.messaging.HoldEventFactory;
@@ -28,22 +29,26 @@ public final class HoldCommandFactory {
     private final HoldKafkaPublisher publisher;
     private final HoldEventFactory eventFactory;
     private final HoldAuditEvents audit;
+    private final CaseStatusClient caseStatus;
 
     public HoldCommandFactory(HoldScopeResolver resolver, HoldRepository holds,
                               HoldCoverageRepository coverage, HoldKafkaPublisher publisher,
-                              HoldEventFactory eventFactory, HoldAuditEvents audit) {
+                              HoldEventFactory eventFactory, HoldAuditEvents audit,
+                              CaseStatusClient caseStatus) {
         this.resolver = resolver;
         this.holds = holds;
         this.coverage = coverage;
         this.publisher = publisher;
         this.eventFactory = eventFactory;
         this.audit = audit;
+        this.caseStatus = caseStatus;
     }
 
     public HoldCommand forMessage(HoldCommandMessage message, HoldEntity hold) {
         return switch (message.type()) {
             case HoldCommandMessage.TYPE_PLACE -> new PlaceHoldCommand(
-                    hold, message.correlationId(), resolver, holds, coverage, publisher, eventFactory, audit);
+                    hold, message.correlationId(), resolver, holds, coverage, publisher, eventFactory, audit,
+                    caseStatus);
             case HoldCommandMessage.TYPE_RELEASE -> new ReleaseHoldCommand(
                     hold, "released by command", message.correlationId(),
                     holds, coverage, publisher, eventFactory, audit);
