@@ -1,6 +1,7 @@
 package com.discoveryhub.archive.retention;
 
 import com.discoveryhub.archive.config.RetentionProperties;
+import com.discoveryhub.archive.domain.AttachmentEntity;
 import com.discoveryhub.archive.domain.DispositionItemEntity;
 import com.discoveryhub.archive.domain.DispositionOutcome;
 import com.discoveryhub.archive.domain.DispositionRunEntity;
@@ -12,6 +13,7 @@ import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.DispositionItemRepository;
 import com.discoveryhub.archive.repository.DispositionRunRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.MessageType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,11 +48,13 @@ public class DispositionService {
     private final HoldCheckClient holdCheck;
     private final ArchiveKafkaPublisher publisher;
     private final AuditEvents audit;
+    private final AttachmentStore storage;
 
     public DispositionService(MessageRepository messages, AttachmentRepository attachments,
                               DispositionRunRepository runs, DispositionItemRepository items,
                               RetentionProperties retention, HoldCheckClient holdCheck,
-                              ArchiveKafkaPublisher publisher, AuditEvents audit) {
+                              ArchiveKafkaPublisher publisher, AuditEvents audit,
+                              AttachmentStore storage) {
         this.messages = messages;
         this.attachments = attachments;
         this.runs = runs;
@@ -59,6 +63,7 @@ public class DispositionService {
         this.holdCheck = holdCheck;
         this.publisher = publisher;
         this.audit = audit;
+        this.storage = storage;
     }
 
     /** Run a full disposition sweep. Returns the persisted run record (already COMPLETED/FAILED). */
@@ -96,9 +101,15 @@ public class DispositionService {
                     publisher.publishAudit(audit.dispositionRefused(runId, m.getMessageId(), "held"));
                     continue;
                 }
+                // Rows first, blobs only once this sweep's transaction commits. The whole sweep is
+                // one transaction, so deleting bytes inline would mean a failure on a later message
+                // rolls back the rows for the earlier ones whose bytes are already destroyed —
+                // metadata claiming attachments that no longer exist, and no way back.
+                List<AttachmentEntity> atts = attachments.findByMessageIdOrderByOrdinalAsc(m.getMessageId());
                 attachments.deleteByMessageId(m.getMessageId());
                 messages.delete(m);
                 messages.flush();
+                storage.deleteAfterCommit(atts);
                 itemRecords.add(delete(runId, m));
                 deleted++;
                 publisher.publishAudit(audit.dispositionDeleted(runId, m.getMessageId(),

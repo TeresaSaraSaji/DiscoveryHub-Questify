@@ -5,6 +5,8 @@ import com.discoveryhub.archive.domain.MessageEntity;
 import com.discoveryhub.archive.domain.MessageMapper;
 import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.retention.MessageDeletionService;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.Message;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -12,6 +14,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,10 +25,14 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.List;
 
 /**
- * P2's read API. The frontend fetches message bodies and attachment bytes here (architecture
+ * P2's read + delete API. The frontend fetches message bodies and attachment bytes here (architecture
  * diagram: {@code ui -->|REST: message + attachment fetch| p2}); P5 fetches the same endpoints when
  * building an export package. Returned messages are the archived shape — attachment
  * {@code contentBase64} is dropped, only {@code sha256} is exposed (message-schema.md).
+ *
+ * <p>The {@code DELETE} endpoint is the demonstrable legal-hold guard (checkpoint 9): a held message
+ * is rejected with {@code 409 CONFLICT} rather than deleted. Held messages are also unmodifiable —
+ * there is no update endpoint by design, because an archived message is write-once.
  */
 @RestController
 @RequestMapping("/messages")
@@ -34,11 +41,17 @@ public class MessageController {
     private final MessageRepository messages;
     private final AttachmentRepository attachments;
     private final MessageMapper mapper;
+    private final AttachmentStore storage;
+    private final MessageDeletionService deletion;
 
-    public MessageController(MessageRepository messages, AttachmentRepository attachments, MessageMapper mapper) {
+    public MessageController(MessageRepository messages, AttachmentRepository attachments,
+                             MessageMapper mapper, AttachmentStore storage,
+                             MessageDeletionService deletion) {
         this.messages = messages;
         this.attachments = attachments;
         this.mapper = mapper;
+        this.storage = storage;
+        this.deletion = deletion;
     }
 
     @GetMapping("/{messageId}")
@@ -63,7 +76,9 @@ public class MessageController {
                 mapper.toArchived(e, attachments.findByMessageIdOrderByOrdinalAsc(e.getMessageId())));
     }
 
-    /** Raw attachment bytes for download / export packaging. Content type from the stored metadata. */
+    /** Raw attachment bytes for download / export packaging. Content type from the stored metadata;
+     *  the bytes themselves are streamed from local disk (falling back to the S3 offload copy if the
+     *  local file is unavailable). */
     @GetMapping("/{messageId}/attachments/{attachmentId}")
     public ResponseEntity<byte[]> getAttachmentBytes(@PathVariable("messageId") String messageId,
                                                      @PathVariable("attachmentId") String attachmentId) {
@@ -75,6 +90,27 @@ public class MessageController {
                         att.getContentType() != null ? att.getContentType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
                 .header("Content-Disposition", "attachment; filename=\"" + att.getFilename() + "\"")
                 .header("X-Sha256", att.getSha256())
-                .body(att.getContent());
+                .body(storage.load(att));
+    }
+
+    /**
+     * Delete one message. The legal-hold guard (checkpoint 9): a held message is rejected with
+     * {@code 409 CONFLICT} rather than deleted. The check is the same fail-closed model the
+     * disposition job uses — the local {@code on_hold} flag is the fast path, and the P4 hold check
+     * is authoritative; if P4 is unreachable the message is treated as held and the delete is
+     * refused. Never delete unverified data (FR-4.2).
+     *
+     * <p>The work itself lives in {@link MessageDeletionService} because it needs a transaction;
+     * this method only maps the outcome onto a status code.
+     */
+    @DeleteMapping("/{messageId}")
+    public ResponseEntity<Void> deleteMessage(@PathVariable("messageId") String messageId) {
+        return switch (deletion.delete(messageId)) {
+            case DELETED -> ResponseEntity.noContent().build();
+            case HELD -> throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "message is under legal hold: " + messageId);
+            case NOT_FOUND -> throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND, "message not found: " + messageId);
+        };
     }
 }

@@ -13,6 +13,7 @@ import com.discoveryhub.archive.repository.AttachmentRepository;
 import com.discoveryhub.archive.repository.DispositionItemRepository;
 import com.discoveryhub.archive.repository.DispositionRunRepository;
 import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.MessageType;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,6 +56,7 @@ class DispositionServiceTest {
     @Mock HoldCheckClient holdCheck;
     @Mock ArchiveKafkaPublisher publisher;
     @Mock AuditEvents audit;
+    @Mock AttachmentStore storage;
 
     private final MessageMapper mapper = new MessageMapper(new ObjectMapper());
 
@@ -66,7 +68,8 @@ class DispositionServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DispositionService(messages, attachments, runs, items, retention, holdCheck, publisher, audit);
+        service = new DispositionService(messages, attachments, runs, items, retention,
+                holdCheck, publisher, audit, storage);
     }
 
     @Test

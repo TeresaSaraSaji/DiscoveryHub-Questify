@@ -8,12 +8,14 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * P2 Archive. The system of record: consumes {@code messages.ingested}, writes PostgreSQL and
- * publishes {@code messages.archived}. Also owns retention and disposition, which is why
- * scheduling is enabled here and nowhere else.
+ * P2 Archive. The system of record: consumes {@code messages.ingested}, writes PostgreSQL (message
+ * metadata) and local-disk attachment bytes (with an optional S3 offload copy), and publishes
+ * {@code messages.archived}. Also owns retention and disposition, which is why scheduling is enabled
+ * here and nowhere else.
  *
- * <p>Storage is PostgreSQL only — message bodies and attachment bytes live in the database, not in
- * an object store. The {@code sha256} on each attachment is the chain-of-custody anchor that P5
+ * <p>Message metadata lives in PostgreSQL; attachment bytes live on local disk (the primary copy the
+ * read API serves), with an optional S3 offload copy for durable "after use" retrieval. The
+ * {@code sha256} on each attachment is the chain-of-custody anchor that the export verifier
  * re-computes when building an export manifest.
  */
 @EnableScheduling
