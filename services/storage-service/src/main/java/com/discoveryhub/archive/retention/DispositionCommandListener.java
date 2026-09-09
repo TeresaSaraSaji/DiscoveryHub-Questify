@@ -104,7 +104,12 @@ public class DispositionCommandListener {
      */
     DeleteReceipt apply(DeleteCommand command) {
         String messageId = command.messageId();
-        Optional<MessageEntity> found = messages.findById(messageId);
+        // Locked, not a plain findById. Without the row lock a concurrent HoldsEventListener can
+        // place a hold on this exact message between the check below returning "not held" and the
+        // delete that follows, and this transaction would never see it — a held message destroyed
+        // by a delete that was correct when it was decided. The lock makes that update wait until
+        // this transaction is done. Same reasoning, and the same window, as MessageDeletionService.
+        Optional<MessageEntity> found = messages.findByIdForUpdate(messageId);
         if (found.isEmpty()) {
             log.debug("delete command for unknown message {} (run {}): already gone",
                     messageId, command.runId());

@@ -66,7 +66,7 @@ class DispositionCommandListenerTest {
     @Test
     void deletesWhenNotHeld() {
         MessageEntity entity = message("EXCH-1", false);
-        when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.of(entity));
         when(holdCheck.isHeld("msg-1")).thenReturn(false);
         when(attachments.findByMessageIdOrderByOrdinalAsc("msg-1")).thenReturn(List.of());
 
@@ -88,7 +88,7 @@ class DispositionCommandListenerTest {
     void takesTheAttachmentBlobsWithTheMessage() {
         MessageEntity entity = message("EXCH-2", false);
         AttachmentEntity att = org.mockito.Mockito.mock(AttachmentEntity.class);
-        when(messages.findById("msg-2")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-2")).thenReturn(Optional.of(entity));
         when(holdCheck.isHeld("msg-2")).thenReturn(false);
         when(attachments.findByMessageIdOrderByOrdinalAsc("msg-2")).thenReturn(List.of(att));
 
@@ -101,7 +101,7 @@ class DispositionCommandListenerTest {
     @Test
     void leavesTheBlobsAloneWhenTheDeleteIsRefused() {
         MessageEntity entity = message("EXCH-3", true);
-        when(messages.findById("msg-3")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-3")).thenReturn(Optional.of(entity));
 
         listener.apply(command("msg-3"));
 
@@ -112,7 +112,7 @@ class DispositionCommandListenerTest {
     @Test
     void refusesWhenTheLocalHoldFlagIsSetWithoutAskingP4() {
         MessageEntity entity = message("EXCH-2", true);
-        when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.of(entity));
 
         DeleteReceipt receipt = listener.apply(command("msg-1"));
 
@@ -124,7 +124,7 @@ class DispositionCommandListenerTest {
     @Test
     void refusesWhenP4ReportsAHold() {
         MessageEntity entity = message("EXCH-3", false);
-        when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.of(entity));
         when(holdCheck.isHeld("msg-1")).thenReturn(true);
 
         DeleteReceipt receipt = listener.apply(command("msg-1"));
@@ -141,7 +141,7 @@ class DispositionCommandListenerTest {
     @Test
     void refusesWhenP4CannotBeReached() {
         MessageEntity entity = message("EXCH-4", false);
-        when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.of(entity));
         // HoldCheckClient converts an unreachable P4 into `true`; the listener must not second-guess it.
         when(holdCheck.isHeld("msg-1")).thenReturn(true);
 
@@ -155,7 +155,7 @@ class DispositionCommandListenerTest {
     /** A replayed command, or one racing another sweep. Not an error, and not a failed delete. */
     @Test
     void reportsNotFoundForAMessageThatIsAlreadyGone() {
-        when(messages.findById("msg-1")).thenReturn(Optional.empty());
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.empty());
 
         DeleteReceipt receipt = listener.apply(command("msg-1"));
 
@@ -166,7 +166,7 @@ class DispositionCommandListenerTest {
     @Test
     void reportsFailedWhenTheDeleteItselfThrows() {
         MessageEntity entity = message("EXCH-5", false);
-        when(messages.findById("msg-1")).thenReturn(Optional.of(entity));
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.of(entity));
         when(holdCheck.isHeld("msg-1")).thenReturn(false);
         org.mockito.Mockito.doThrow(new RuntimeException("connection reset"))
                 .when(messages).delete(entity);
@@ -188,7 +188,7 @@ class DispositionCommandListenerTest {
 
     @Test
     void publishesAReceiptForAWellFormedCommand() {
-        when(messages.findById("msg-1")).thenReturn(Optional.empty());
+        when(messages.findByIdForUpdate("msg-1")).thenReturn(Optional.empty());
 
         listener.onDeleteCommand(json.writeValueAsString(command("msg-1")));
 
