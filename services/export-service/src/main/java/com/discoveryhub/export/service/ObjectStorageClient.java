@@ -66,6 +66,23 @@ public class ObjectStorageClient {
         }
     }
 
+    /**
+     * Best-effort compensating removal of a package that {@link #promote} already copied into the
+     * packages bucket before some later step failed (the DB save that records COMPLETED, the
+     * completion audit publish). Without this, a job that ends up FAILED can still leave a fully
+     * downloadable package behind — the exact "a failed job never leaves anything for a
+     * downloader to find" invariant (FR-6.6) that split staging from packages in the first place.
+     * A no-op if the object never made it to packages (e.g. promote itself threw).
+     */
+    public void discardPackage(String key) {
+        try {
+            client.removeObject(RemoveObjectArgs.builder().bucket(props.packagesBucket()).object(key).build());
+        } catch (Exception ignored) {
+            // Best-effort, same as discardStaged: nothing downstream depends on this succeeding,
+            // and an object that was never promoted has nothing to remove anyway.
+        }
+    }
+
     public byte[] fetchPackage(String key) {
         try (InputStream in = client.getObject(GetObjectArgs.builder()
                 .bucket(props.packagesBucket()).object(key).build())) {
