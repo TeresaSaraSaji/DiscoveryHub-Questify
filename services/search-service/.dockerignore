@@ -1,0 +1,12 @@
+# Build context is the repository root, so without this every image build ships the .git history
+# and every target/ directory to the daemon.
+target/
+**/target/
+.git/
+.idea/
+*.iml
+.DS_Store
+
+# The fixture is a test resource. Nothing inside a service image reads it, and it is the single
+# largest thing in the repo.
+tools/corpus-generator/fixtures/
