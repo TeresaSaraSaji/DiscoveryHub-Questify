@@ -21,6 +21,10 @@ public final class Topics {
     /** P4 to P3 and P2. A custodian or message came under hold, or came off it. */
     public static final String HOLDS_EVENTS = "holds.events";
 
+    /** Case-service to hold-service. Case lifecycle: created, transitioned, closed. The
+     *  hold-service releases a case's holds when it sees a transition to CLOSED (FR-2.4, FR-4.5). */
+    public static final String CASES_EVENTS = "cases.events";
+
     /** P5 to its own workers. One export job to build. */
     public static final String EXPORT_JOBS = "export.jobs";
 
