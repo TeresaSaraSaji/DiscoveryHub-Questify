@@ -217,9 +217,42 @@ export class SearchPage {
       });
   }
 
-  /** Elasticsearch wraps matched terms in `<em>`; show the text without rendering the markup. */
-  protected plain(snippet: string): string {
-    return snippet.replace(/<\/?em>/g, '');
+  /**
+   * Split a snippet into plain and matched runs, so the template can mark up the matches itself.
+   *
+   * FR-3.3 asks for highlighted matching terms, and Elasticsearch already tells us where they are
+   * by wrapping them in `<em>`. But what it returns is a fragment of a message body — user-supplied
+   * text that arrived by email — so it must never be bound through `innerHTML`. That would be a
+   * stored-XSS route from an ingested message straight into every investigator's browser. Angular's
+   * sanitizer would probably strip a payload, but "probably" is not a security control, and the
+   * escape hatch that makes such a binding render at all (`bypassSecurityTrustHtml`) is precisely
+   * the wrong tool here.
+   *
+   * So the markers are parsed out here and each run is rendered as a text node, with the emphasis
+   * applied by an element the template owns. Same result on screen; no markup from the corpus ever
+   * reaches the DOM as markup.
+   */
+  protected segments(snippet: string): { text: string; match: boolean }[] {
+    const out: { text: string; match: boolean }[] = [];
+    let rest = snippet;
+    let match = false;
+
+    while (rest.length > 0) {
+      // A snippet is a window cut out of a longer body, so Elasticsearch can hand back an opening
+      // <em> whose closing tag fell outside the fragment. Looking only for the tag that would end
+      // the current run keeps that case sane instead of losing the tail.
+      const marker = match ? '</em>' : '<em>';
+      const at = rest.indexOf(marker);
+      if (at < 0) {
+        out.push({ text: rest, match });
+        break;
+      }
+      out.push({ text: rest.slice(0, at), match });
+      rest = rest.slice(at + marker.length);
+      match = !match;
+    }
+
+    return out.filter((segment) => segment.text.length > 0);
   }
 }
 

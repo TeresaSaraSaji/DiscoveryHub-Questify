@@ -862,3 +862,12 @@ select:focus,
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+
+/* Matched terms in a search snippet. Elasticsearch says where they are; the markup is ours, so
+   nothing from the corpus is ever rendered as HTML. */
+mark {
+  padding: 0 0.1em;
+  color: inherit;
+  background: #fef08a;
+  border-radius: 2px;
+}

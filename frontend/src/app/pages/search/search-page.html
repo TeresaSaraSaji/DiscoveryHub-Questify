@@ -149,7 +149,15 @@
               <td class="cell--subject">
                 <strong>{{ result.subject || '(no subject)' }}</strong>
                 @if (result.snippet) {
-                  <div class="dim snippet">{{ plain(result.snippet) }}</div>
+                  <div class="dim snippet">
+                    @for (segment of segments(result.snippet); track $index) {
+                      @if (segment.match) {
+                        <mark>{{ segment.text }}</mark>
+                      } @else {
+                        {{ segment.text }}
+                      }
+                    }
+                  </div>
                 }
                 <div class="mono dim">{{ result.messageId }}</div>
               </td>

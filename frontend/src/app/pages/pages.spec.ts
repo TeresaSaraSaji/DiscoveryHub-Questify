@@ -214,10 +214,71 @@ describe('search asks for nothing until it is asked', () => {
     const rendered = text(fixture);
     expect(rendered).toContain('Search results (1)');
     expect(rendered).toContain('Project Atlas update');
-    // The `<em>` markup Elasticsearch adds is shown as text, never rendered as HTML.
-    expect(rendered).toContain('the project atlas rollout');
     expect(rendered).toContain('On hold');
     expect(rendered).toContain('Answered in 12 ms');
+
+    // FR-3.3: the matched terms are highlighted, using our own <mark>, and the snippet's own text
+    // survives intact around them.
+    const host = fixture.nativeElement as HTMLElement;
+    expect([...host.querySelectorAll('mark')].map((m) => m.textContent?.trim())).toEqual([
+      'project atlas',
+    ]);
+    expect(rendered).toContain('the');
+    expect(rendered).toContain('rollout');
+    // Elasticsearch's <em> markers are consumed, not printed.
+    expect(rendered).not.toContain('<em>');
+  });
+
+  /**
+   * A snippet is a fragment of an ingested email. If it were bound through innerHTML, anyone who
+   * could get a message into the corpus could run script in an investigator's browser.
+   */
+  it('renders a snippet containing markup as text, never as HTML', async () => {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('payload');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [
+        {
+          messageId: 'msg-x',
+          externalId: null,
+          custodianId: null,
+          from: null,
+          to: null,
+          subject: 'harmless',
+          sentAt: null,
+          snippet: 'before <em>payload</em> <img src=x onerror=alert(1)> after',
+          highlights: null,
+          score: 1,
+          onHold: false,
+          attachmentCount: 0,
+          attachmentFilenames: null,
+        },
+      ],
+      total: 1,
+      page: 0,
+      size: 20,
+      tookMs: 3,
+    });
+    await settleAsync(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    // The tag from the message body is text on the page and not an element in the DOM.
+    expect(host.querySelector('img')).toBeNull();
+    expect(host.textContent).toContain('<img src=x onerror=alert(1)>');
+    // The genuine highlight still works.
+    expect(host.querySelector('mark')?.textContent?.trim()).toBe('payload');
   });
 
   it('reports an empty result as an answer, not a failure', async () => {
