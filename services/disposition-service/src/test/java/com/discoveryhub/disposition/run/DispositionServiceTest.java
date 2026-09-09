@@ -466,6 +466,28 @@ class DispositionServiceTest {
     }
 
     @Test
+    void aFailureAfterSomeItemsAreDecidedStillLeavesTheirLedgerRowsPersisted() {
+        // C1 regression: items used to be accumulated in memory and saveAll'd once at the very
+        // end, so an exception partway through the loop discarded every decision already made —
+        // including ones for messages already deleted from P2's database. Saving each item as it
+        // is decided means those rows survive a failure that happens on a later candidate.
+        ArchiveCandidate first = candidate("EXCH-30", false);
+        ArchiveCandidate second = candidate("EXCH-31", false);
+        when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(first, second));
+        when(holdCheck.check(first.messageId())).thenReturn(HoldCheckClient.Verdict.NOT_HELD);
+        when(deleter.delete(anyString(), eq(first))).thenReturn(MessageDeleter.DeleteResult.DELETED);
+        when(holdCheck.check(second.messageId())).thenThrow(new IllegalStateException("P4 unreachable"));
+
+        DispositionRunEntity run = service.run(TriggerSource.SCHEDULED, false, "scheduler");
+
+        assertThat(run.getStatus()).isEqualTo(DispositionStatus.FAILED);
+        // The first candidate's ledger row was saved before the second candidate blew up.
+        assertThat(savedItems()).singleElement()
+                .extracting(DispositionItemEntity::getOutcome)
+                .isEqualTo(DispositionOutcome.DELETED);
+    }
+
+    @Test
     void refusesToStartASecondConcurrentRun() throws Exception {
         ArchiveCandidate candidate = candidate("EXCH-10", false);
         when(archive.findCandidates(any(), anyInt())).thenReturn(List.of(candidate));
@@ -499,10 +521,14 @@ class DispositionServiceTest {
         return new ActiveHold(holdId, caseId, "Matter " + caseId, custodians, from, to, List.of());
     }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Every ledger row saved so far, in save order. Items are saved one at a time as each
+     * decision is made (not batched into one {@code saveAll} at the end) so that a crash mid-sweep
+     * loses at most the item being decided when it happened, not the whole run's ledger.
+     */
     private List<DispositionItemEntity> savedItems() {
-        ArgumentCaptor<List<DispositionItemEntity>> captor = ArgumentCaptor.forClass(List.class);
-        verify(items).saveAll(captor.capture());
-        return captor.getValue();
+        ArgumentCaptor<DispositionItemEntity> captor = ArgumentCaptor.forClass(DispositionItemEntity.class);
+        verify(items, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        return captor.getAllValues();
     }
 }

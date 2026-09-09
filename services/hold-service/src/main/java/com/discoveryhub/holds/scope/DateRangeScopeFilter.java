@@ -9,8 +9,10 @@ import java.time.Instant;
 /**
  * Date-range narrowing (FR-4.1). Either bound may be open ({@code null}); a message is in range iff
  * its {@code sentAt} is not before {@code dateFrom} (when present) and not after {@code dateTo}
- * (when present). Half-open bounds are deliberate: a {@code dateTo} of midnight does not silently
- * drop messages sent that day at 09:00.
+ * (when present) — both bounds are inclusive (closed). A {@code dateTo} of midnight therefore
+ * <i>does</i> exclude messages sent later that same day; callers who want to cover a whole day
+ * should set {@code dateTo} to that day's last instant (e.g. {@code 23:59:59.999999999Z}), not to
+ * midnight.
  */
 @Component
 public final class DateRangeScopeFilter implements ScopeFilter {

@@ -6,6 +6,7 @@ import com.discoveryhub.search.model.SearchRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.data.elasticsearch.core.query.Query;
 
@@ -95,6 +96,23 @@ class SearchQueryBuilderTest {
     }
 
     @Test
+    void fromFilterIsLowerCasedForCaseInsensitiveMatchingAgainstTheKeywordField() {
+        // M4 regression: `from` is indexed lower-cased (CommunicationDocumentMapper); the filter
+        // must lower-case its value too, or "Alice@Firm.Test" would never match the stored
+        // "alice@firm.test" against a case-sensitive Keyword field.
+        SearchRequest request = new SearchRequest(
+                null, List.of(), null, "Alice@Firm.Test", null, null, List.of(), null, null, 0, 20, null, null);
+
+        Query query = builder.build(request, Sort.unsorted());
+        Criteria from = ((CriteriaQuery) query).getCriteria().getCriteriaChain().stream()
+                .filter(c -> "from".equals(c.getField().getName()))
+                .findFirst().orElseThrow();
+
+        assertThat(from.getQueryCriteriaEntries()).anySatisfy(entry ->
+                assertThat(entry.getValue()).isEqualTo("alice@firm.test"));
+    }
+
+    @Test
     void buildsWithDateRangeFilterOnly() {
         SearchRequest request = new SearchRequest(
                 null, List.of(), null, null,
@@ -103,6 +121,30 @@ class SearchQueryBuilderTest {
 
         assertThatCode(() -> builder.build(request, Sort.unsorted()))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    void dateRangeBoundsAreInclusiveNotExclusive() {
+        // M8 regression: a message sent at exactly sentBefore (or sentAfter) must match, matching
+        // the inclusive convention DateRangeScopeFilter and the disposition eligibility query use.
+        Instant after = Instant.parse("2024-01-01T00:00:00Z");
+        Instant before = Instant.parse("2024-12-31T00:00:00Z");
+        SearchRequest request = new SearchRequest(
+                null, List.of(), null, null, after, before, List.of(), null, null, 0, 20, null, null);
+
+        Query query = builder.build(request, Sort.unsorted());
+        Criteria sentAt = ((CriteriaQuery) query).getCriteria().getCriteriaChain().stream()
+                .filter(c -> "sentAt".equals(c.getField().getName()))
+                .findFirst().orElseThrow();
+
+        assertThat(sentAt.getQueryCriteriaEntries()).anySatisfy(entry -> {
+            assertThat(entry.getKey()).isEqualTo(Criteria.OperationKey.GREATER_EQUAL);
+            assertThat(entry.getValue()).isEqualTo(after);
+        });
+        assertThat(sentAt.getQueryCriteriaEntries()).anySatisfy(entry -> {
+            assertThat(entry.getKey()).isEqualTo(Criteria.OperationKey.LESS_EQUAL);
+            assertThat(entry.getValue()).isEqualTo(before);
+        });
     }
 
     @Test

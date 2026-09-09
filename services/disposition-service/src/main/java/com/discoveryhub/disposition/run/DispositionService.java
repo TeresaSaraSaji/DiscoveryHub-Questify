@@ -25,7 +25,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -246,10 +245,15 @@ public class DispositionService {
             progress.started(runId, dryRun, candidates.size(),
                     holdContext.activeHoldCount(), holdContext.available());
 
-            List<DispositionItemEntity> ledger = new ArrayList<>(candidates.size());
+            // Saved one item at a time, immediately after its decision, not accumulated and
+            // flushed once at the end: this method is deliberately not @Transactional (see the
+            // class javadoc) so that a crash or an exception partway through the loop leaves a
+            // ledger of every decision made so far, matching exactly what has already happened in
+            // P2's database. Batching the saveAll to the end defeated that guarantee — a message
+            // could be deleted and then the process die before its ledger row was ever written.
             for (ArchiveCandidate candidate : candidates) {
                 Decision decision = decide(runId, candidate, holdContext, dryRun);
-                ledger.add(new DispositionItemEntity(runId, candidate, decision.outcome(),
+                items.save(new DispositionItemEntity(runId, candidate, decision.outcome(),
                         decision.reason(), decision.blockingHoldId(), decision.blockingCaseId()));
                 switch (decision.outcome()) {
                     case DELETED, DELETE_REQUESTED -> deleted++;
@@ -259,7 +263,6 @@ public class DispositionService {
                 }
                 progress.advanced(decision.outcome());
             }
-            items.saveAll(ledger);
 
             run.setStatus(DispositionStatus.COMPLETED);
             run.setFinishedAt(Instant.now());

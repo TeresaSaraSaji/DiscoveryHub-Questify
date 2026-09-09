@@ -2,6 +2,7 @@ package com.discoveryhub.holds.service;
 
 import com.discoveryhub.contracts.HoldCheckResponse;
 import com.discoveryhub.holds.messaging.HoldAuditEvents;
+import com.discoveryhub.holds.messaging.HoldKafkaPublisher;
 import com.discoveryhub.holds.repository.HoldCoverageRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,16 +24,18 @@ public class HoldCheckService {
 
     private final HoldCoverageRepository coverage;
     private final HoldAuditEvents audit;
+    private final HoldKafkaPublisher publisher;
 
-    public HoldCheckService(HoldCoverageRepository coverage, HoldAuditEvents audit) {
+    public HoldCheckService(HoldCoverageRepository coverage, HoldAuditEvents audit, HoldKafkaPublisher publisher) {
         this.coverage = coverage;
         this.audit = audit;
+        this.publisher = publisher;
     }
 
     @Transactional(readOnly = true)
     public HoldCheckResponse check(String messageId) {
         boolean held = coverage.isCoveredByActiveHold(messageId);
-        audit.holdCheckAnswered(messageId, held);
+        publisher.publishAudit(audit.holdCheckAnswered(messageId, held));
         return new HoldCheckResponse(held);
     }
 }

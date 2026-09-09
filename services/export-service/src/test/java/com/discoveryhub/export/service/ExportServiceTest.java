@@ -83,7 +83,7 @@ class ExportServiceTest {
     }
 
     @Test
-    void processMarksTheJobFailedAndDiscardsStagingOnAnyError() throws Exception {
+    void processMarksTheJobFailedAndDiscardsStagingWhenTheFailureIsBeforeStaging() throws Exception {
         ExportJobEntity job = queuedJob("job-2", new ExportRequest(null, List.of("m-1"), null, null, null));
         when(jobs.findById("job-2")).thenReturn(Optional.of(job));
         when(packageBuilder.build(anyString(), any(), any())).thenThrow(new IllegalStateException("archive unreachable"));
@@ -94,7 +94,55 @@ class ExportServiceTest {
         assertThat(job.getError()).contains("archive unreachable");
         verify(storage, never()).promote(anyString());
         verify(storage).discardStaged("job-2.zip");
+        // Nothing was ever promoted to the packages bucket, so there is nothing to discard there.
+        verify(storage, never()).discardPackage(anyString());
         verify(publisher).publishAudit(any());
+    }
+
+    @Test
+    void processDiscardsTheEnBucketPackageWhenPromoteItselfThrows() throws Exception {
+        // M1 regression: promote() is copy-then-remove-staging; a throw from promote() can still
+        // mean the copy into the packages bucket already succeeded. The failure path must attempt
+        // to remove it there too, not just from staging.
+        ExportJobEntity job = queuedJob("job-6", new ExportRequest(null, List.of("m-1"), null, null, null));
+        when(jobs.findById("job-6")).thenReturn(Optional.of(job));
+        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1);
+        when(packageBuilder.build(eq("job-6"), any(), any())).thenReturn(result);
+        org.mockito.Mockito.doThrow(new IllegalStateException("minio unreachable"))
+                .when(storage).promote("job-6.zip");
+
+        service.process("job-6");
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.FAILED);
+        verify(storage).discardStaged("job-6.zip");
+        verify(storage).discardPackage("job-6.zip");
+    }
+
+    @Test
+    void processDiscardsTheBucketPackageWhenTheDbSaveAfterPromoteFails() throws Exception {
+        // M1 regression: promote() itself can succeed and a later step (persisting COMPLETED,
+        // publishing the completion audit) can still fail — the package must not be left behind
+        // in the packages bucket for a job that ends up FAILED.
+        ExportJobEntity job = queuedJob("job-7", new ExportRequest(null, List.of("m-1"), null, null, null));
+        when(jobs.findById("job-7")).thenReturn(Optional.of(job));
+        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1);
+        when(packageBuilder.build(eq("job-7"), any(), any())).thenReturn(result);
+        // The first save persists RUNNING (must succeed so process() reaches promote); the second
+        // save persists COMPLETED and is where the failure happens; the third save (in the catch
+        // block, persisting FAILED) must succeed so the test can observe the final state.
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(jobs.save(job)).thenAnswer(inv -> {
+            if (calls.getAndIncrement() == 1) {
+                throw new IllegalStateException("db unreachable");
+            }
+            return job;
+        });
+
+        service.process("job-7");
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.FAILED);
+        verify(storage).promote("job-7.zip");
+        verify(storage).discardPackage("job-7.zip");
     }
 
     @Test

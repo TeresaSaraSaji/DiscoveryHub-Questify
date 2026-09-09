@@ -101,6 +101,12 @@ public class ExportService {
         jobs.save(job);
 
         String key = jobId + ".zip";
+        // Set right before the irreversible step, not after it returns: promote() copies to the
+        // packages bucket and then removes the staging copy, so even a promote() that throws
+        // partway through (copy succeeded, remove failed) can have already made the package
+        // downloadable. Any failure from this point on must also try to remove it from packages —
+        // otherwise a FAILED job can still leave a fully downloadable package behind (FR-6.6).
+        boolean promotionAttempted = false;
         try {
             ExportRequest request = readScope(job.getRequestedScope());
             List<String> messageIds = request.isExplicit()
@@ -112,6 +118,7 @@ public class ExportService {
 
             PackageResult result = packageBuilder.build(jobId, job.getCaseId(), messageIds);
             storage.stage(key, result.zipBytes());
+            promotionAttempted = true;
             storage.promote(key);
 
             job.setStatus(ExportStatus.COMPLETED);
@@ -127,6 +134,9 @@ public class ExportService {
         } catch (Exception ex) {
             log.error("export job {} failed", jobId, ex);
             storage.discardStaged(key);
+            if (promotionAttempted) {
+                storage.discardPackage(key);
+            }
             job.setStatus(ExportStatus.FAILED);
             job.setFinishedAt(Instant.now());
             job.setError(truncate(ex.toString()));

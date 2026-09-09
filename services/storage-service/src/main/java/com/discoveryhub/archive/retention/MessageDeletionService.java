@@ -55,10 +55,17 @@ public class MessageDeletionService {
      * {@link AttachmentStore#deleteAfterCommit} so they are only destroyed once the row removal is
      * durable. Doing it the other way round means a rollback leaves live rows pointing at bytes
      * that no longer exist.
+     *
+     * <p>The row is loaded with {@link MessageRepository#findByIdForUpdate}, not plain
+     * {@code findById}: without the lock, a concurrent {@code HoldsEventListener} could place a
+     * hold on this exact message between the P4 check below returning "not held" and the delete
+     * that follows it, and this transaction would never see it. The lock makes that update wait
+     * until this transaction is done — by which point the row is either gone or the hold applies
+     * to a row that no longer exists, but never both "delete proceeded" and "hold landed unseen".
      */
     @Transactional
     public Outcome delete(String messageId) {
-        Optional<MessageEntity> found = messages.findById(messageId);
+        Optional<MessageEntity> found = messages.findByIdForUpdate(messageId);
         if (found.isEmpty()) {
             return Outcome.NOT_FOUND;
         }

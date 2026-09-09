@@ -49,7 +49,7 @@ class MessageDeletionServiceTest {
 
     @Test
     void unknownMessageIsNotFoundAndTouchesNothing() {
-        when(messages.findById("nope")).thenReturn(Optional.empty());
+        when(messages.findByIdForUpdate("nope")).thenReturn(Optional.empty());
 
         assertThat(service.delete("nope")).isEqualTo(MessageDeletionService.Outcome.NOT_FOUND);
         verifyNoInteractions(storage);
@@ -60,7 +60,7 @@ class MessageDeletionServiceTest {
     void refusesAMessageHeldByTheLocalFlagWithoutEvenCallingP4() {
         MessageEntity held = mock(MessageEntity.class);
         when(held.isOnHold()).thenReturn(true);
-        when(messages.findById("m-1")).thenReturn(Optional.of(held));
+        when(messages.findByIdForUpdate("m-1")).thenReturn(Optional.of(held));
 
         assertThat(service.delete("m-1")).isEqualTo(MessageDeletionService.Outcome.HELD);
         // The local flag is the fast path: no need to ask P4 to know the answer is no.
@@ -73,7 +73,7 @@ class MessageDeletionServiceTest {
     void refusesAMessageP4SaysIsHeldEvenWhenTheLocalFlagIsClear() {
         MessageEntity notHeldLocally = mock(MessageEntity.class);
         when(notHeldLocally.isOnHold()).thenReturn(false);
-        when(messages.findById("m-2")).thenReturn(Optional.of(notHeldLocally));
+        when(messages.findByIdForUpdate("m-2")).thenReturn(Optional.of(notHeldLocally));
         when(holdCheck.isHeld("m-2")).thenReturn(true);
 
         assertThat(service.delete("m-2")).isEqualTo(MessageDeletionService.Outcome.HELD);
@@ -85,7 +85,7 @@ class MessageDeletionServiceTest {
     void failsClosedWhenP4IsUnreachable() {
         MessageEntity notHeldLocally = mock(MessageEntity.class);
         when(notHeldLocally.isOnHold()).thenReturn(false);
-        when(messages.findById("m-3")).thenReturn(Optional.of(notHeldLocally));
+        when(messages.findByIdForUpdate("m-3")).thenReturn(Optional.of(notHeldLocally));
         // HoldCheckClient reports held when it cannot reach P4, so the delete must be refused.
         when(holdCheck.isHeld("m-3")).thenReturn(true);
 
@@ -98,7 +98,7 @@ class MessageDeletionServiceTest {
         MessageEntity notHeld = mock(MessageEntity.class);
         AttachmentEntity att = mock(AttachmentEntity.class);
         when(notHeld.isOnHold()).thenReturn(false);
-        when(messages.findById("m-4")).thenReturn(Optional.of(notHeld));
+        when(messages.findByIdForUpdate("m-4")).thenReturn(Optional.of(notHeld));
         when(holdCheck.isHeld("m-4")).thenReturn(false);
         when(attachments.findByMessageIdOrderByOrdinalAsc("m-4")).thenReturn(List.of(att));
 
@@ -114,7 +114,7 @@ class MessageDeletionServiceTest {
         MessageEntity notHeld = mock(MessageEntity.class);
         AttachmentEntity att = mock(AttachmentEntity.class);
         when(notHeld.isOnHold()).thenReturn(false);
-        when(messages.findById("m-5")).thenReturn(Optional.of(notHeld));
+        when(messages.findByIdForUpdate("m-5")).thenReturn(Optional.of(notHeld));
         when(holdCheck.isHeld("m-5")).thenReturn(false);
         when(attachments.findByMessageIdOrderByOrdinalAsc("m-5")).thenReturn(List.of(att));
 
@@ -130,7 +130,7 @@ class MessageDeletionServiceTest {
     void neverDeletesBlobsInlineOnAnyPath() {
         MessageEntity notHeld = mock(MessageEntity.class);
         when(notHeld.isOnHold()).thenReturn(false);
-        when(messages.findById("m-6")).thenReturn(Optional.of(notHeld));
+        when(messages.findByIdForUpdate("m-6")).thenReturn(Optional.of(notHeld));
         when(holdCheck.isHeld("m-6")).thenReturn(false);
         when(attachments.findByMessageIdOrderByOrdinalAsc("m-6")).thenReturn(List.of());
 

@@ -23,6 +23,14 @@ import java.util.List;
  * <p>Overlapping holds (FR-4.5) are handled by counting: another active hold's coverage for the
  * same messageId keeps answering "held" because that hold is still ACTIVE. Releasing this hold
  * only removes <i>this</i> hold's protection.
+ *
+ * <p>Idempotency: a {@code RELEASE} redelivered for a hold that is already {@code RELEASED} is a
+ * no-op — re-running it would overwrite {@code releasedAt} with a new timestamp (destroying the
+ * original release-time fact) and re-publish a {@code released} event per covered message. A
+ * {@code RELEASE} targeting a hold that is still {@code RESOLVING} is refused rather than
+ * silently applied: the hold has no coverage yet, so releasing it now would discard the
+ * in-flight placement instead of waiting for it to resolve — the unsafe direction, mirroring the
+ * guard {@code HoldService.releaseHold} already applies on the manual API path.
  */
 public final class ReleaseHoldCommand implements HoldCommand {
 
@@ -63,6 +71,16 @@ public final class ReleaseHoldCommand implements HoldCommand {
 
     @Override
     public void execute() {
+        if (hold.getStatus() == HoldStatus.RELEASED) {
+            log.info("hold {} RELEASE command redelivered but hold is already released; ignoring",
+                    hold.getHoldId());
+            return;
+        }
+        if (hold.getStatus() == HoldStatus.RESOLVING) {
+            log.warn("hold {} RELEASE command refused: hold is still resolving, has no coverage yet",
+                    hold.getHoldId());
+            return;
+        }
         List<String> messageIds = coverage.findMessageIdsByHoldId(hold.getHoldId());
         hold.setStatus(HoldStatus.RELEASED);
         hold.setReleasedAt(Instant.now());
