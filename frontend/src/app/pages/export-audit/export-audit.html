@@ -1,0 +1,410 @@
+<header class="page__head">
+  <div>
+    <h1>Export &amp; Audit</h1>
+    <p class="page__lede">
+      Defensible export packages, and the append-only chain of custody that makes them defensible.
+      FR-6, FR-7.
+    </p>
+  </div>
+</header>
+
+<div class="alert alert--info">
+  <strong>P5 is not written yet.</strong>
+  The export and audit panels below call <code>http://localhost:8085</code> and will keep failing
+  until it exists — deliberately, rather than showing data nobody produced. The event shape is fixed
+  by <code>contracts/AuditEvent.java</code>; the paths are this page's proposal, documented in
+  <code>src/app/core/audit.api.ts</code>. Run <code>npm run mock</code> to serve the contract
+  locally. The last panel on this page works today.
+</div>
+
+<div class="grid grid--2">
+  <!-- FR-6 -->
+  <app-panel
+    heading="Request an export"
+    hint="POST /exports — asynchronous, because packaging a case is not request-sized work"
+    service="p5"
+  >
+    <div class="form">
+      <label class="field">
+        <span>Case</span>
+        <input
+          type="text"
+          class="mono"
+          [ngModel]="exportCaseId()"
+          (ngModelChange)="exportCaseId.set($event)"
+          name="exportCaseId"
+          placeholder="case-1"
+          autocomplete="off"
+        />
+      </label>
+
+      <label class="field">
+        <span>Format</span>
+        <select [value]="exportFormat()" (change)="exportFormat.set($any($event.target).value)">
+          @for (format of formats; track format) {
+            <option [value]="format">{{ format }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Requested by</span>
+        <input
+          type="text"
+          [ngModel]="requestedBy()"
+          (ngModelChange)="requestedBy.set($event)"
+          name="requestedBy"
+          autocomplete="off"
+        />
+      </label>
+
+      <label class="check">
+        <input
+          type="checkbox"
+          [ngModel]="includeAttachments()"
+          (ngModelChange)="includeAttachments.set($event)"
+          name="includeAttachments"
+        />
+        <span>Include attachment bytes</span>
+      </label>
+    </div>
+
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="requestExport()"
+        [disabled]="requesting() || !exportCaseId().trim()"
+      >
+        {{ requesting() ? 'Requesting…' : 'Request package' }}
+      </button>
+    </div>
+
+    <app-alert [failure]="requestFailure()" [success]="requestOk()" />
+
+    @if (tracked(); as job) {
+      <div class="progress">
+        <div class="progress__head">
+          <span class="mono">{{ job.exportId }}</span>
+          <span
+            class="tag"
+            [class.tag--ok]="job.status === 'COMPLETED'"
+            [class.tag--danger]="job.status === 'FAILED'"
+            [class.tag--busy]="job.status === 'QUEUED' || job.status === 'RUNNING'"
+          >
+            {{ job.status }}
+          </span>
+          <span class="dim">{{ job.requestedAt | since: 'relative' }}</span>
+        </div>
+        <dl class="pairs">
+          <dt>messages</dt>
+          <dd>{{ job.messageCount | number }}</dd>
+          @if (job.sha256) {
+            <dt>manifest sha256</dt>
+            <dd class="mono break">{{ job.sha256 }}</dd>
+          }
+          @if (job.error) {
+            <dt>error</dt>
+            <dd>{{ job.error }}</dd>
+          }
+        </dl>
+        @if (job.status === 'COMPLETED') {
+          <a class="btn btn--small" [href]="downloadUrl(job)" download>Download package</a>
+        }
+      </div>
+    }
+  </app-panel>
+
+  <app-panel
+    heading="Export history"
+    hint="GET /exports — every package ever produced, with its digest"
+    service="p5"
+    [source]="exports"
+  >
+    @if (exportRows().content.length === 0 && !exports.isLoading()) {
+      <p class="empty">No export has been requested.</p>
+    }
+    <table class="table table--rows">
+      <thead>
+        <tr>
+          <th>Requested</th>
+          <th>Case</th>
+          <th>Format</th>
+          <th class="num">Messages</th>
+          <th>Status</th>
+          <th>Digest</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (job of exportRows().content; track job.exportId) {
+          <tr>
+            <td class="dim">{{ job.requestedAt | since }}</td>
+            <td class="mono">{{ job.caseId }}</td>
+            <td>
+              <span class="tag">{{ job.format }}</span>
+            </td>
+            <td class="num">{{ job.messageCount | number }}</td>
+            <td>
+              <span
+                class="tag"
+                [class.tag--ok]="job.status === 'COMPLETED'"
+                [class.tag--danger]="job.status === 'FAILED'"
+                [class.tag--busy]="job.status === 'QUEUED' || job.status === 'RUNNING'"
+              >
+                {{ job.status }}
+              </span>
+            </td>
+            <td class="mono dim">
+              @if (job.sha256) {
+                {{ job.sha256.slice(0, 12) }}…
+              } @else {
+                —
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <app-paginator
+      [page]="exportRows()"
+      [busy]="exports.isLoading()"
+      (go)="exportsPage.set($event)"
+    />
+  </app-panel>
+</div>
+
+<!-- FR-7 -->
+<app-panel
+  heading="Audit trail"
+  hint="GET /audit/events — append-only; every service emits its own"
+  service="p5"
+  [source]="events"
+>
+  <div class="controls controls--wrap">
+    <label class="field field--inline">
+      <span>Service</span>
+      <input
+        type="text"
+        class="mono input--narrow"
+        [ngModel]="filter().service"
+        (ngModelChange)="patchFilter({ service: $event })"
+        name="auditService"
+        placeholder="P2.2"
+        autocomplete="off"
+      />
+    </label>
+    <label class="field field--inline">
+      <span>Action</span>
+      <input
+        type="text"
+        class="mono"
+        [ngModel]="filter().action"
+        (ngModelChange)="patchFilter({ action: $event })"
+        name="auditAction"
+        placeholder="disposition.refused"
+        autocomplete="off"
+      />
+    </label>
+    <label class="field field--inline">
+      <span>Outcome</span>
+      <select
+        [value]="filter().outcome"
+        (change)="patchFilter({ outcome: $any($event.target).value })"
+      >
+        <option value="">any</option>
+        @for (outcome of auditOutcomes; track outcome) {
+          <option [value]="outcome">{{ outcome }}</option>
+        }
+      </select>
+    </label>
+    <label class="field field--inline">
+      <span>Subject</span>
+      <input
+        type="text"
+        class="mono"
+        [ngModel]="filter().subjectId"
+        (ngModelChange)="patchFilter({ subjectId: $event })"
+        name="auditSubject"
+        placeholder="messageId"
+        autocomplete="off"
+      />
+    </label>
+    <button type="button" class="btn btn--ghost btn--small" (click)="clearFilter()">Clear</button>
+    <button
+      type="button"
+      class="btn btn--ghost btn--small"
+      (click)="patchFilter({ outcome: 'REFUSED' })"
+      title="A hold blocking a delete is recorded here"
+    >
+      Show refusals only
+    </button>
+  </div>
+
+  @if (eventRows().content.length === 0 && !events.isLoading()) {
+    <p class="empty">No audit events match.</p>
+  }
+
+  <table class="table table--rows">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Service</th>
+        <th>Action</th>
+        <th>Outcome</th>
+        <th>Subject</th>
+        <th>Actor</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (event of eventRows().content; track event.eventId) {
+        <tr>
+          <td class="dim">{{ event.occurredAt | since }}</td>
+          <td>
+            <span class="tag">{{ event.service }}</span>
+          </td>
+          <td class="mono">{{ event.action }}</td>
+          <td>
+            <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
+          </td>
+          <td class="mono">
+            <button
+              type="button"
+              class="link"
+              (click)="inspect(event.subjectId)"
+              title="Read P2.2's ledger for this id"
+            >
+              {{ event.subjectId }}
+            </button>
+            <span class="dim">{{ event.subjectType }}</span>
+          </td>
+          <td>{{ event.actor }}</td>
+          <td class="cell--detail">
+            @for (pair of detailPairs(event.detail); track pair.key) {
+              <span class="tag mono">{{ pair.key }}={{ pair.value }}</span>
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  <app-paginator [page]="eventRows()" [busy]="events.isLoading()" (go)="auditPage.set($event)" />
+</app-panel>
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Chain of custody, one subject"
+    hint="GET /audit/events/{subjectId} — every service's events about one thing, oldest first"
+    service="p5"
+    [source]="chain"
+  >
+    <div class="controls controls--tight">
+      <input
+        class="input--wide mono"
+        type="text"
+        [ngModel]="subjectId()"
+        (ngModelChange)="subjectId.set($event)"
+        name="subjectId"
+        placeholder="messageId, caseId, exportId"
+        autocomplete="off"
+      />
+    </div>
+
+    @if (!subjectId().trim()) {
+      <p class="empty">Enter a subject id.</p>
+    } @else if (chainRows().length === 0 && !chain.isLoading()) {
+      <p class="empty">No events recorded about {{ subjectId() }}.</p>
+    } @else {
+      <ol class="timeline">
+        @for (event of chainRows(); track event.eventId) {
+          <li>
+            <div class="timeline__head">
+              <span class="mono">{{ event.action }}</span>
+              <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
+              <span class="tag">{{ event.service }}</span>
+            </div>
+            <div class="dim">
+              {{ event.occurredAt | since }} · {{ event.actor }} ·
+              <span class="mono">{{ event.correlationId }}</span>
+            </div>
+          </li>
+        }
+      </ol>
+    }
+  </app-panel>
+
+  <!-- The part of FR-7 that is already true -->
+  <app-panel
+    heading="Disposition decisions for one message"
+    hint="GET /disposition/messages/{messageId} on P2.2 — recorded at sweep time, survives the message"
+    service="p22"
+  >
+    <div class="controls controls--tight">
+      <input
+        class="input--wide mono"
+        type="text"
+        [ngModel]="ledgerId()"
+        (ngModelChange)="ledgerId.set($event)"
+        name="ledgerId"
+        placeholder="messageId"
+        autocomplete="off"
+      />
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="loadLedger()"
+        [disabled]="ledgerBusy()"
+      >
+        {{ ledgerBusy() ? 'Reading…' : 'Read' }}
+      </button>
+    </div>
+
+    <app-alert [failure]="ledgerFailure()" />
+
+    @if (ledger(); as items) {
+      @if (items.length === 0) {
+        <p class="empty">
+          No sweep has ever considered this message. That is a real answer, not a missing one.
+        </p>
+      } @else {
+        <ol class="timeline">
+          @for (item of items; track item.id) {
+            <li>
+              <div class="timeline__head">
+                <span
+                  class="tag"
+                  [class.tag--ok]="item.outcome === 'SKIPPED_HOLD'"
+                  [class.tag--danger]="item.outcome === 'DELETED' || item.outcome === 'FAILED'"
+                  [class.tag--warn]="
+                    item.outcome === 'WOULD_DELETE' || item.outcome === 'DELETE_REQUESTED'
+                  "
+                >
+                  {{ item.outcome }}
+                </span>
+                <span class="mono dim">run {{ item.runId.slice(0, 8) }}…</span>
+              </div>
+              <div class="dim">{{ item.occurredAt | since }}</div>
+              @if (item.reason) {
+                <div>{{ item.reason }}</div>
+              }
+              @if (item.blockingCaseId || item.blockingHoldId) {
+                <div>
+                  @if (item.blockingCaseId) {
+                    <span class="tag mono">case {{ item.blockingCaseId }}</span>
+                  }
+                  @if (item.blockingHoldId) {
+                    <span class="tag mono">hold {{ item.blockingHoldId }}</span>
+                  }
+                </div>
+              }
+            </li>
+          }
+        </ol>
+        <p class="note">
+          This answers both halves of the awkward question — why a message is missing, and why one
+          that should have expired is still here.
+        </p>
+      }
+    }
+  </app-panel>
+</div>

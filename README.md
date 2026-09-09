@@ -58,6 +58,9 @@ DiscoveryHub-Questify/
 │       ├── Dockerfile
 │       ├── pom.xml
 │       └── src/
+├── frontend/                       Angular UI                        :4200
+│   ├── mock/                       P4/P5 contract fixture, dev only
+│   └── src/
 ├── tools/
 │   └── corpus-generator/           12,000-message fixture generator
 │       └── fixtures/               the committed corpus
@@ -134,10 +137,31 @@ It needs three endpoints from **P4**, all specified in DISPOSITION.md:
   attach any message to a case, including one the hold's own custodian and date scope never
   covered, and deleting it would destroy part of a production someone already selected.
 
+## Frontend
+
+Angular on **4200**, three pages: retention and disposition, case and hold, export and audit.
+Details in `frontend/README.md`.
+
+```bash
+cd frontend && npm install && npm start
+npm run mock    # serves the P4 and P5 contracts locally, since neither service exists yet
+```
+
+**It works with any subset of the services running, including none.** Every region of every page
+issues its own request and renders its own error and retry, because P4 and P5 have not been written
+and a page that waited on them would never open. There are no route resolvers, and a failed request
+is never rendered as an empty result — upstream an unreachable P4 means *held*, so "no holds" and
+"could not ask" are opposite facts and the UI keeps them apart.
+
+The three existing services allow `:4200` in their own `CorsConfig`
+(`discoveryhub.web.cors.allowed-origins`). Without it a running service and a correct URL still
+fail, as a network error with no status.
+
 ## Ports
 
 | Port | What | Owner |
 |---|---|---|
+| 4200 | Frontend | Sahithi |
 | 8081 | P1 Ingestion | A |
 | 8082 | P2 Archive | A |
 | 8086 | P2.2 Disposition | Saketh |
@@ -153,7 +177,7 @@ It needs three endpoints from **P4**, all specified in DISPOSITION.md:
 | 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
 | 9001 | MinIO console | — |
 
-Remaining application ports: **8083** P3, **8084** P4, **8085** P5, **4200** frontend.
+Remaining application ports: **8083** P3, **8084** P4, **8085** P5.
 
 ## Conventions
 

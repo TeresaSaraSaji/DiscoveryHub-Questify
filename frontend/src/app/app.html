@@ -1,0 +1,25 @@
+<header class="shell__head">
+  <a class="brand" routerLink="/retention">
+    <span class="brand__mark">DH</span>
+    <span>
+      <strong>DiscoveryHub</strong>
+      <small>Questify</small>
+    </span>
+  </a>
+
+  <nav class="nav">
+    <a routerLink="/retention" routerLinkActive="nav__link--on" class="nav__link">
+      Retention &amp; Disposition
+    </a>
+    <a routerLink="/cases" routerLinkActive="nav__link--on" class="nav__link">Case &amp; Hold</a>
+    <a routerLink="/export-audit" routerLinkActive="nav__link--on" class="nav__link">
+      Export &amp; Audit
+    </a>
+  </nav>
+
+  <app-service-status />
+</header>
+
+<main class="shell__body">
+  <router-outlet />
+</main>
