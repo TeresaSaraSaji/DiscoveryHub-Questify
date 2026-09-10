@@ -4,6 +4,7 @@ import com.discoveryhub.search.config.SearchProperties;
 import com.discoveryhub.search.mapper.CommunicationDocumentMapper;
 import com.discoveryhub.search.model.CommunicationDocument;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
@@ -15,6 +16,8 @@ import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -156,6 +159,33 @@ public class ElasticsearchSearchRepository implements SearchRepository {
     }
 
     @Override
+    public SearchHistoryEntry saveHistoryEntry(SearchHistoryEntry entry) {
+        return operations.save(entry, historyIndex());
+    }
+
+    @Override
+    public List<SearchHistoryEntry> listHistory(int limit) {
+        CriteriaQuery query = new CriteriaQuery(new Criteria()); // match all
+        query.setPageable(PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "executedAt")));
+        SearchHits<SearchHistoryEntry> hits = operations.search(query, SearchHistoryEntry.class, historyIndex());
+        return hits.getSearchHits().stream().map(SearchHit::getContent).toList();
+    }
+
+    @Override
+    public void clearHistory() {
+        // Deleted entry by entry rather than with a delete-by-query, for the same reason the hold
+        // updates avoid the partial-update API: the query-based delete is where Spring Data
+        // Elasticsearch reshuffles between versions, and history is small enough that a scan is
+        // not a cost worth trading portability for.
+        try (SearchHitsIterator<SearchHistoryEntry> stream = operations.searchForStream(
+                new CriteriaQuery(new Criteria()), SearchHistoryEntry.class, historyIndex())) {
+            while (stream.hasNext()) {
+                operations.delete(stream.next().getContent().getId(), historyIndex());
+            }
+        }
+    }
+
+    @Override
     public List<String> searchMessageIds(Query query, int max) {
         List<String> ids = new ArrayList<>();
         try (SearchHitsIterator<CommunicationDocument> stream =
@@ -173,5 +203,9 @@ public class ElasticsearchSearchRepository implements SearchRepository {
 
     private IndexCoordinates savedSearchIndex() {
         return IndexCoordinates.of("saved-searches");
+    }
+
+    private IndexCoordinates historyIndex() {
+        return IndexCoordinates.of("search-history");
     }
 }
