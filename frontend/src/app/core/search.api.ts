@@ -2,7 +2,13 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { baseUrl } from './api-config';
-import { BulkAddToCaseResponse, SavedSearch, SearchRequest, SearchResponse } from './models';
+import {
+  BulkAddToCaseResponse,
+  SavedSearch,
+  SearchHistoryEntry,
+  SearchRequest,
+  SearchResponse,
+} from './models';
 
 /**
  * Nothing on the search page loads until the user asks for something.
@@ -67,6 +73,20 @@ export class SearchApi {
 
   deleteSaved(id: string): Observable<void> {
     return this.http.delete<void>(this.url(`/search/saved/${encodeURIComponent(id)}`));
+  }
+
+  /**
+   * Recent executed searches, newest first. P3 records these itself as it answers, so unlike a
+   * saved search there is nothing to write from here — the history exists because searching did.
+   */
+  history(limit = 20): Observable<SearchHistoryEntry[]> {
+    return this.http.get<SearchHistoryEntry[]>(this.url('/search/history'), {
+      params: { limit },
+    });
+  }
+
+  clearHistory(): Observable<void> {
+    return this.http.delete<void>(this.url('/search/history'));
   }
 
   /**
