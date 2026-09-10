@@ -5,7 +5,11 @@ spring:
   # This service's own database (NFR-1). Flyway and JPA bind here because the bean is @Primary;
   # see config/DataSourceConfig for why both datasources have to be declared by hand.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5436/disposition}
+    # 5438, not 5436: postgres-holds took 5436 when hold-service arrived and postgres-disposition
+    # moved. The old default still connected — to the holds database — and failed with
+    # "password authentication failed for user disposition", which reads like a credentials
+    # problem rather than a service pointing at the wrong datastore.
+    url: ${DB_URL:jdbc:postgresql://localhost:5438/disposition}
     username: ${DB_USER:disposition}
     password: ${DB_PASSWORD:disposition}
 
@@ -123,7 +127,12 @@ discoveryhub:
           pool-name: archive-readwrite
 
 server:
-  port: ${SERVER_PORT:8086}
+  # 8087, not 8086: hold-service took 8086 when P4 split into case-service and hold-service. The
+  # compose file already overrides SERVER_PORT=8087, so this only bit anyone running the service
+  # from an IDE — which is the workflow the root README recommends. Two services defaulting to the
+  # same port means whichever starts second dies on bind, and the one that started first then
+  # answers hold checks for itself.
+  port: ${SERVER_PORT:8087}
 
 management:
   endpoints:
