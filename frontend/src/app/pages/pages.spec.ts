@@ -443,6 +443,85 @@ describe('search history', () => {
     expect(rendered).toContain('Recent searches');
   });
 
+  it('drops recent searches under the keyword input on focus, and a pick re-runs', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const input = host.querySelector<HTMLInputElement>('input[name="query"]');
+    expect(host.querySelector('.suggest__list')).toBeNull();
+
+    input!.dispatchEvent(new Event('focus'));
+    settle(fixture);
+
+    const item = host.querySelector<HTMLButtonElement>('.suggest__item');
+    expect(item?.textContent).toContain('project atlas');
+    expect(item?.textContent).toContain('42 hits');
+
+    item!.click();
+    settle(fixture);
+
+    const search = http.expectOne('http://localhost:8083/search');
+    expect(search.request.body.query).toBe('project atlas');
+    // Picking closes the list.
+    expect(host.querySelector('.suggest__list')).toBeNull();
+  });
+
+  it('narrows the dropdown to what has been typed', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+        {
+          id: 'h-2',
+          query: 'invoice fraud',
+          requestJson: '{"query":"invoice fraud","page":0,"size":20}',
+          totalHits: 9,
+          tookMs: 3,
+          executedAt: '2026-09-10T11:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const page = fixture.componentInstance as unknown as {
+      query: { set(v: string): void };
+      historyOpen: { set(v: boolean): void };
+    };
+    page.historyOpen.set(true);
+    page.query.set('invoice');
+    settle(fixture);
+
+    const items = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLElement>('.suggest__item'),
+    ].map((item) => item.textContent ?? '');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toContain('invoice fraud');
+  });
+
   it('clears the history on request', async () => {
     const fixture = mount(SearchPage);
     const http = TestBed.inject(HttpTestingController);
