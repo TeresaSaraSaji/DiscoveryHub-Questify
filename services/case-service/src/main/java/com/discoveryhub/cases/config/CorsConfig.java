@@ -5,24 +5,49 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.util.List;
+
 /**
- * Lets the frontend (a separate origin — :4200 in dev) call this API from a browser. None of
- * these services were built with a browser client in mind, so without this every request from
- * the Angular app is blocked by the browser's CORS policy before it reaches a controller —
- * invisible to curl/Postman, which do not enforce CORS, and easy to mistake for the backend being
- * down when it is actually up and answering fine.
+ * Let the frontend talk to this service from its own origin.
+ *
+ * <p>The UI is a separate application on :4200 and every service answers on its own port, so every
+ * call the browser makes is cross-origin. Without this, a running service and a correct URL still
+ * produce a failure the browser reports as a network error with no status — which the UI then
+ * reports, correctly and uselessly, as "not reachable".
+ *
+ * <p>The default allows <b>any port on the loopback host</b>, not just 4200. Pinning the port looks
+ * tighter and is a trap: an IDE preview pane, a {@code ng serve --port}, or a static server over
+ * {@code dist/} each present a different origin and are each refused. Localhost is already
+ * whoever is sitting at the machine. Deployments set
+ * {@code discoveryhub.web.cors.allowed-origins} to real origins.
+ *
+ * <p>Actuator is configured separately in {@code application.yml} under
+ * {@code management.endpoints.web.cors}: its endpoints are served by their own handler mapping
+ * and do not inherit this one. Miss that and the frontend's status strip reports the service DOWN
+ * while every other panel loads fine.
+ *
+ * <p>Credentials are deliberately not allowed: nothing here is authenticated yet and the UI sends
+ * no cookies.
  */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
 
-    @Value("${discoveryhub.cors.allowed-origins:http://localhost:4200}")
-    private String[] allowedOrigins;
+    private static final String LOOPBACK_ANY_PORT = "http://localhost:[*],http://127.0.0.1:[*]";
+
+    private final List<String> allowedOrigins;
+
+    public CorsConfig(
+            @Value("${discoveryhub.web.cors.allowed-origins:" + LOOPBACK_ANY_PORT + "}")
+            List<String> allowedOrigins) {
+        this.allowedOrigins = allowedOrigins;
+    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOrigins(allowedOrigins)
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
-                .allowedHeaders("*");
+                .allowedOriginPatterns(allowedOrigins.toArray(String[]::new))
+                .allowedMethods("GET", "POST", "PATCH", "DELETE", "OPTIONS")
+                .allowedHeaders("*")
+                .maxAge(3600);
     }
 }

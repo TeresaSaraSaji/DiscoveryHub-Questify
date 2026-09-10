@@ -3,8 +3,8 @@
 Retention and disposition (FR-5). Owns the retention policy, the scheduled sweep that destroys
 expired messages, and the ledger that proves what it did.
 
-Port **8086**. Own database **postgres-disposition** on host port 5436. API browsable at
-http://localhost:8086/swagger-ui.html.
+Port **8087**. Own database **postgres-disposition** on host port 5437. API browsable at
+http://localhost:8087/swagger-ui.html.
 
 ```bash
 docker compose up -d postgres-disposition kafka
@@ -113,7 +113,7 @@ nothing and refusing.
 ### Proving it, per case
 
 ```bash
-curl localhost:8086/disposition/cases/case-1/protected
+curl localhost:8087/disposition/cases/case-1/protected
 ```
 
 Everything the holds on one case have saved from disposition, across every run. It outlives both
@@ -121,82 +121,69 @@ the release of the hold and the closing of the case, which is what makes it usab
 rather than as a status display — `blocking_hold_id` and `blocking_case_id` are copied onto the
 ledger row, not joined from P4.
 
-## The uncomfortable part: how it deletes
+## How it deletes
 
-P2 owns `messages` and `attachments`. NFR-1 says one datastore, one owner. This service deletes
-from them anyway, in `ARCHIVE_DB` mode, and that deserves an explanation rather than a shrug.
+P2 owns `messages` and `attachments`, and NFR-1 says one datastore, one owner. So this service does
+not write to them. It publishes a `DeleteCommand` to `disposition.commands` and P2 applies it —
+`delete-mode: KAFKA`, the default.
 
-FR-5.2 requires the disposition process to *delete* expired messages. P2's HTTP API is read-only
-(`MessageController` has no `DELETE`), and P2 is another person's module mid-development. A
-retention service that correctly identifies expired data and then cannot dispose of it satisfies
-nothing. So the coupling is accepted, and confined:
+That split is what makes the two halves independently correct. This service decides *what* is past
+retention and no hold covers; P2 decides whether to act, re-checking holds against the data it
+owns. It also buys the NFR-2 property directly: with P2 down, commands queue on the topic and are
+applied when it comes back, rather than the sweep failing or losing the deletions.
 
-- **Two statements, one class each.** The eligibility query in `JdbcArchiveGateway`, the guarded
-  delete in `JdbcMessageDeleter`. Nothing else in the service touches that database.
-- **No JPA entity for P2's tables.** A mirrored `@Entity` would be a second definition of someone
-  else's schema, and P2's next migration would break this service at runtime. A named projection
-  of six columns is a contract that survives; a mirrored entity is not.
-- **No Flyway on that datasource.** Adding a second migration history to P2's database would make
-  P2 fail on startup under `ddl-auto: validate`.
-- **`ON DELETE CASCADE` does the attachments**, so the delete is one statement and there is no
-  window where a message is gone but its attachments are orphaned.
+### The loop
 
-### The exit
-
-`KAFKA` mode is where this goes. Set:
-
-```yaml
-discoveryhub:
-  disposition:
-    delete-mode: KAFKA
+```
+P2.2  sweep ──DeleteCommand──▶ disposition.commands ──▶ P2  DispositionCommandListener
+                                                            ├ on_hold flag?      refuse
+                                                            ├ P4 says held, or
+                                                            │ P4 unreachable?    refuse
+                                                            └ otherwise          DELETE (attachments cascade)
+P2.2  DeleteReceiptListener ◀── disposition.results ◀──DeleteReceipt──┘
 ```
 
-and the sweep publishes a `DeleteCommand` to `disposition.commands` instead of writing. That
-restores the property NFR-1 actually cares about and makes the delete path resilient the way NFR-2
-wants — with P2 down, commands queue on the topic and apply when it returns, rather than the sweep
-failing. It is already implemented and tested; it needs one consumer on P2's side.
+The sweep records `DELETE_REQUESTED`, which is all it can honestly claim at that moment — the
+message is not gone, it has been asked about. The receipt settles the row to what P2 actually did.
+Both records are in `contracts`, so neither end carries its own copy of the shape.
 
-The honest cost: a published command is not a completed delete, so the ledger records
-`DELETE_REQUESTED` rather than `DELETED` and stays there. Closing that loop needs a
-`disposition.results` topic for P2 to report back, which is deliberately not built yet — it would
-be a topic nothing produces to, exactly what this repo's disabled topic auto-create exists to
-prevent.
+| Receipt outcome | Ledger becomes | |
+|---|---|---|
+| `DELETED` | `DELETED` | Gone, confirmed. |
+| `REFUSED_HOLD` | `SKIPPED_HOLD` | A hold landed between this service's check and P2's delete, and P2's own guard caught it. The rarest and most reassuring outcome in the system. |
+| `NOT_FOUND` | `DELETED` | Already absent. The desired state holds; recording a failure would make the next run look like it is retrying something broken. |
+| `FAILED` | `FAILED` | Still there. The next sweep finds it expired again and retries. |
 
-### For whoever owns P2
+Settling moves the run summary too, so a run row never disagrees with its own items. It is guarded
+inside `DispositionItemEntity.settle`: only a row still awaiting a receipt can move, so a
+redelivered receipt on an at-least-once topic cannot turn a recorded refusal back into a deletion.
 
-The consumer needed to switch this on. Topic `disposition.commands`, payload:
+A row still at `DELETE_REQUESTED` with a null `settled_at` hours later means P2 is not consuming.
 
-```json
-{
-  "runId": "e39c23e3-791c-4ae9-bb77-f54b48277e30",
-  "messageId": "probe-del-0001",
-  "externalId": "PROBE-DELETE-ME",
-  "custodianId": "probe-custodian",
-  "reason": "past retention",
-  "requestedAt": "2026-09-08T10:08:51.156905Z"
-}
-```
+### `ARCHIVE_DB` mode
 
-```java
-@KafkaListener(topics = Topics.DISPOSITION_COMMANDS, groupId = "p2-archive")
-@Transactional
-public void onDeleteCommand(String payload) {
-    DeleteCommand cmd = json.readValue(payload, DeleteCommand.class);
-    messages.findById(cmd.messageId()).ifPresent(m -> {
-        // A command is a request, not a warrant. Holds may have changed since the sweep decided,
-        // and you own the data.
-        if (m.isOnHold()) {
-            publisher.publishAudit(audit.dispositionRefused(cmd.runId(), m.getMessageId(), "held"));
-            return;
-        }
-        messages.delete(m);   // attachments cascade
-    });
-}
-```
+The other mode deletes straight from P2's database, guarded by `AND on_hold = false` inside the
+statement. It exists because it predates P2's consumer, and it is still useful for running this
+service against an archive with no P2 alongside it — the integration tests use it for exactly that
+reason, since asserting on rows is stronger than asserting on published commands.
 
-Two properties this relies on: deleting an already-deleted message is a no-op, so at-least-once
-delivery is fine; and the listener must refuse held messages itself rather than trusting the
-command.
+It is not the default and should not be. It is a second writer to another service's tables, and
+the guard it relies on is the mirrored `on_hold` flag rather than P4. Where it is unavoidable the
+coupling is confined: two statements, one class each (`JdbcArchiveGateway`, `JdbcMessageDeleter`),
+no JPA entity for P2's tables, and no Flyway on that datasource — a second migration history in
+P2's database would make P2 fail on startup under `ddl-auto: validate`.
+
+### If P2 refuses everything, check `CASES_BASE_URL`
+
+P2's guard treats an unreachable P4 as held, correctly. The failure mode is that this looks
+*exactly* like holds working: every message skipped, `disposition.refused` all over the audit
+trail, nothing deleted, no errors. The first end-to-end run of this loop refused all five test
+messages for that reason — `CASES_BASE_URL` was unset in P2's container, so the hold check was
+resolving to `localhost:8084` inside the container and getting connection refused.
+
+It is now set in both `services/storage-service/Dockerfile` and `docker-compose.yml`. If a sweep
+skips everything with `P4 reports an active hold, or could not be reached`, check P2's logs for
+`hold check failed` before believing the holds.
 
 ## What P4 has to provide
 
@@ -286,10 +273,10 @@ Config seeds the table for any type missing a row on startup, and never overwrit
 that drops email retention to two minutes still has it after a restart.
 
 ```bash
-curl localhost:8086/retention/policies
+curl localhost:8087/retention/policies
 
 # ISO-8601 durations. P2555D = seven years, PT2M = two minutes.
-curl -X PUT "localhost:8086/retention/policies/EMAIL?actor=saketh" \
+curl -X PUT "localhost:8087/retention/policies/EMAIL?actor=saketh" \
   -H 'Content-Type: application/json' -d '{"period":"PT2M"}'
 ```
 
@@ -300,7 +287,10 @@ to destroy data on the next sweep, and the chain of custody should show who gave
 
 | | |
 |---|---|
-| `POST /disposition/runs` | Sweep now. `?dryRun=true` decides everything, deletes nothing. |
+| `POST /disposition/runs` | Sweep now, synchronously, and return the counts. `?dryRun=true` decides everything, deletes nothing. |
+| `POST /disposition/runs?async=true` | Accept and sweep in the background. **202** with a `QUEUED` run id; watch the stream below. |
+| `GET /disposition/runs/stream` | Live progress as server-sent events. Closes when the run finishes. |
+| `GET /disposition/runs/progress` | The same snapshot, polled once. |
 | `GET /disposition/runs` | Run history, newest first, paginated. |
 | `GET /disposition/runs/{runId}` | One run's summary. |
 | `GET /disposition/runs/{runId}/items` | Per-message ledger. `?outcome=SKIPPED_HOLD` is the "what did holds save?" view. |
@@ -313,6 +303,34 @@ to destroy data on the next sweep, and the chain of custody should show who gave
 A second concurrent run is refused with **409**, not queued: two sweeps would evaluate the same
 candidates and race on the same rows, and whatever a dropped tick skipped is still expired at the
 next one.
+
+### Watching a sweep
+
+A sweep makes one HTTP call to P4 per candidate and considers up to `batch-size` of them, so the
+synchronous form holds the connection for the length of the work — over the full corpus that is
+the bulk operation NFR-3 says must not time out the UI. Start it asynchronously instead:
+
+```bash
+curl -X POST "localhost:8087/disposition/runs?async=true&actor=sahithi"
+curl -N localhost:8087/disposition/runs/stream
+```
+
+```
+event:progress
+data:{"runId":"37956dfd…","status":"QUEUED","processed":0,"total":0,…,"percent":0,"terminal":false}
+
+event:progress
+data:{"runId":"37956dfd…","status":"RUNNING","processed":3,"total":5,"deleted":1,"skippedHold":2,…,"percent":60,"terminal":false}
+
+event:progress
+data:{"runId":"37956dfd…","status":"COMPLETED","processed":5,"total":5,"deleted":2,"skippedHold":3,…,"percent":100,"terminal":true}
+```
+
+The current snapshot is sent on connect, so a client attaching mid-sweep — or just after one
+finished — sees state immediately rather than an empty stream. The stream closes on a terminal
+status instead of being left for the browser to time out. Progress is in memory and for the
+current run only; the ledger is the durable record, and a per-message counter written to the
+chain-of-custody table would be write traffic for something nobody reads tomorrow.
 
 ## Watch out
 
@@ -332,16 +350,24 @@ That is not a hypothetical. During testing, a locally started instance with a te
 completed two sweeps of `candidates=500, deleted=499` before a retention change could be applied.
 It happened to be running in `KAFKA` mode, so 499 delete commands were *published* rather than
 executed, and the corpus survived — and then those commands sat on `disposition.commands` as a
-loaded gun for whoever adds P2's consumer with `auto-offset-reset: earliest`. The topic had to be
+loaded gun for whoever added P2's consumer with `auto-offset-reset: earliest`. The topic had to be
 deleted and recreated.
 
-Two lessons worth keeping:
+**That consumer now exists**, so the near miss no longer has its reprieve. `KAFKA` mode is the
+default and P2 applies what it finds on the topic; a stray command is a real deletion, subject
+only to P2's hold guard. The one thing that has improved is the evidence: the receipt comes back
+and the ledger records what happened, so an accidental sweep can at least be accounted for
+afterwards.
+
+Three lessons worth keeping:
 
 - Turn the cron on deliberately, after `?dryRun=true` tells you the blast radius.
-- If you have been testing in `KAFKA` mode, **check what is sitting on `disposition.commands`**
-  before P2 grows a consumer. `docker exec discoveryhub-kafka /opt/kafka/bin/kafka-topics.sh
+- **Check what is sitting on `disposition.commands`** before starting P2 against a broker you have
+  been testing sweeps on. `docker exec discoveryhub-kafka /opt/kafka/bin/kafka-topics.sh
   --bootstrap-server localhost:19092 --delete --topic disposition.commands`, then re-run
   `infra/kafka/create-topics.sh`.
+- A sweep that skipped everything is not proof that holds work. Check P2's logs for
+  `hold check failed` first — see [above](#if-p2-refuses-everything-check-cases_base_url).
 
 ### Never set `hold-check.required: false` in committed config
 
@@ -372,10 +398,26 @@ ledger has to survive the failure that makes it interesting.
 ## Verifying
 
 ```bash
-mvn -q package -pl services/disposition-service -am    # 38 tests
+mvn -q package -pl services/disposition-service -am    # 76 tests
 ```
 
-The tests that matter are the hold guard ones in `DispositionServiceTest` — in particular
+The integration tests need Docker: they run against real PostgreSQL and a real Kafka broker via
+Testcontainers, started once for the module by `support/Containers`.
+
+| | |
+|---|---|
+| `DispositionIntegrationTest` | The sweep against two real Postgres instances. Booting the context is itself the assertion that Flyway's migrations and the entities agree under `ddl-auto: validate`. Covers the per-type cutoffs, every hold guard, the fail-closed path, dry run, batch bounding, and a runtime policy change taking effect on the next sweep. |
+| `DeleteLoopKafkaIntegrationTest` | The Kafka delete path from this side, against a real broker. The test plays P2: consumes the command, checks its shape, answers with a receipt, and asserts the ledger settles — including that a redelivered receipt cannot rewrite it. |
+| `RunProgressIntegrationTest` | `?async=true` and the SSE stream, through the real HTTP stack. |
+| `DispositionCommandIntegrationTest` (in storage-service) | P2's half: a command on the topic, a row gone from a real archive, a receipt back — and a held message still there. |
+
+`DispositionIntegrationTest` builds the archive schema from **P2's own migration file**, read out
+of `services/storage-service`, rather than from a copy. `JdbcArchiveGateway` hand-writes SQL
+against another service's table, so the failure it is exposed to is P2 renaming a column — which
+compiles fine and breaks at run time. A copied fixture would keep passing after such a rename; the
+real file means the build breaks the moment the contract does.
+
+Of the unit tests, the ones that matter are the hold guards in `DispositionServiceTest` — in particular
 `refusesAMessageInsideTheScopeOfAHoldOnACaseBeforeP4HasExpandedIt` (the propagation window) and
 `refusesAMessageAttachedToAHeldCaseEvenWhenItIsOutsideThatHoldsScope` (the scope-versus-contents
 gap) — plus the guarded DELETE in `JdbcMessageDeleterTest`, which runs against H2 with the same

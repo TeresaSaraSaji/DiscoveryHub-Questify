@@ -52,8 +52,14 @@ COPY --from=build --chown=appuser /build/services/storage-service/target/storage
 
 EXPOSE 8082
 
+# CASES_BASE_URL is P4, for the hold guard on every delete command this service receives. Left
+# unset the property falls back to localhost:8084, which inside this container is this container:
+# every hold check gets a connection refused, fails closed, and P2 refuses every disposition. The
+# refusals look exactly like a hold doing its job, which is what makes the wrong address hard to
+# spot — it was, until an end-to-end run showed five skipped messages and no deletions.
 ENV KAFKA_BOOTSTRAP=kafka:19092 \
     DB_URL=jdbc:postgresql://postgres-archive:5432/archive \
+    CASES_BASE_URL=http://cases-service:8084 \
     SERVER_PORT=8082 \
     ATTACHMENT_DIR=/app/data/attachments \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"

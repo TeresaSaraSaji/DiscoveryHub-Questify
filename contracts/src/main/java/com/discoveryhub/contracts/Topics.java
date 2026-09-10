@@ -21,16 +21,23 @@ public final class Topics {
     /** P4 to P3 and P2. A custodian or message came under hold, or came off it. */
     public static final String HOLDS_EVENTS = "holds.events";
 
-    /** Case-service to hold-service. Case lifecycle: created, transitioned, closed. The
-     *  hold-service releases a case's holds when it sees a transition to CLOSED (FR-2.4, FR-4.5). */
-    public static final String CASES_EVENTS = "cases.events";
-
     /**
      * P2.2 to P2. One message past retention and covered by no hold, to be removed from the
      * archive. A request, not a warrant: the archive still refuses held messages, because holds
      * may have changed since the sweep decided.
      */
     public static final String DISPOSITION_COMMANDS = "disposition.commands";
+
+    /**
+     * P2 back to P2.2. What actually became of a {@link DeleteCommand}: deleted, refused because a
+     * hold was in force, already gone, or failed. Without this the ledger stops at
+     * {@code DELETE_REQUESTED} and can never say whether the message was destroyed.
+     */
+    public static final String DISPOSITION_RESULTS = "disposition.results";
+
+    /** Case-service to hold-service. Case lifecycle: created, transitioned, closed. The
+     *  hold-service releases a case's holds when it sees a transition to CLOSED (FR-2.4, FR-4.5). */
+    public static final String CASES_EVENTS = "cases.events";
 
     /** P5 to its own workers. One export job to build. */
     public static final String EXPORT_JOBS = "export.jobs";

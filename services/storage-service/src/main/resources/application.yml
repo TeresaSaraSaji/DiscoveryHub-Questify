@@ -66,26 +66,26 @@ discoveryhub:
   archive:
     # P4 Hold-service base URL, for the synchronous disposition guard (architecture decision 4).
     # The hold-service owns GET /holds/check; the case-service is a separate deployable on 8084.
+    #
+    # This is the guard applied to every delete command arriving on disposition.commands, and it
+    # fails closed: unreachable counts as held, so an absent hold-service makes P2 refuse deletions
+    # rather than perform unverified ones.
     hold-check-base-url: ${HOLDS_BASE_URL:http://localhost:8086}
     hold-check-timeout: 5s
   retention:
-    # FR-5 default. Per-type overrides below; for the demo set these to minutes (e.g. PT2M) and the
-    # next scheduled sweep picks the change up with no backfill — eligibility is computed, not stored.
+    # Unused by P2 itself — P2.2 owns the retention policy and the sweep (retention_policies,
+    # configurable at runtime there). default-period/per-type survive here only as the fallback
+    # RetentionProperties needs to construct; demo-period below is the one still live.
     default-period: P2555D
     per-type:
       EMAIL: P2555D
       CHAT: P1095D
     # How long a message P1 tagged with RetentionLabels.DEMO_RETENTION (the "DEMO" option on
-    # POST /messages/upload) stays before disposition is allowed to delete it — independent of
-    # default-period/per-type above, and it affects only the tagged message, not everything else
-    # of its type. Short on purpose: this exists so one uploaded document can be shown going
-    # through the full disposition path within the length of a demo.
+    # POST /messages/upload) stays before {@code retentionOverrideAt} makes it eligible — stamped
+    # by MessageMapper at upload time. P2.2's own eligibility query does not read this column yet,
+    # so the override currently only documents intent rather than shortening a real sweep; kept
+    # here so that gap is visible rather than silently dropped.
     demo-period: ${RETENTION_DEMO_PERIOD:PT2M}
-    schedule:
-      enabled: true
-      # Every 5 minutes by default. With minute-scale retention this gives the demo a visible
-      # sweep; with day-scale retention it is an off-peak check that is usually a no-op.
-      cron: "0 */5 * * * *"
 
 server:
   port: ${SERVER_PORT:8082}
@@ -95,15 +95,12 @@ management:
     web:
       exposure:
         include: health,info,metrics
-      # Actuator endpoints (/actuator/health, the frontend's liveness probe) sit behind their own
-      # handler mapping, separate from @RestController — CorsConfig's WebMvcConfigurer registers
-      # CORS on the latter only, so without this, every regular API call works from the browser
-      # and every actuator call is silently blocked, which looks like the service being down when
-      # it is actually up. Confirmed: an OPTIONS preflight to /actuator/health returned 200 with
-      # no Access-Control-* headers at all before this was added.
+      # Actuator has its own CORS, and config/CorsConfig does not reach it: these endpoints are
+      # served by a separate handler mapping that ignores addCorsMappings. Without this the
+      # frontend's status strip reports this service DOWN while it answers every other request.
       cors:
-        allowed-origins: ${discoveryhub.cors.allowed-origins:http://localhost:4200}
-        allowed-methods: GET,OPTIONS
+        allowed-origin-patterns: ${discoveryhub.web.cors.allowed-origins:http://localhost:[*],http://127.0.0.1:[*]}
+        allowed-methods: GET
   endpoint:
     health:
       show-details: always

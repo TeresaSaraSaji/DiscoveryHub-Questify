@@ -85,6 +85,28 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- Integration tests run against real PostgreSQL and a real broker, not H2 and a mock.
+         Two things in this service cannot be tested any other way: the Flyway migrations plus
+         `ddl-auto: validate` (H2 would accept a schema Postgres rejects, and the entities are
+         validated against whatever H2 built, not against the migration that ships), and the
+         eligibility SQL in JdbcArchiveGateway, which is hand-built Postgres against another
+         service's table. Both are exactly the places a silent break would go unnoticed until the
+         demo. -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

@@ -21,11 +21,13 @@ import java.time.Instant;
  * P2 down, commands queue on the topic and are applied when it returns, instead of the sweep
  * failing.
  *
- * <p>The honest cost of the switch: a published command is not a completed delete. The ledger
- * records {@link DeleteResult#REQUESTED} and the item stays in that state, because P2 does not
- * report back. Closing that loop needs a {@code disposition.results} topic, which is deliberately
- * not built on speculation — it would be a topic nothing produces to, which is precisely what the
- * disabled topic auto-create in this repo exists to prevent.
+ * <p>A published command is still not a completed delete, so the ledger records
+ * {@link DeleteResult#REQUESTED} here rather than claiming the message is gone. It does not stay
+ * in that state: P2's listener answers on {@code disposition.results} with a
+ * {@link com.discoveryhub.contracts.DeleteReceipt}, and
+ * {@link com.discoveryhub.disposition.messaging.DeleteReceiptListener} settles the ledger row to
+ * the outcome P2 actually achieved. The asynchrony is visible in the ledger — briefly REQUESTED,
+ * then DELETED or SKIPPED_HOLD — which is honest about a delete that genuinely is asynchronous.
  */
 @Component
 @ConditionalOnProperty(prefix = "discoveryhub.disposition", name = "delete-mode", havingValue = "KAFKA")

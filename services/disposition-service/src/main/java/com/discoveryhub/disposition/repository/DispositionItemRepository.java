@@ -7,6 +7,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface DispositionItemRepository extends JpaRepository<DispositionItemEntity, Long> {
 
@@ -28,6 +29,16 @@ public interface DispositionItemRepository extends JpaRepository<DispositionItem
      * from being destroyed". Survives the hold being released and the case being closed.
      */
     Page<DispositionItemEntity> findByBlockingCaseIdOrderByOccurredAtDesc(String caseId, Pageable pageable);
+
+    /**
+     * The row a delete receipt from P2 settles, if it is still waiting for one.
+     *
+     * <p>Filtered by outcome rather than found by (run, message) and checked afterwards, so a
+     * redelivered receipt matches nothing instead of matching a settled row. {@code findFirst}
+     * because a sweep evaluates each message once, so there is at most one.
+     */
+    Optional<DispositionItemEntity> findFirstByRunIdAndMessageIdAndOutcome(
+            String runId, String messageId, DispositionOutcome outcome);
 
     long countByOutcome(DispositionOutcome outcome);
 
