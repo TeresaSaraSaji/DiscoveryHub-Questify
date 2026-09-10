@@ -125,8 +125,12 @@ describe('search asks for nothing until it is asked', () => {
     const fixture = mount(SearchPage);
     const http = TestBed.inject(HttpTestingController);
 
-    http.expectNone((request) => request.url.includes('/search'));
-    // The one request it does make is the case list, for the "file to case" control.
+    // No query against the corpus. The history read is not one: it lists what has already been
+    // asked, which is the page's own metadata, same as the case list for the "file to" control.
+    http.expectNone((request) => request.url === 'http://localhost:8083/search');
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([]);
     http
       .expectOne((request) => request.url === 'http://localhost:8084/cases')
       .flush({
@@ -344,6 +348,127 @@ describe('search asks for nothing until it is asked', () => {
     await settleAsync(fixture);
 
     expect(text(fixture)).toContain('That is an answer, not a failure');
+  });
+});
+
+/**
+ * The history panel reads what has already been asked and can put it back into the form. It must
+ * never take the page down: a history failure stays in its own panel, and a re-run goes through
+ * the same form and the same POST /search as a hand-typed query.
+ */
+describe('search history', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('lists recent searches with their answers', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+        {
+          id: 'h-2',
+          query: null,
+          requestJson: '{"custodianIds":["cust-004"],"page":0,"size":20}',
+          totalHits: 3,
+          tookMs: 2,
+          executedAt: '2026-09-10T11:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Recent searches');
+    expect(rendered).toContain('project atlas');
+    // A pure filter search has no keyword to show, and must not render as blank.
+    expect(rendered).toContain('(filters only)');
+    expect(rendered).toContain('42');
+  });
+
+  it('re-runs an entry through the form, filters included', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'fraud',
+          requestJson:
+            '{"query":"fraud","custodianIds":["cust-004"],"hasAttachment":true,"page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const runButton = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Run again');
+    expect(runButton).toBeTruthy();
+    runButton!.click();
+    settle(fixture);
+
+    const search = http.expectOne('http://localhost:8083/search');
+    expect(search.request.body.query).toBe('fraud');
+    expect(search.request.body.custodianIds).toEqual(['cust-004']);
+    expect(search.request.body.hasAttachment).toBe(true);
+    // Recorded searches restart at the first page: the question is re-asked, not resumed.
+    expect(search.request.body.page).toBe(0);
+  });
+
+  it('keeps a history failure inside its own panel', async () => {
+    const fixture = mount(SearchPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    // The search form is intact and usable...
+    expect(rendered).toContain('Enter a keyword or set a filter');
+    // ...and the history panel says what happened without emptying the page.
+    expect(rendered).toContain('Recent searches');
+  });
+
+  it('clears the history on request', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'fraud',
+          requestJson: '{"query":"fraud","page":0,"size":20}',
+          totalHits: 1,
+          tookMs: 1,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const clearButton = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Clear history');
+    expect(clearButton).toBeTruthy();
+    clearButton!.click();
+    settle(fixture);
+
+    const clear = http.expectOne('http://localhost:8083/search/history');
+    expect(clear.request.method).toBe('DELETE');
+    clear.flush(null, { status: 204, statusText: 'No Content' });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Nothing has been searched yet');
   });
 });
 
