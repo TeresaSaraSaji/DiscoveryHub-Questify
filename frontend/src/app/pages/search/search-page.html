@@ -127,6 +127,67 @@
   }
 </app-panel>
 
+<app-panel
+  heading="Recent searches"
+  hint="Recorded by the search service as it answers; re-run one to ask again"
+  service="p3"
+>
+  <app-alert [failure]="historyFailure()" />
+
+  @if (history().length === 0) {
+    <p class="empty">Nothing has been searched yet. Executed searches appear here.</p>
+  } @else {
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Query</th>
+          <th>Hits</th>
+          <th>Took</th>
+          <th>When</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (entry of history(); track entry.id) {
+          <tr>
+            <td>
+              @if (entry.query) {
+                <strong>{{ entry.query }}</strong>
+              } @else {
+                <span class="dim">(filters only)</span>
+              }
+            </td>
+            <td class="dim">{{ entry.totalHits }}</td>
+            <td class="dim">{{ entry.tookMs }} ms</td>
+            <td class="dim">{{ entry.executedAt | since }}</td>
+            <td>
+              <button
+                type="button"
+                class="btn btn--ghost btn--small"
+                (click)="rerun(entry)"
+                [disabled]="searching()"
+              >
+                Run again
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--ghost btn--small"
+        (click)="clearHistory()"
+        [disabled]="clearingHistory()"
+      >
+        {{ clearingHistory() ? 'Clearing…' : 'Clear history' }}
+      </button>
+    </div>
+  }
+</app-panel>
+
 @if (results(); as rows) {
   <app-panel
     [heading]="'Search results (' + total() + ')'"
