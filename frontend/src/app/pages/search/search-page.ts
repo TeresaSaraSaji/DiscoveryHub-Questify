@@ -10,6 +10,7 @@ import {
   EMPTY_PAGE,
   MessageType,
   Page,
+  SearchHistoryEntry,
   SearchRequest,
   SearchResult,
 } from '../../core/models';
@@ -130,6 +131,43 @@ export class SearchPage {
   protected readonly fileFailure = signal<Failure | null>(null);
   protected readonly fileOk = signal<string | null>(null);
 
+  // ------------------------------------------------------------ history
+
+  /**
+   * Recent searches, loaded on sight like the case list: a short, bounded list that the re-run
+   * control cannot be used without. This does not violate the "no search until asked" rule — it
+   * reads what has already been asked, it does not query the corpus.
+   */
+  protected readonly history = signal<SearchHistoryEntry[]>([]);
+  protected readonly historyFailure = signal<Failure | null>(null);
+  protected readonly clearingHistory = signal(false);
+
+  /** Whether the keyword input's recent-searches dropdown is on screen. */
+  protected readonly historyOpen = signal(false);
+
+  /**
+   * What the dropdown offers: the recent searches, narrowed to what has been typed so far. An
+   * empty keyword offers everything — focusing the empty bar and seeing your last five questions
+   * is the whole point of a search-bar history.
+   */
+  protected readonly suggestions = computed(() => {
+    const typed = this.query().trim().toLowerCase();
+    const entries = this.history();
+    return typed
+      ? entries.filter((entry) => entry.query?.toLowerCase().includes(typed))
+      : entries;
+  });
+
+  /** A dropdown pick is a re-run: fill the form from the entry and ask again. */
+  protected pick(entry: SearchHistoryEntry): void {
+    this.historyOpen.set(false);
+    this.rerun(entry);
+  }
+
+  constructor() {
+    this.loadHistory();
+  }
+
   // ------------------------------------------------------------ actions
 
   protected submit(): void {
@@ -174,6 +212,10 @@ export class SearchPage {
           // Echoed back rather than assumed: asking for more than 100 is clamped server-side, and
           // paging arithmetic against the number we asked for would then be wrong.
           this.shownSize.set(response.size);
+          // P3 recorded this execution (first pages only), so the list on screen is stale now.
+          if (request.page === 0) {
+            this.loadHistory();
+          }
         },
         error: (error: unknown) => {
           this.searching.set(false);
@@ -250,6 +292,71 @@ export class SearchPage {
    * applied by an element the template owns. Same result on screen; no markup from the corpus ever
    * reaches the DOM as markup.
    */
+  private loadHistory(): void {
+    this.api
+      .history(5)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (entries) => {
+          this.historyFailure.set(null);
+          this.history.set(Array.isArray(entries) ? entries : []);
+        },
+        error: (error: unknown) => {
+          // History being down must not degrade search itself, so the failure is shown in its own
+          // panel and the list simply stays empty.
+          this.history.set([]);
+          this.historyFailure.set(classify(error, describe('p3')));
+        },
+      });
+  }
+
+  /**
+   * Put a recorded search back into the form and run it. The entry carries the full request as
+   * JSON, so every filter comes back, not just the keyword — and the form shows what is about to
+   * be asked rather than running something the user cannot see.
+   */
+  protected rerun(entry: SearchHistoryEntry): void {
+    let request: SearchRequest;
+    try {
+      request = JSON.parse(entry.requestJson) as SearchRequest;
+    } catch {
+      this.historyFailure.set({
+        kind: 'unknown',
+        status: 0,
+        message: 'This history entry could not be read.',
+      });
+      return;
+    }
+    this.query.set(request.query ?? '');
+    this.custodian.set(request.custodianIds?.[0] ?? '');
+    this.sender.set(request.from ?? '');
+    this.type.set((request.type as MessageType | undefined) ?? '');
+    this.sentAfter.set(toDateInput(request.sentAfter));
+    this.sentBefore.set(toDateInput(request.sentBefore));
+    this.attachments.set(fromTriState(request.hasAttachment));
+    this.heldOnly.set(fromTriState(request.onHold));
+    this.page.set(0);
+    this.run();
+  }
+
+  protected clearHistory(): void {
+    this.clearingHistory.set(true);
+    this.api
+      .clearHistory()
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: () => {
+          this.clearingHistory.set(false);
+          this.history.set([]);
+          this.historyFailure.set(null);
+        },
+        error: (error: unknown) => {
+          this.clearingHistory.set(false);
+          this.historyFailure.set(classify(error, describe('p3')));
+        },
+      });
+  }
+
   protected segments(snippet: string): { text: string; match: boolean }[] {
     const out: { text: string; match: boolean }[] = [];
     let rest = snippet;
@@ -285,4 +392,14 @@ function toInstant(value: string): string | null {
 
 function triState(value: '' | 'yes' | 'no'): boolean | null {
   return value === '' ? null : value === 'yes';
+}
+
+/** The reverse of {@link triState}, for putting a history entry back into the form. */
+function fromTriState(value: boolean | null | undefined): '' | 'yes' | 'no' {
+  return value == null ? '' : value ? 'yes' : 'no';
+}
+
+/** The reverse of {@link toInstant}: an ISO instant back into a date input's `YYYY-MM-DD`. */
+function toDateInput(value: string | null | undefined): string {
+  return value ? value.slice(0, 10) : '';
 }

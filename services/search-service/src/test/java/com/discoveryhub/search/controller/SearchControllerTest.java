@@ -6,6 +6,7 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
@@ -237,6 +238,36 @@ class SearchControllerTest {
 
         assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(searchService).deleteSavedSearch("any-id");
+    }
+
+    @Test
+    void listHistoryDelegatesTheLimitToTheService() {
+        SearchHistoryEntry entry = new SearchHistoryEntry(
+                "h-1", "fraud", "{}", 42, 7, Instant.parse("2024-05-11T21:37:00Z"));
+        when(searchService.listHistory(10)).thenReturn(List.of(entry));
+
+        List<SearchHistoryEntry> result = controller.listHistory(10);
+
+        assertThat(result).containsExactly(entry);
+        verify(searchService).listHistory(10);
+    }
+
+    @Test
+    void listHistoryPassesANullLimitThroughForTheServiceToDefault() {
+        when(searchService.listHistory(null)).thenReturn(List.of());
+
+        List<SearchHistoryEntry> result = controller.listHistory(null);
+
+        assertThat(result).isEmpty();
+        verify(searchService).listHistory(null);
+    }
+
+    @Test
+    void clearHistoryReturnsNoContent() {
+        ResponseEntity<Void> result = controller.clearHistory();
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(searchService).clearHistory();
     }
 
     @Test
