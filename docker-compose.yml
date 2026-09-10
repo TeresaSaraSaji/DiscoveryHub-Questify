@@ -13,6 +13,7 @@
 #   9092  Kafka              8090  Kafka UI
 #   6379  Redis (P1)         9200  Elasticsearch (P3)
 #   5433  Postgres (P2)      5434  Postgres (P4)      5435  Postgres (P5)
+#   5436  Postgres (P4 hold) 5437  Postgres (P1)
 #   27017 MongoDB            9000  MinIO API          9001  MinIO console
 #
 # Application ports, as services arrive
@@ -126,9 +127,31 @@ services:
   # Separate instances, not separate schemas in one. There is no connection string that lets one
   # service read another's tables, so the isolation is enforced by infrastructure rather than by
   # everyone remembering.
-  postgres-archive:
+  # P1 Ingestion's own datastore (NFR-1): the durable (externalId -> messageId) mapping. Redis
+  # above remains the fast dedupe path; this is the real, durable guarantee for P1 itself.
+  postgres-ingestion:
     image: postgres:17.11
-    container_name: discoveryhub-postgres-archive
+    container_name: discoveryhub-postgres-ingestion
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_DB: ingestion
+      POSTGRES_USER: ingestion
+      POSTGRES_PASSWORD: ingestion
+    volumes:
+      - postgres-ingestion-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ingestion -d ingestion"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # P2's own slim Postgres: legal-hold state and retention/disposition bookkeeping only. Message
+  # content (attachments included) lives in MongoDB — see the `mongodb` service below.
+  postgres-archive-meta:
+    image: postgres:17.11
+    container_name: discoveryhub-postgres-archive-meta
     ports:
       - "5433:5432"
     environment:
@@ -136,7 +159,7 @@ services:
       POSTGRES_USER: archive
       POSTGRES_PASSWORD: archive
     volumes:
-      - postgres-archive-data:/var/lib/postgresql/data
+      - postgres-archive-meta-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U archive -d archive"]
       interval: 10s
@@ -157,6 +180,26 @@ services:
       - postgres-cases-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cases -d cases"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # P2.2 Disposition's own datastore: retention policy and the run ledger. Separate from
+  # postgres-archive-meta, which P2.2 also reads (read-only, no Flyway) for the eligibility query.
+  postgres-disposition:
+    image: postgres:17.11
+    container_name: discoveryhub-postgres-disposition
+    ports:
+      - "5438:5432"
+    environment:
+      POSTGRES_DB: disposition
+      POSTGRES_USER: disposition
+      POSTGRES_PASSWORD: disposition
+    volumes:
+      - postgres-disposition-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U disposition -d disposition"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -201,8 +244,8 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Kept from the original compose. No service claims it yet — whoever adopts it owns it, and it
-  # should belong to exactly one service like every other datastore here.
+  # P2's message-content store: one document per message, attachment bytes included, keyed by
+  # message_id. postgres-archive-meta above holds only the slim legal-hold/retention row.
   mongodb:
     image: mongo:7
     container_name: discoveryhub-mongodb
@@ -244,7 +287,7 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # ----------------------------------------------------------- P2 and P5 object storage
+  # ----------------------------------------------------------------- P5 object storage
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: discoveryhub-minio
@@ -300,11 +343,14 @@ services:
       # Service names, not localhost — inside the network localhost is the container itself.
       KAFKA_BOOTSTRAP: kafka:19092
       REDIS_HOST: redis
+      DB_URL: jdbc:postgresql://postgres-ingestion:5432/ingestion
       SERVER_PORT: 8081
     depends_on:
       kafka:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      postgres-ingestion:
         condition: service_healthy
     restart: unless-stopped
 
@@ -318,7 +364,8 @@ services:
       - "8082:8082"
     environment:
       KAFKA_BOOTSTRAP: kafka:19092
-      DB_URL: jdbc:postgresql://postgres-archive:5432/archive
+      DB_URL: jdbc:postgresql://postgres-archive-meta:5432/archive
+      MONGO_URI: mongodb://mongodb:27017/archive
       SERVER_PORT: 8082
       # The hold-service owns /holds/check; inside the Docker network it is reachable by service
       # name. The storage-service's disposition job calls this before deleting anything.
@@ -326,7 +373,9 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      postgres-archive:
+      postgres-archive-meta:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
     restart: unless-stopped
 
@@ -396,9 +445,62 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # P5 Evidence Export & Audit — export packages, chain of custody. Owner: E.
+  export-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/export-service/Dockerfile
+    container_name: discoveryhub-export
+    ports:
+      - "8085:8085"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-audit:5432/audit
+      ARCHIVE_BASE_URL: http://storage-service:8082
+      MINIO_ENDPOINT: http://minio:9000
+      SERVER_PORT: 8085
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-audit:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # P2.2 Disposition — retention policy, sweeps, and the run ledger. Reads P2's slim archive
+  # Postgres read-only for the eligibility query; publishes disposition.commands for P2 to act on
+  # (KAFKA delete mode). Not part of the original five-service architecture diagram — extracted
+  # out of P2 as a separate deployable — so it gets its own datastore per NFR-1.
+  disposition-service:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: services/disposition-service/Dockerfile
+    container_name: discoveryhub-disposition
+    ports:
+      - "8087:8087"
+    environment:
+      KAFKA_BOOTSTRAP: kafka:19092
+      DB_URL: jdbc:postgresql://postgres-disposition:5432/disposition
+      ARCHIVE_DB_URL: jdbc:postgresql://postgres-archive-meta:5432/archive
+      HOLDS_BASE_URL: http://hold-service:8086
+      SERVER_PORT: 8087
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-disposition:
+        condition: service_healthy
+      postgres-archive-meta:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   kafka-data:
-  postgres-archive-data:
+  postgres-ingestion-data:
+  postgres-archive-meta-data:
+  postgres-disposition-data:
   postgres-cases-data:
   postgres-audit-data:
   postgres-holds-data:

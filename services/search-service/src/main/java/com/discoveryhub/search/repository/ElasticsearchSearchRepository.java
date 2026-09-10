@@ -17,6 +17,7 @@ import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -67,28 +68,62 @@ public class ElasticsearchSearchRepository implements SearchRepository {
 
     @Override
     public void index(CommunicationDocument document) {
+        // A re-index (consumer restart replaying messages.archived, a redelivery, P2 republishing
+        // the same messageId) must not reset onHold to the mapper's default of false. Carry
+        // forward whatever setHold/setHoldByCustodian last wrote for this document, if anything.
+        CommunicationDocument existing = operations.get(document.getMessageId(), CommunicationDocument.class, index());
+        if (existing != null) {
+            document.setOnHold(existing.isOnHold());
+            document.setHoldUpdatedAt(existing.getHoldUpdatedAt());
+        }
         operations.save(document, index());
     }
 
     @Override
-    public void setHold(String messageId, boolean onHold) {
+    public void setHold(String messageId, boolean onHold, Instant occurredAt) {
         CommunicationDocument doc = operations.get(messageId, CommunicationDocument.class, index());
-        if (doc != null) {
-            doc.setOnHold(onHold);
-            operations.save(doc, index());
+        if (doc == null) {
+            return;
         }
+        if (isStale(doc.getHoldUpdatedAt(), occurredAt)) {
+            return;
+        }
+        doc.setOnHold(onHold);
+        doc.setHoldUpdatedAt(occurredAt);
+        operations.save(doc, index());
     }
 
     @Override
-    public void setHoldByCustodian(String custodianId, boolean onHold) {
+    public void setHoldByCustodian(String custodianId, boolean onHold, Instant occurredAt) {
+        // Streamed rather than loaded as one SearchHits page: a custodian's mailbox can run to
+        // thousands of messages, and holding every one of them (plus body text) in memory to flip
+        // one flag risks an OOM the scroll-based searchMessageIds already avoids elsewhere.
         CriteriaQuery byCustodian = new CriteriaQuery(new Criteria("custodianId").is(custodianId));
-        SearchHits<CommunicationDocument> hits = operations.search(
-                byCustodian, CommunicationDocument.class, index());
-        for (SearchHit<CommunicationDocument> hit : hits.getSearchHits()) {
-            CommunicationDocument doc = hit.getContent();
-            doc.setOnHold(onHold);
-            operations.save(doc, index());
+        try (SearchHitsIterator<CommunicationDocument> stream =
+                     operations.searchForStream(byCustodian, CommunicationDocument.class, index())) {
+            while (stream.hasNext()) {
+                CommunicationDocument doc = stream.next().getContent();
+                if (isStale(doc.getHoldUpdatedAt(), occurredAt)) {
+                    continue;
+                }
+                doc.setOnHold(onHold);
+                doc.setHoldUpdatedAt(occurredAt);
+                operations.save(doc, index());
+            }
         }
+    }
+
+    /**
+     * Whether an incoming event's {@code occurredAt} is not newer than what is already stored —
+     * i.e. it is a replay or an out-of-order redelivery that must not overwrite a settled value. A
+     * {@code null} timestamp on either side is treated as "apply it": {@code null} on the incoming
+     * event means the caller does not carry ordering information (e.g. a direct test or an older
+     * message shape) and {@code null} on the stored side means no hold event has ever applied to
+     * this document.
+     */
+    private static boolean isStale(Instant storedHoldUpdatedAt, Instant incomingOccurredAt) {
+        return storedHoldUpdatedAt != null && incomingOccurredAt != null
+                && !incomingOccurredAt.isAfter(storedHoldUpdatedAt);
     }
 
     @Override

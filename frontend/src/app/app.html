@@ -1,0 +1,37 @@
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" routerLink="/retention">
+      <svg class="brand__mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M2 4.5 8 1.5l6 3v7l-6 3-6-3z" />
+      </svg>
+      <span class="brand__name">DiscoveryHub</span>
+    </a>
+
+    <nav class="nav">
+      @for (item of nav; track item.path) {
+        <a
+          class="nav__link"
+          [routerLink]="item.path"
+          routerLinkActive="nav__link--on"
+          [title]="item.hint"
+        >
+          <svg class="nav__icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path [attr.d]="item.icon" />
+          </svg>
+          {{ item.label }}
+        </a>
+      }
+    </nav>
+
+    <div class="sidebar__foot">
+      <span class="sidebar__label">Services</span>
+      <app-service-status />
+    </div>
+  </aside>
+
+  <div class="content">
+    <main class="content__body">
+      <router-outlet />
+    </main>
+  </div>
+</div>

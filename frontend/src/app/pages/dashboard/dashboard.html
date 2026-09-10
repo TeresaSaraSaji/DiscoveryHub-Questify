@@ -1,0 +1,218 @@
+<header class="page__head">
+  <div>
+    <h1>Welcome to DiscoveryHub</h1>
+    <p class="page__lede">Manage, search and protect business communications.</p>
+  </div>
+</header>
+
+<nav class="quick">
+  @for (link of links; track link.path) {
+    <a class="quick__item" [routerLink]="link.path">
+      <span class="quick__label">{{ link.label }}</span>
+      <span class="quick__detail">{{ link.detail }}</span>
+    </a>
+  }
+</nav>
+
+<div class="grid grid--4">
+  <app-panel
+    heading="Archived"
+    hint="Messages in the system of record"
+    service="p2"
+    [source]="archiveStats"
+  >
+    @if (archiveStats.hasValue()) {
+      @let a = archiveStats.value();
+      <p class="figure">{{ a.totalMessages | number }}</p>
+      <p class="figure__note">{{ a.onHold | number }} flagged on hold</p>
+    }
+  </app-panel>
+
+  <app-panel heading="Cases" hint="Matters open right now" service="p4case" [source]="caseStats">
+    @if (caseStats.hasValue()) {
+      @let c = caseStats.value();
+      <p class="figure">{{ c.activeCases | number }}</p>
+      <p class="figure__note">
+        {{ c.totalCases | number }} total · {{ c.closedCases | number }} closed
+      </p>
+    }
+  </app-panel>
+
+  <app-panel heading="Legal holds" hint="Holds in force" service="p4hold" [source]="holdStats">
+    @if (holdStats.hasValue()) {
+      @let h = holdStats.value();
+      <p class="figure">{{ h.activeHolds | number }}</p>
+      <p class="figure__note">
+        {{ h.resolvingHolds | number }} resolving · {{ h.releasedHolds | number }} released
+        @if (h.failedHolds > 0) {
+          · <span class="tag tag--danger">{{ h.failedHolds }} failed</span>
+        }
+      </p>
+    }
+  </app-panel>
+
+  <app-panel
+    heading="Exports"
+    hint="Completed, of the 50 most recent"
+    service="p5"
+    [source]="exports"
+  >
+    @if (exports.hasValue()) {
+      @let e = exportCounts();
+      <p class="figure">{{ e.completed | number }}</p>
+      <p class="figure__note">
+        {{ e.running | number }} in progress
+        @if (e.failed > 0) {
+          · <span class="tag tag--danger">{{ e.failed }} failed</span>
+        }
+      </p>
+    }
+  </app-panel>
+
+  <app-panel
+    heading="Next sweep"
+    hint="What retention would delete"
+    service="p22"
+    [source]="candidates"
+  >
+    @if (candidates.hasValue()) {
+      @let p = candidates.value();
+      <p class="figure" [class.figure--danger]="p.wouldBeDeleted > 0">
+        {{ p.wouldBeDeleted | number }}
+      </p>
+      <p class="figure__note">
+        of {{ p.candidatesInNextSweep | number }} candidates ·
+        {{ p.protectedByHold | number }} saved by a hold
+      </p>
+    }
+  </app-panel>
+</div>
+
+@if (sweepWarning(); as warning) {
+  <div class="alert alert--warn" role="status">
+    {{ warning }} Review it on the <a routerLink="/retention">retention page</a> before the next
+    run.
+  </div>
+}
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Recent cases"
+    hint="Newest matters, whatever their status"
+    service="p4case"
+    [source]="cases"
+  >
+    @if (caseRows().content.length === 0 && !cases.isLoading()) {
+      <p class="empty">No cases yet. Open one from the Cases page.</p>
+    }
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Case</th>
+          <th>Matter</th>
+          <th>Owner</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of caseRows().content; track item.caseId) {
+          <tr>
+            <td>
+              <a class="link" routerLink="/cases" [queryParams]="{ caseId: item.caseId }">
+                {{ item.name }}
+              </a>
+              <div class="dim">{{ item.createdAt | since: 'relative' }}</div>
+            </td>
+            <td class="dim">{{ item.matterType }}</td>
+            <td class="dim">{{ item.owner }}</td>
+            <td>
+              <span [class]="statusClass(item.status)">{{ item.status }}</span>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </app-panel>
+
+  <app-panel
+    heading="Active holds"
+    hint="Every hold currently protecting messages"
+    service="p4hold"
+    [source]="holds"
+  >
+    @if (holdRows().length === 0 && !holds.isLoading()) {
+      <p class="empty">
+        No hold is in force. Nothing is protected from the next retention sweep by a hold.
+      </p>
+    }
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Hold</th>
+          <th>Case</th>
+          <th class="num">Messages</th>
+          <th>Placed</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (hold of holdRows(); track hold.holdId) {
+          <tr>
+            <td class="mono">{{ hold.holdId.slice(0, 8) }}…</td>
+            <td class="mono">
+              <a class="link" routerLink="/cases" [queryParams]="{ caseId: hold.caseId }">
+                {{ hold.caseId.slice(0, 8) }}…
+              </a>
+            </td>
+            <td class="num">{{ hold.messageCount | number }}</td>
+            <td class="dim">{{ hold.placedAt | since: 'relative' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </app-panel>
+</div>
+
+<app-panel
+  heading="Recent activity"
+  hint="The chain of custody, newest first"
+  service="p5"
+  [source]="audit"
+>
+  @if (auditRows().content.length === 0 && !audit.isLoading()) {
+    <p class="empty">Nothing recorded yet. Every service writes here as it works.</p>
+  }
+  <table class="table">
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Service</th>
+        <th>Action</th>
+        <th>Outcome</th>
+        <th>Subject</th>
+        <th>Actor</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (event of auditRows().content; track event.eventId) {
+        <tr>
+          <td class="dim">{{ event.occurredAt | since }}</td>
+          <td>
+            <span class="tag">{{ event.service }}</span>
+          </td>
+          <td class="mono">{{ event.action }}</td>
+          <td>
+            <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
+          </td>
+          <td class="mono dim">{{ event.subjectId ?? '—' }}</td>
+          <td class="dim">{{ event.actor }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  @if (auditRows().totalElements > 0) {
+    <p class="note">
+      {{ auditRows().totalElements | number }} events recorded.
+      <a class="link" routerLink="/export-audit">See the full trail</a>.
+    </p>
+  }
+</app-panel>

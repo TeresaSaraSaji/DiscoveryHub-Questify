@@ -6,6 +6,7 @@ import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import org.springframework.data.elasticsearch.core.query.Query;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -23,14 +24,27 @@ public interface SearchRepository {
     /** Execute an assembled query and return one page of results. */
     SearchResponse search(Query query, SearchRequest request);
 
-    /** Index (or re-index) a single archived message. */
+    /**
+     * Index (or re-index) a single archived message. Must not clobber an {@code onHold} flag (or
+     * its {@code holdUpdatedAt}) already present on the document — a re-index (e.g. after a
+     * consumer restart replays {@code messages.archived}) carries no hold information of its own,
+     * so it must preserve whatever {@link #setHold}/{@link #setHoldByCustodian} last wrote.
+     */
     void index(CommunicationDocument document);
 
-    /** Mirror hold state onto one document. No-op if the message is not in the index. */
-    void setHold(String messageId, boolean onHold);
+    /**
+     * Mirror hold state onto one document. No-op if the message is not in the index.
+     *
+     * @param occurredAt when the source {@code holds.events} record was produced. An event whose
+     *                    {@code occurredAt} is not after the document's currently stored
+     *                    {@code holdUpdatedAt} is a stale replay/redelivery and is ignored, so an
+     *                    out-of-order event cannot un-hold (or re-hold) a message a newer event
+     *                    already settled.
+     */
+    void setHold(String messageId, boolean onHold, Instant occurredAt);
 
-    /** Mirror hold state onto every document in a custodian's mailbox. */
-    void setHoldByCustodian(String custodianId, boolean onHold);
+    /** Mirror hold state onto every document in a custodian's mailbox. See {@link #setHold}. */
+    void setHoldByCustodian(String custodianId, boolean onHold, Instant occurredAt);
 
     /** Remove one document — used when a message is permanently disposed. */
     void deleteByMessageId(String messageId);

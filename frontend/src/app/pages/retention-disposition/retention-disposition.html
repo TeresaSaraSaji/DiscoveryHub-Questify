@@ -1,0 +1,471 @@
+<header class="page__head">
+  <div>
+    <h1>Retention &amp; Disposition</h1>
+    <p class="page__lede">Manage retention rules and run disposition jobs.</p>
+  </div>
+  <label class="field field--inline">
+    <span>Acting as</span>
+    <input
+      type="text"
+      [ngModel]="actor()"
+      (ngModelChange)="actor.set($event)"
+      name="actor"
+      autocomplete="off"
+    />
+  </label>
+</header>
+
+<div class="grid grid--2">
+  <!-- FR-5.1 -->
+  <app-panel
+    heading="Retention policy"
+    hint="Set how long each communication type is kept. Takes effect on the next sweep, with no backfill."
+    service="p22"
+    [source]="policies"
+  >
+    <app-alert [failure]="policyFailure()" [success]="policyOk()" />
+
+    @if (policyRows().length === 0 && !policies.isLoading()) {
+      <p class="empty">No policies. P2.2 seeds one per message type on startup.</p>
+    }
+
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Current</th>
+          <th>New period</th>
+          <th>Last change</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (policy of policyRows(); track policy.messageType) {
+          <tr>
+            <td>
+              <span class="tag">{{ policy.messageType }}</span>
+            </td>
+            <td class="mono">{{ periodLabel(policy.periodSeconds) }}</td>
+            <td>
+              <input
+                class="input--period mono"
+                type="text"
+                [ngModel]="draftFor(policy)"
+                (ngModelChange)="onDraft(policy.messageType, $event)"
+                [name]="'period-' + policy.messageType"
+                placeholder="P2555D"
+                autocomplete="off"
+              />
+            </td>
+            <td class="dim">
+              {{ policy.updatedAt | since }}<br />
+              <span class="dim">by {{ policy.updatedBy }}</span>
+            </td>
+            <td class="cell--actions">
+              <button
+                type="button"
+                class="btn btn--small"
+                (click)="savePolicy(policy)"
+                [disabled]="savingType() === policy.messageType"
+              >
+                {{ savingType() === policy.messageType ? 'Saving…' : 'Save' }}
+              </button>
+              <button type="button" class="btn btn--ghost btn--small" (click)="resetDraft(policy)">
+                Reset
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <p class="note">
+      ISO-8601, or shorthand: <code>P2555D</code> (seven years), <code>PT2M</code>,
+      <code>90d</code>. A non-positive period is refused with a 400 — it would make the whole corpus
+      eligible at once.
+    </p>
+  </app-panel>
+
+  <!-- The blast radius, before anyone presses anything -->
+  <app-panel
+    heading="What the next sweep would touch"
+    hint="What the next sweep would touch, without running it. Nothing is deleted."
+    service="p22"
+    [source]="candidates"
+  >
+    @if (candidates.hasValue()) {
+      @let preview = candidates.value();
+      <div class="metrics">
+        <div class="metric">
+          <span class="metric__value">{{ preview.candidatesInNextSweep | number }}</span>
+          <span class="metric__label">candidates</span>
+        </div>
+        <div class="metric metric--danger">
+          <span class="metric__value">{{ preview.wouldBeDeleted | number }}</span>
+          <span class="metric__label">would be deleted</span>
+        </div>
+        <div class="metric metric--ok">
+          <span class="metric__value">{{ preview.protectedByHold | number }}</span>
+          <span class="metric__label">saved by a hold</span>
+        </div>
+        <div class="metric">
+          <span class="metric__value">{{ preview.activeHolds | number }}</span>
+          <span class="metric__label">active holds</span>
+        </div>
+      </div>
+
+      <dl class="pairs">
+        <dt>by the on_hold flag</dt>
+        <dd>{{ preview.protectedByHoldFlag | number }}</dd>
+        <dt>by hold scope</dt>
+        <dd>{{ preview.protectedByHoldScope | number }}</dd>
+        <dt>by held-case evidence</dt>
+        <dd>{{ preview.protectedByCaseEvidence | number }}</dd>
+        <dt>batch size</dt>
+        <dd class="mono">{{ preview.batchSize | number }}</dd>
+        <dt>hold scope from P4</dt>
+        <dd>
+          @if (preview.holdScopeAvailable) {
+            <span class="tag tag--ok">available</span>
+          } @else {
+            <span class="tag tag--danger">unavailable</span>
+          }
+        </dd>
+      </dl>
+
+      <h3 class="subhead">Cutoffs</h3>
+      <table class="table table--tight">
+        <tbody>
+          @for (row of cutoffRows(); track row.type) {
+            <tr>
+              <td>
+                <span class="tag">{{ row.type }}</span>
+              </td>
+              <td class="mono dim">anything sent before {{ row.at | since: 'clock' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </app-panel>
+</div>
+
+<!-- FR-5.2 + FR-8.1 -->
+<app-panel heading="Run a sweep" hint="Trigger a disposition run and watch it live." service="p22">
+  @if (holdCheckWarning(); as warning) {
+    <div class="alert alert--warn" role="alert">{{ warning }}</div>
+  }
+
+  <div class="controls">
+    <label class="check">
+      <input
+        type="checkbox"
+        [ngModel]="dryRun()"
+        (ngModelChange)="dryRun.set($event)"
+        name="dryRun"
+      />
+      <span> <strong>Dry run</strong> — decide everything, delete nothing </span>
+    </label>
+    <button type="button" class="btn btn--primary" (click)="trigger()" [disabled]="triggering()">
+      {{ triggering() ? 'Queuing…' : dryRun() ? 'Preview a sweep' : 'Run the sweep' }}
+    </button>
+    <button
+      type="button"
+      class="btn btn--ghost"
+      (click)="watch()"
+      [disabled]="watching()"
+      title="Attach to a sweep already in progress"
+    >
+      {{ watching() ? 'Watching…' : 'Watch' }}
+    </button>
+  </div>
+
+  @if (!dryRun()) {
+    <p class="note note--danger">
+      This deletes archived messages. The committed corpus is mostly past retention already.
+    </p>
+  }
+
+  <app-alert [failure]="triggerFailure()" [success]="triggerOk()" />
+
+  @if (progress(); as run) {
+    <div class="progress">
+      <div class="progress__head">
+        <span class="mono">{{ run.runId }}</span>
+        <span
+          class="tag"
+          [class.tag--ok]="run.status === 'COMPLETED'"
+          [class.tag--danger]="run.status === 'FAILED'"
+        >
+          {{ run.status }}
+        </span>
+        @if (run.dryRun) {
+          <span class="tag">dry run</span>
+        }
+        @if (watching()) {
+          <span class="tag tag--busy">live</span>
+        }
+        <span class="dim">{{ run.at | since: 'relative' }}</span>
+      </div>
+      <div class="progress__bar" role="progressbar" [attr.aria-valuenow]="progressPercent()">
+        <span [style.width.%]="progressPercent()"></span>
+      </div>
+      <div class="progress__counts">
+        <span>{{ run.processed | number }} / {{ run.total | number }} decided</span>
+        <span class="dim">·</span>
+        <span>{{ run.deleted | number }} deleted</span>
+        <span class="dim">·</span>
+        <span>{{ run.skippedHold | number }} skipped by a hold</span>
+        <span class="dim">·</span>
+        <span>{{ run.failed | number }} failed</span>
+        @if (run.activeHolds !== null) {
+          <span class="dim">·</span>
+          <span>{{ run.activeHolds | number }} active holds</span>
+        }
+      </div>
+      @if (!run.holdScopeAvailable) {
+        <p class="note note--danger">
+          Hold scope was unavailable during this run: P4 could not be reached, so nothing was
+          verified. Every skip below is a refusal, not a hold doing its job.
+        </p>
+      }
+      @if (run.error) {
+        <p class="note note--danger">{{ run.error }}</p>
+      }
+    </div>
+  } @else {
+    <p class="empty">No sweep has run since P2.2 started.</p>
+  }
+</app-panel>
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Disposition overview"
+    hint="Totals across every sweep this service has run."
+    service="p22"
+    [source]="stats"
+  >
+    @if (stats.hasValue()) {
+      @let s = stats.value();
+      <div class="metrics">
+        <div class="metric">
+          <span class="metric__value">{{ s.archivedMessages | number }}</span>
+          <span class="metric__label">archived</span>
+        </div>
+        <div class="metric">
+          <span class="metric__value">{{ s.totalRuns | number }}</span>
+          <span class="metric__label">runs</span>
+        </div>
+        <div class="metric metric--danger">
+          <span class="metric__value">{{ s.totalDeleted | number }}</span>
+          <span class="metric__label">deleted, all time</span>
+        </div>
+        <div class="metric metric--ok">
+          <span class="metric__value">{{ s.totalSkippedByHold | number }}</span>
+          <span class="metric__label">saved by holds</span>
+        </div>
+      </div>
+      <dl class="pairs">
+        <dt>delete mode</dt>
+        <dd>
+          <span class="tag mono">{{ s.deleteMode }}</span>
+        </dd>
+        <dt>hold check</dt>
+        <dd>
+          <span
+            class="tag"
+            [class.tag--ok]="s.holdCheckEnabled"
+            [class.tag--danger]="!s.holdCheckEnabled"
+          >
+            {{ s.holdCheckEnabled ? 'enabled' : 'disabled' }}
+          </span>
+          <span class="tag" [class.tag--ok]="s.holdCheckRequired">
+            {{ s.holdCheckRequired ? 'fails closed' : 'fails OPEN' }}
+          </span>
+        </dd>
+        @if (s.lastRun) {
+          <dt>last run</dt>
+          <dd class="mono">{{ s.lastRun.runId }} · {{ s.lastRun.status }}</dd>
+        }
+      </dl>
+    }
+  </app-panel>
+
+  <!-- A different service on the same page, on purpose: stop P2.2 and this panel still answers. -->
+  <app-panel
+    heading="Archive"
+    hint="The system of record, read independently of P2.2."
+    service="p2"
+    [source]="archiveStats"
+  >
+    @if (archiveStats.hasValue()) {
+      @let a = archiveStats.value();
+      <div class="metrics">
+        <div class="metric">
+          <span class="metric__value">{{ a.totalMessages | number }}</span>
+          <span class="metric__label">messages</span>
+        </div>
+        <div class="metric metric--ok">
+          <span class="metric__value">{{ a.onHold | number }}</span>
+          <span class="metric__label">flagged on hold</span>
+        </div>
+      </div>
+      <p class="note">
+        P2 mirrors the hold flag from <code>holds.events</code>. It is the first of the five
+        disposition guards and the only one that costs nothing.
+      </p>
+    }
+  </app-panel>
+</div>
+
+<!-- FR-5.3 -->
+<app-panel
+  heading="Run history"
+  hint="Every sweep, newest first. Select one to read its decisions."
+  service="p22"
+  [source]="runs"
+>
+  @if (runRows().content.length === 0 && !runs.isLoading()) {
+    <p class="empty">No runs recorded yet.</p>
+  }
+  <table class="table table--rows">
+    <thead>
+      <tr>
+        <th>Started</th>
+        <th>Run</th>
+        <th>Trigger</th>
+        <th class="num">Candidates</th>
+        <th class="num">Deleted</th>
+        <th class="num">Held</th>
+        <th class="num">Failed</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (run of runRows().content; track run.runId) {
+        <tr
+          class="row--clickable"
+          [class.row--selected]="run.runId === selectedRunId()"
+          (click)="selectRun(run.runId)"
+        >
+          <td class="dim">{{ run.startedAt | since }}</td>
+          <td class="mono">{{ run.runId.slice(0, 8) }}…</td>
+          <td>
+            <span class="tag" [class.tag--warn]="run.dryRun">{{ runLabel(run) }}</span>
+            @if (!run.holdScopeAvailable) {
+              <span class="tag tag--danger" title="P4 was unreachable: nothing was verified"
+                >unverified</span
+              >
+            }
+          </td>
+          <td class="num">{{ run.candidateCount | number }}</td>
+          <td class="num">{{ run.deletedCount | number }}</td>
+          <td class="num">{{ run.skippedHoldCount | number }}</td>
+          <td class="num">{{ run.failedCount | number }}</td>
+          <td>
+            <span
+              class="tag"
+              [class.tag--ok]="run.status === 'COMPLETED'"
+              [class.tag--danger]="run.status === 'FAILED'"
+              [class.tag--busy]="run.status === 'RUNNING' || run.status === 'QUEUED'"
+            >
+              {{ run.status }}
+            </span>
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  <app-paginator [page]="runRows()" [busy]="runs.isLoading()" (go)="runsPage.set($event)" />
+</app-panel>
+
+<!-- FR-4.6: what a hold actually saved -->
+<app-panel
+  heading="Ledger"
+  hint="One row per candidate considered. Outlives the message itself."
+  service="p22"
+  [source]="items"
+>
+  @if (!selectedRunId()) {
+    <p class="empty">Pick a run above to read its per-message decisions.</p>
+  } @else {
+    <div class="controls controls--tight">
+      <span class="mono dim">{{ selectedRunId() }}</span>
+      <label class="field field--inline">
+        <span>Outcome</span>
+        <select [value]="itemOutcome() ?? ''" (change)="filterOutcome($any($event.target).value)">
+          <option value="">all</option>
+          @for (outcome of outcomes; track outcome) {
+            <option [value]="outcome">{{ outcome }}</option>
+          }
+        </select>
+      </label>
+      <button
+        type="button"
+        class="btn btn--ghost btn--small"
+        (click)="filterOutcome('SKIPPED_HOLD')"
+      >
+        Show only what holds saved
+      </button>
+    </div>
+
+    @if (itemRows().content.length === 0 && !items.isLoading()) {
+      <p class="empty">No items for this run and filter.</p>
+    }
+
+    <table class="table table--rows">
+      <thead>
+        <tr>
+          <th>Decided</th>
+          <th>Message</th>
+          <th>Custodian</th>
+          <th>Type</th>
+          <th>Sent</th>
+          <th>Outcome</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of itemRows().content; track item.id) {
+          <tr>
+            <td class="dim">{{ item.occurredAt | since: 'clock' }}</td>
+            <td class="mono" [title]="item.messageId">{{ item.externalId }}</td>
+            <td class="mono">{{ item.custodianId }}</td>
+            <td>
+              <span class="tag">{{ item.messageType }}</span>
+            </td>
+            <td class="dim">{{ item.sentAt | since: 'clock' }}</td>
+            <td>
+              <span
+                class="tag"
+                [class.tag--danger]="item.outcome === 'DELETED' || item.outcome === 'FAILED'"
+                [class.tag--ok]="item.outcome === 'SKIPPED_HOLD'"
+                [class.tag--warn]="
+                  item.outcome === 'WOULD_DELETE' || item.outcome === 'DELETE_REQUESTED'
+                "
+              >
+                {{ item.outcome }}
+              </span>
+            </td>
+            <td class="cell--reason">
+              {{ item.reason }}
+              @if (item.blockingCaseId) {
+                <span class="tag tag--ok" title="Held-case evidence"
+                  >case {{ item.blockingCaseId }}</span
+                >
+              }
+              @if (item.blockingHoldId) {
+                <span class="tag tag--ok" title="Blocking hold"
+                  >hold {{ item.blockingHoldId }}</span
+                >
+              }
+              @if (item.settledAt) {
+                <span class="dim">· settled {{ item.settledAt | since: 'relative' }}</span>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    <app-paginator [page]="itemRows()" [busy]="items.isLoading()" (go)="itemsPage.set($event)" />
+  }
+</app-panel>
