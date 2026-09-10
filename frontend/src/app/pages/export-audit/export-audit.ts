@@ -5,7 +5,14 @@ import { FormsModule } from '@angular/forms';
 import { timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
-import { AuditApi, AuditFilter, EMPTY_AUDIT_FILTER } from '../../core/audit.api';
+import {
+  AUDIT_ACTION_GROUPS,
+  AUDIT_OUTCOMES,
+  AUDIT_SERVICES,
+  AuditApi,
+  AuditFilter,
+  EMPTY_AUDIT_FILTER,
+} from '../../core/audit.api';
 import { CasesApi } from '../../core/cases.api';
 import { Failure, classify } from '../../core/failure';
 import {
@@ -98,6 +105,10 @@ export class ExportAudit {
   });
 
   // ------------------------------------------------------------ audit
+
+  protected readonly serviceOptions = AUDIT_SERVICES;
+  protected readonly outcomeOptions = AUDIT_OUTCOMES;
+  protected readonly actionGroups = AUDIT_ACTION_GROUPS;
 
   protected readonly filter = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
   protected readonly auditPage = signal(0);

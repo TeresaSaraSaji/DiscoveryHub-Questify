@@ -231,39 +231,43 @@
   <div class="controls controls--wrap">
     <label class="field field--inline">
       <span>Service</span>
-      <input
-        type="text"
-        class="input--narrow mono"
-        [ngModel]="filter().service"
-        (ngModelChange)="patchFilter({ service: $event })"
-        name="auditService"
-        placeholder="P5"
-        autocomplete="off"
-      />
+      <select
+        [value]="filter().service"
+        (change)="patchFilter({ service: $any($event.target).value })"
+      >
+        <option value="">All services</option>
+        @for (option of serviceOptions; track option.value) {
+          <option [value]="option.value">{{ option.label }}</option>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Action</span>
-      <input
-        type="text"
-        class="mono"
-        [ngModel]="filter().action"
-        (ngModelChange)="patchFilter({ action: $event })"
-        name="auditAction"
-        placeholder="export.completed"
-        autocomplete="off"
-      />
+      <select
+        [value]="filter().action"
+        (change)="patchFilter({ action: $any($event.target).value })"
+      >
+        <option value="">All actions</option>
+        @for (group of actionGroups; track group.label) {
+          <optgroup [label]="group.label">
+            @for (action of group.actions; track action) {
+              <option [value]="action">{{ action }}</option>
+            }
+          </optgroup>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Outcome</span>
-      <input
-        type="text"
-        class="input--narrow mono"
-        [ngModel]="filter().outcome"
-        (ngModelChange)="patchFilter({ outcome: $event })"
-        name="auditOutcome"
-        placeholder="SUCCESS"
-        autocomplete="off"
-      />
+      <select
+        [value]="filter().outcome"
+        (change)="patchFilter({ outcome: $any($event.target).value })"
+      >
+        <option value="">Any outcome</option>
+        @for (option of outcomeOptions; track option.value) {
+          <option [value]="option.value">{{ option.label }}</option>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Subject</span>
