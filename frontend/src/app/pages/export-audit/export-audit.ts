@@ -7,6 +7,7 @@ import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
 import {
   AUDIT_ACTION_GROUPS,
+  AUDIT_ACTIONS_BY_SERVICE,
   AUDIT_OUTCOMES,
   AUDIT_SERVICES,
   AuditApi,
@@ -108,7 +109,6 @@ export class ExportAudit {
 
   protected readonly serviceOptions = AUDIT_SERVICES;
   protected readonly outcomeOptions = AUDIT_OUTCOMES;
-  protected readonly actionGroups = AUDIT_ACTION_GROUPS;
 
   /**
    * The filter is staged, then applied.
@@ -139,6 +139,23 @@ export class ExportAudit {
       Boolean(this.applied()[key].trim()),
     ),
   );
+
+  /**
+   * The actions on offer, narrowed to the chosen service.
+   *
+   * Empty groups are dropped rather than shown empty, so picking P3 leaves one entry rather than
+   * five headings with nothing under them.
+   */
+  protected readonly actionGroups = computed(() => {
+    const allowed = AUDIT_ACTIONS_BY_SERVICE[this.draft().service];
+    if (!allowed) {
+      return AUDIT_ACTION_GROUPS;
+    }
+    return AUDIT_ACTION_GROUPS.map((group) => ({
+      label: group.label,
+      actions: group.actions.filter((action) => allowed.includes(action)),
+    })).filter((group) => group.actions.length > 0);
+  });
 
   // ------------------------------------------------------------ actions
 
@@ -252,6 +269,21 @@ export class ExportAudit {
   /** Stages a change. Deliberately does not search: {@link search} is the only thing that does. */
   protected patchFilter(patch: Partial<AuditFilter>): void {
     this.draft.update((current) => ({ ...current, ...patch }));
+  }
+
+  /**
+   * Stages a service, dropping an action that service cannot emit.
+   *
+   * Without this, narrowing the list would leave the old action staged but no longer visible in
+   * it — a filter the user can neither see nor have meant, guaranteeing an empty page. Moving to
+   * "All services" keeps whatever action is staged, since every action is on offer again.
+   */
+  protected selectService(service: string): void {
+    this.draft.update((current) => {
+      const allowed = AUDIT_ACTIONS_BY_SERVICE[service];
+      const keepAction = !allowed || !current.action || allowed.includes(current.action);
+      return { ...current, service, action: keepAction ? current.action : '' };
+    });
   }
 
   /**

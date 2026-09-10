@@ -149,7 +149,12 @@ export const AUDIT_OUTCOMES: AuditOption[] = [
   { value: 'FAILURE', label: 'FAILURE' },
 ];
 
-/** Grouped so a single dropdown of twenty-eight verbs stays readable. */
+/**
+ * Grouped so a single dropdown of twenty-eight verbs stays readable.
+ *
+ * This is the full set, offered when no service is chosen. Narrowing it to one service is
+ * {@link AUDIT_ACTIONS_BY_SERVICE}.
+ */
 export interface AuditActionGroup {
   label: string;
   actions: string[];
@@ -200,3 +205,50 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
     actions: ['export.requested', 'export.completed', 'export.downloaded', 'export.failed'],
   },
 ];
+
+/**
+ * What each service can write, so choosing one narrows the action list to verbs that service
+ * actually emits and a combination that cannot match is not offered in the first place.
+ *
+ * Taken from the emitters rather than from the rows on hand: P2.2 declares `disposition.deleted`
+ * and `disposition.refused` even though, with deletes currently routed through Kafka, P2 is what
+ * records them. They are real code paths under another `delete-mode`, so they stay listed — a
+ * dropdown built from `select distinct` would drop them the moment the table happened not to hold
+ * one.
+ *
+ * Several verbs belong to two services: `message.deduped` to P1 and P2 (a duplicate caught at the
+ * door, and one caught at the archive), and the disposition pair above. Leaving the service blank
+ * searches across all of them.
+ */
+export const AUDIT_ACTIONS_BY_SERVICE: Record<string, string[]> = {
+  ingestion: ['message.ingested', 'message.deduped', 'message.rejected'],
+  P2: [
+    'message.archived',
+    'message.deduped',
+    'message.hold-updated',
+    'disposition.deleted',
+    'disposition.refused',
+    'disposition.run-failed',
+  ],
+  'P2.2': [
+    'disposition.run-started',
+    'disposition.run-completed',
+    'disposition.run-failed',
+    'disposition.deleted',
+    'disposition.refused',
+    'retention.policy-updated',
+  ],
+  P3: ['case.messages-added'],
+  CASE: [
+    'case.created',
+    'case.updated',
+    'case.transitioned',
+    'case.closed',
+    'case.mutation-refused',
+    'custodian.added',
+    'evidence.added',
+    'evidence.removed',
+  ],
+  HOLD: ['hold.placed', 'hold.released', 'hold.check', 'hold.failed'],
+  P5: ['export.requested', 'export.completed', 'export.downloaded', 'export.failed'],
+};

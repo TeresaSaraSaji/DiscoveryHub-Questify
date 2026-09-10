@@ -231,10 +231,7 @@
   <div class="controls controls--wrap">
     <label class="field field--inline">
       <span>Service</span>
-      <select
-        [value]="draft().service"
-        (change)="patchFilter({ service: $any($event.target).value })"
-      >
+      <select [value]="draft().service" (change)="selectService($any($event.target).value)">
         <option value="">All services</option>
         @for (option of serviceOptions; track option.value) {
           <option [value]="option.value">{{ option.label }}</option>
@@ -248,7 +245,7 @@
         (change)="patchFilter({ action: $any($event.target).value })"
       >
         <option value="">All actions</option>
-        @for (group of actionGroups; track group.label) {
+        @for (group of actionGroups(); track group.label) {
           <optgroup [label]="group.label">
             @for (action of group.actions; track action) {
               <option [value]="action">{{ action }}</option>
