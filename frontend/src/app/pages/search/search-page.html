@@ -11,16 +11,37 @@
   service="p3"
 >
   <form class="form" (ngSubmit)="submit()">
-    <label class="field field--span2">
+    <label class="field field--span2 suggest">
       <span>Keyword</span>
       <input
         type="text"
         [ngModel]="query()"
         (ngModelChange)="query.set($event)"
+        (focus)="historyOpen.set(true)"
+        (blur)="historyOpen.set(false)"
         name="query"
         placeholder="Search by keyword, sender, subject…"
         autocomplete="off"
       />
+      @if (historyOpen() && suggestions().length > 0) {
+        <!-- mousedown is swallowed so a pick lands before the input's blur closes the list. -->
+        <ul class="suggest__list" (mousedown)="$event.preventDefault()">
+          @for (entry of suggestions(); track entry.id) {
+            <li>
+              <button type="button" class="suggest__item" (click)="pick(entry)">
+                <span>
+                  @if (entry.query) {
+                    {{ entry.query }}
+                  } @else {
+                    <span class="dim">(filters only)</span>
+                  }
+                </span>
+                <span class="dim">{{ entry.totalHits }} hits · {{ entry.executedAt | since: 'relative' }}</span>
+              </button>
+            </li>
+          }
+        </ul>
+      }
     </label>
 
     <label class="field">
