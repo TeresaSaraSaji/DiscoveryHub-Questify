@@ -142,6 +142,28 @@ export class SearchPage {
   protected readonly historyFailure = signal<Failure | null>(null);
   protected readonly clearingHistory = signal(false);
 
+  /** Whether the keyword input's recent-searches dropdown is on screen. */
+  protected readonly historyOpen = signal(false);
+
+  /**
+   * What the dropdown offers: the recent searches, narrowed to what has been typed so far. An
+   * empty keyword offers everything — focusing the empty bar and seeing your last five questions
+   * is the whole point of a search-bar history.
+   */
+  protected readonly suggestions = computed(() => {
+    const typed = this.query().trim().toLowerCase();
+    const entries = this.history();
+    return typed
+      ? entries.filter((entry) => entry.query?.toLowerCase().includes(typed))
+      : entries;
+  });
+
+  /** A dropdown pick is a re-run: fill the form from the entry and ask again. */
+  protected pick(entry: SearchHistoryEntry): void {
+    this.historyOpen.set(false);
+    this.rerun(entry);
+  }
+
   constructor() {
     this.loadHistory();
   }
