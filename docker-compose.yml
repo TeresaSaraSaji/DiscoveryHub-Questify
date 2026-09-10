@@ -367,6 +367,16 @@ services:
       DB_URL: jdbc:postgresql://postgres-archive-meta:5432/archive
       MONGO_URI: mongodb://mongodb:27017/archive
       SERVER_PORT: 8082
+      # P2's own retention sweep, off by default here. It is enabled in the service's
+      # application.yml and on a five-minute cron, and it deleted 3,498 corpus messages in a day
+      # (3,385 in one sweep) — every fixture older than the seven-year email and three-year chat
+      # defaults, which is most of the 2017-2021 range the generator deliberately produces. Correct
+      # FR-5 behaviour, and it makes the corpus impossible to keep at 12,000.
+      #
+      # Set to true deliberately when demonstrating disposition, the same way P2.2's own scheduler
+      # works. Overridden here rather than in application.yml so storage-service's source is
+      # untouched; Spring's relaxed binding maps this to discoveryhub.retention.schedule.enabled.
+      DISCOVERYHUB_RETENTION_SCHEDULE_ENABLED: "false"
       # The hold-service owns /holds/check; inside the Docker network it is reachable by service
       # name. The storage-service's disposition job calls this before deleting anything.
       HOLDS_BASE_URL: http://hold-service:8086
