@@ -392,12 +392,20 @@ services:
       # localhost) and on Kafka for the messages.archived and holds.events consumers.
       KAFKA_BOOTSTRAP: kafka:19092
       ES_URIS: http://elasticsearch:9200
+      # case-service, for filing search results as evidence. P4 owns case membership, so the
+      # bulk add-to-case write goes here rather than onto a topic.
+      CASES_BASE_URL: http://case-service:8084
       SERVER_PORT: 8083
     depends_on:
       kafka:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
+      # Not service_healthy: P3's search works perfectly well with P4 down, and only the bulk
+      # add-to-case action fails (with a 502 that says so). Waiting on P4 to serve searches would
+      # turn a degraded dependency into an outage, which is the opposite of NFR-2.
+      case-service:
+        condition: service_started
     restart: unless-stopped
 
   # P4 Case Management — case lifecycle, custodians, evidence. Owner: Teresa.
