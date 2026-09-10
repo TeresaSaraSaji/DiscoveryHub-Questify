@@ -21,6 +21,7 @@ COPY pom.xml .
 COPY contracts/pom.xml contracts/
 COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
+COPY services/disposition-service/pom.xml services/disposition-service/
 COPY services/search-service/pom.xml services/search-service/
 COPY services/case-service/pom.xml services/case-service/
 COPY services/hold-service/pom.xml services/hold-service/
