@@ -231,65 +231,77 @@
   <div class="controls controls--wrap">
     <label class="field field--inline">
       <span>Service</span>
-      <input
-        type="text"
-        class="input--narrow mono"
-        [ngModel]="filter().service"
-        (ngModelChange)="patchFilter({ service: $event })"
-        name="auditService"
-        placeholder="P5"
-        autocomplete="off"
-      />
+      <select [value]="draft().service" (change)="selectService($any($event.target).value)">
+        <option value="">All services</option>
+        @for (option of serviceOptions; track option.value) {
+          <option [value]="option.value">{{ option.label }}</option>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Action</span>
-      <input
-        type="text"
-        class="mono"
-        [ngModel]="filter().action"
-        (ngModelChange)="patchFilter({ action: $event })"
-        name="auditAction"
-        placeholder="export.completed"
-        autocomplete="off"
-      />
+      <select
+        [value]="draft().action"
+        (change)="patchFilter({ action: $any($event.target).value })"
+      >
+        <option value="">All actions</option>
+        @for (group of actionGroups(); track group.label) {
+          <optgroup [label]="group.label">
+            @for (action of group.actions; track action) {
+              <option [value]="action">{{ action }}</option>
+            }
+          </optgroup>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Outcome</span>
-      <input
-        type="text"
-        class="input--narrow mono"
-        [ngModel]="filter().outcome"
-        (ngModelChange)="patchFilter({ outcome: $event })"
-        name="auditOutcome"
-        placeholder="SUCCESS"
-        autocomplete="off"
-      />
+      <select
+        [value]="draft().outcome"
+        (change)="patchFilter({ outcome: $any($event.target).value })"
+      >
+        <option value="">Any outcome</option>
+        @for (option of outcomeOptions; track option.value) {
+          <option [value]="option.value">{{ option.label }}</option>
+        }
+      </select>
     </label>
     <label class="field field--inline">
       <span>Subject</span>
       <input
         type="text"
         class="mono"
-        [ngModel]="filter().subjectId"
+        [ngModel]="draft().subjectId"
         (ngModelChange)="patchFilter({ subjectId: $event })"
+        (keyup.enter)="search()"
         name="auditSubject"
         placeholder="messageId or caseId"
         autocomplete="off"
       />
     </label>
+    <button type="button" class="btn btn--primary btn--small" (click)="search()">Search</button>
     <button type="button" class="btn btn--ghost btn--small" (click)="clearFilter()">Clear</button>
     <button
       type="button"
       class="btn btn--ghost btn--small"
-      (click)="patchFilter({ outcome: 'REFUSED' })"
+      (click)="showRefusalsOnly()"
       title="A hold blocking a delete is recorded here"
     >
       Refusals only
     </button>
   </div>
 
+  @if (filterDirty()) {
+    <p class="note">Filters staged. Press Search to apply them.</p>
+  }
+
   @if (auditRows().content.length === 0 && !audit.isLoading()) {
-    <p class="empty">No audit events match.</p>
+    <p class="empty">
+      No audit events match.
+      @if (filterActive()) {
+        Try widening the filters, or Clear to see the whole trail.
+      }
+    </p>
   }
 
   <table class="table">

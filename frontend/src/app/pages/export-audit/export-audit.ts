@@ -5,7 +5,15 @@ import { FormsModule } from '@angular/forms';
 import { timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
-import { AuditApi, AuditFilter, EMPTY_AUDIT_FILTER } from '../../core/audit.api';
+import {
+  AUDIT_ACTION_GROUPS,
+  AUDIT_ACTIONS_BY_SERVICE,
+  AUDIT_OUTCOMES,
+  AUDIT_SERVICES,
+  AuditApi,
+  AuditFilter,
+  EMPTY_AUDIT_FILTER,
+} from '../../core/audit.api';
 import { CasesApi } from '../../core/cases.api';
 import { Failure, classify } from '../../core/failure';
 import {
@@ -99,10 +107,55 @@ export class ExportAudit {
 
   // ------------------------------------------------------------ audit
 
-  protected readonly filter = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
+  protected readonly serviceOptions = AUDIT_SERVICES;
+  protected readonly outcomeOptions = AUDIT_OUTCOMES;
+
+  /**
+   * The filter is staged, then applied.
+   *
+   * `draft` is what the controls are bound to; `applied` is what the request is built from. Only
+   * {@link search} copies one to the other, so choosing a service, an action and an outcome is one
+   * query rather than three, and the trail on screen keeps matching the last thing asked for while
+   * the next question is still being composed. Paging reads `applied`, so it cannot pick up a
+   * half-built filter either.
+   */
+  protected readonly draft = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
+  private readonly applied = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
   protected readonly auditPage = signal(0);
-  protected readonly audit = this.api.auditResource(this.filter, this.auditPage);
+  protected readonly audit = this.api.auditResource(this.applied, this.auditPage);
   protected readonly auditRows = valueOr(this.audit, EMPTY_PAGE as Page<AuditEntry>);
+
+  /** The controls have moved on from the results below, so the table is answering an older question. */
+  protected readonly filterDirty = computed(() => {
+    const draft = this.draft();
+    const applied = this.applied();
+    return (['service', 'action', 'outcome', 'subjectId'] as const).some(
+      (key) => draft[key].trim() !== applied[key].trim(),
+    );
+  });
+
+  protected readonly filterActive = computed(() =>
+    (['service', 'action', 'outcome', 'subjectId'] as const).some((key) =>
+      Boolean(this.applied()[key].trim()),
+    ),
+  );
+
+  /**
+   * The actions on offer, narrowed to the chosen service.
+   *
+   * Empty groups are dropped rather than shown empty, so picking P3 leaves one entry rather than
+   * five headings with nothing under them.
+   */
+  protected readonly actionGroups = computed(() => {
+    const allowed = AUDIT_ACTIONS_BY_SERVICE[this.draft().service];
+    if (!allowed) {
+      return AUDIT_ACTION_GROUPS;
+    }
+    return AUDIT_ACTION_GROUPS.map((group) => ({
+      label: group.label,
+      actions: group.actions.filter((action) => allowed.includes(action)),
+    })).filter((group) => group.actions.length > 0);
+  });
 
   // ------------------------------------------------------------ actions
 
@@ -213,14 +266,47 @@ export class ExportAudit {
       });
   }
 
+  /** Stages a change. Deliberately does not search: {@link search} is the only thing that does. */
   protected patchFilter(patch: Partial<AuditFilter>): void {
+    this.draft.update((current) => ({ ...current, ...patch }));
+  }
+
+  /**
+   * Stages a service, dropping an action that service cannot emit.
+   *
+   * Without this, narrowing the list would leave the old action staged but no longer visible in
+   * it — a filter the user can neither see nor have meant, guaranteeing an empty page. Moving to
+   * "All services" keeps whatever action is staged, since every action is on offer again.
+   */
+  protected selectService(service: string): void {
+    this.draft.update((current) => {
+      const allowed = AUDIT_ACTIONS_BY_SERVICE[service];
+      const keepAction = !allowed || !current.action || allowed.includes(current.action);
+      return { ...current, service, action: keepAction ? current.action : '' };
+    });
+  }
+
+  /**
+   * Applies every staged filter at once, back at page one.
+   *
+   * Whatever is blank stays out of the query — the resource only sends the keys that have a value
+   * — so any subset of the four works, and none of them is required.
+   */
+  protected search(): void {
     this.auditPage.set(0);
-    this.filter.update((current) => ({ ...current, ...patch }));
+    this.applied.set(this.draft());
   }
 
   protected clearFilter(): void {
     this.auditPage.set(0);
-    this.filter.set(EMPTY_AUDIT_FILTER);
+    this.draft.set(EMPTY_AUDIT_FILTER);
+    this.applied.set(EMPTY_AUDIT_FILTER);
+  }
+
+  /** A shortcut, so it stages and applies in one go rather than waiting for Search. */
+  protected showRefusalsOnly(): void {
+    this.patchFilter({ outcome: 'REFUSED' });
+    this.search();
   }
 
   protected statusClass(status: ExportJob['status']): string {
