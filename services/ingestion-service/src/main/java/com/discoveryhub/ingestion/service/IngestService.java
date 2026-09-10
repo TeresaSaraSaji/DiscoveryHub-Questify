@@ -29,6 +29,7 @@ public class IngestService {
 
     private final DedupeStore dedupe;
     private final EventPublisher publisher;
+    private final MessageIdMappingStore idMapping;
     private final Clock clock;
 
     // Per-instance and reset on restart, which is exactly what they claim to be. P1 stores no
@@ -39,9 +40,11 @@ public class IngestService {
     private final AtomicLong failedCount = new AtomicLong();
     private final Instant startedAt;
 
-    public IngestService(DedupeStore dedupe, EventPublisher publisher, Clock clock) {
+    public IngestService(DedupeStore dedupe, EventPublisher publisher,
+                         MessageIdMappingStore idMapping, Clock clock) {
         this.dedupe = dedupe;
         this.publisher = publisher;
+        this.idMapping = idMapping;
         this.clock = clock;
         this.startedAt = clock.instant();
     }
@@ -118,12 +121,26 @@ public class IngestService {
                     "identical message already ingested under a different externalId");
         }
 
+        // The durable guarantee (FR-1.6): Redis above is the fast path and fails open, so
+        // message_id_map's PK on external_id is what actually prevents a re-submit from being
+        // treated as new. If it is already mapped — e.g. Redis was flushed since the first
+        // ingestion — this is a duplicate, not a failure, and the Redis claims are released so a
+        // legitimate later retry is not mistaken for a duplicate of nothing.
+        if (!idMapping.claim(externalId, messageId)) {
+            dedupe.release(DedupeStore.EXTERNAL_ID, externalId);
+            dedupe.release(DedupeStore.CONTENT_HASH, contentHash);
+            audit("message.deduped", messageId, AuditEvent.Outcome.REFUSED, correlationId,
+                    Map.of("externalId", externalId, "matchedOn", "message_id_map"));
+            return IngestResult.duplicate(externalId, messageId, "externalId already ingested");
+        }
+
         try {
             publisher.publishIngested(message);
         } catch (RuntimeException e) {
             // Release both claims so a retry is not mistaken for a duplicate and silently dropped.
             dedupe.release(DedupeStore.EXTERNAL_ID, externalId);
             dedupe.release(DedupeStore.CONTENT_HASH, contentHash);
+            idMapping.release(externalId);
             log.error("publish failed for externalId={}", externalId, e);
             audit("message.ingest_failed", messageId, AuditEvent.Outcome.FAILURE, correlationId,
                     Map.of("externalId", externalId, "error", String.valueOf(e.getMessage())));

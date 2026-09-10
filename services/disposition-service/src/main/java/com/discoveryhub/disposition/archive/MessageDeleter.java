@@ -5,10 +5,10 @@ import com.discoveryhub.disposition.domain.ArchiveCandidate;
 /**
  * How a message that is past retention and not held actually leaves the archive (FR-5.2).
  *
- * <p>Two implementations, chosen by {@code discoveryhub.disposition.delete-mode}:
- * {@link JdbcMessageDeleter} writes to P2's database directly, {@link KafkaMessageDeleter} asks P2
- * to do it. The interface exists so that switching between them is a config change and so the
- * sweep in {@code run.DispositionService} can be tested without either a database or a broker.
+ * <p>{@link KafkaMessageDeleter} — the only implementation now that {@code ARCHIVE_DB} mode has
+ * been retired — asks P2 to do it. The interface stays even with one implementation so the sweep
+ * in {@code run.DispositionService} can be tested without a broker, and so a future mode has
+ * somewhere to plug in without touching the sweep itself.
  */
 public interface MessageDeleter {
 

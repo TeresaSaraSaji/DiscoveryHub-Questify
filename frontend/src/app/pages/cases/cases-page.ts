@@ -2,7 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { timer } from 'rxjs';
+import { forkJoin, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
 import { CasesApi } from '../../core/cases.api';
@@ -232,28 +232,44 @@ export class CasesPage {
       });
   }
 
+  /**
+   * Accepts one custodian or several, space/comma-separated — the same splitting
+   * {@link placeHold} already does for its own custodian field. Without this, typing
+   * "cust-001,cust-002" here (a reasonable thing to try, since the hold form right below it
+   * accepts exactly that) silently created one custodian row whose id was the literal string
+   * "cust-001,cust-002" — never matches a real custodian, so any hold scoped to it resolves to
+   * zero messages and fails.
+   */
   protected addCustodian(): void {
-    const id = this.custodianId().trim();
-    if (!id || !this.selected()) {
+    const ids = this.custodianId()
+      .split(/[\s,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const caseId = this.selected();
+    if (ids.length === 0 || !caseId) {
       return;
     }
     this.custodianFailure.set(null);
     this.custodianOk.set(null);
     this.addingCustodian.set(true);
 
-    this.api
-      .addCustodian(this.selected(), id)
+    forkJoin(ids.map((id) => this.api.addCustodian(caseId, id)))
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: () => {
           this.addingCustodian.set(false);
-          this.custodianOk.set(`${id} is on this case.`);
+          this.custodianOk.set(
+            ids.length === 1 ? `${ids[0]} is on this case.` : `${ids.length} custodians added to this case.`,
+          );
           this.custodianId.set('');
           this.custodians.reload();
         },
         error: (error: unknown) => {
           this.addingCustodian.set(false);
           this.custodianFailure.set(classify(error, describe('p4case')));
+          // Any custodian before the failing one in the list is already saved server-side;
+          // reload so the form does not look like nothing happened.
+          this.custodians.reload();
         },
       });
   }

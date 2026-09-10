@@ -203,9 +203,9 @@ export class SearchPage {
   /**
    * File the results as evidence on a case.
    *
-   * Eventually consistent: P3 publishes an event and case-service writes the rows, so the message
-   * says "queued" rather than "added". Claiming otherwise would contradict the case page a second
-   * later.
+   * P3 writes them to case-service before it answers, so the count reported here is confirmed and
+   * the case page will show them immediately. The previous version said "queued" because the write
+   * was an event nothing consumed — the messages never arrived at all.
    */
   protected fileToCase(): void {
     const caseId = this.fileCaseId().trim();
@@ -222,11 +222,11 @@ export class SearchPage {
       .subscribe({
         next: (result) => {
           this.filing.set(false);
-          this.fileOk.set(
-            `${result.added} message${result.added === 1 ? '' : 's'} queued for ${result.caseId}` +
-              (result.truncated ? ' — capped at 10,000 matches.' : '.') +
-              ' Case-service applies these asynchronously, so the case may take a moment to catch up.',
-          );
+          const filed = `${result.added} message${result.added === 1 ? '' : 's'} filed on ${result.caseId}`;
+          const skipped =
+            result.alreadyPresent > 0 ? ` (${result.alreadyPresent} already on the case)` : '';
+          const capped = result.truncated ? ' Capped at 10,000 matches.' : '';
+          this.fileOk.set(`${filed}${skipped}.${capped}`);
         },
         error: (error: unknown) => {
           this.filing.set(false);

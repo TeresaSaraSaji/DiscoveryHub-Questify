@@ -224,7 +224,11 @@ export interface SavedSearch {
 
 export interface BulkAddToCaseResponse {
   caseId: string;
+  /** Messages the search matched. */
+  matched: number;
+  /** Evidence rows case-service actually created. Differs from `matched` when some were already filed. */
   added: number;
+  alreadyPresent: number;
   messageIds: string[];
   truncated: boolean;
 }

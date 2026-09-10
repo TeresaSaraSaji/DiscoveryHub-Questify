@@ -25,7 +25,6 @@ COPY services/search-service/pom.xml services/search-service/
 COPY services/case-service/pom.xml services/case-service/
 COPY services/hold-service/pom.xml services/hold-service/
 COPY services/export-service/pom.xml services/export-service/
-COPY services/disposition-service/pom.xml services/disposition-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
 RUN mvn -B -q dependency:go-offline -pl contracts,services/storage-service -am || true
 

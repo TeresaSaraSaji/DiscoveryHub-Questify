@@ -28,6 +28,7 @@ class AttachmentIntegrityTest {
     void setUp() {
         publisher = new RecordingPublisher();
         service = new IngestService(new InMemoryDedupeStore(), publisher,
+                new InMemoryMessageIdMappingStore(),
                 Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC));
     }
 

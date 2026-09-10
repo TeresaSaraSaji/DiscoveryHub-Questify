@@ -19,6 +19,7 @@ class IngestStatusTest {
     @BeforeEach
     void setUp() {
         service = new IngestService(new InMemoryDedupeStore(), new RecordingPublisher(),
+                new InMemoryMessageIdMappingStore(),
                 Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC));
     }
 

@@ -15,23 +15,6 @@
   <name>P2 Archive</name>
   <description>System of record for messages, plus retention and disposition. Owner: A.</description>
 
-  <properties>
-    <aws-sdk.version>2.39.0</aws-sdk.version>
-  </properties>
-
-  <dependencyManagement>
-    <dependencies>
-      <!-- Only this module talks to S3, so the BOM is imported here rather than in the parent. -->
-      <dependency>
-        <groupId>software.amazon.awssdk</groupId>
-        <artifactId>bom</artifactId>
-        <version>${aws-sdk.version}</version>
-        <type>pom</type>
-        <scope>import</scope>
-      </dependency>
-    </dependencies>
-  </dependencyManagement>
-
   <dependencies>
     <dependency>
       <groupId>com.discoveryhub</groupId>
@@ -82,17 +65,22 @@
       <artifactId>flyway-database-postgresql</artifactId>
       <scope>runtime</scope>
     </dependency>
-    <!-- Optional S3 offload copy for attachment bytes: real AWS S3 or any S3-compatible endpoint
-         (MinIO) via endpoint override + path-style access. Only used when
-         discoveryhub.archive.storage.s3.enabled=true — the S3Client bean is conditional, so an
-         S3-less deployment never opens a connection and needs no credentials. -->
+    <!-- Message content (including attachment bytes) lives in MongoDB as one document per
+         message; Postgres above keeps only the slim legal-hold / retention bookkeeping row. -->
     <dependency>
-      <groupId>software.amazon.awssdk</groupId>
-      <artifactId>s3</artifactId>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-mongodb</artifactId>
     </dependency>
+    <!-- Boot 4 splits auto-configuration into per-technology modules, same trap as Kafka and
+         Flyway above: spring-boot-starter-data-mongodb alone gets you the driver and repository
+         interfaces but not org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration.
+         Without this, the app starts clean, spring.data.mongodb.uri/database are silently never
+         applied to the actual client, and every write lands in the driver's own hardcoded
+         fallback database ("test") instead of the one configured — confirmed against a real
+         Mongo container, not a hypothetical. -->
     <dependency>
-      <groupId>software.amazon.awssdk</groupId>
-      <artifactId>apache-client</artifactId>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-mongodb</artifactId>
     </dependency>
     <dependency>
       <groupId>com.h2database</groupId>

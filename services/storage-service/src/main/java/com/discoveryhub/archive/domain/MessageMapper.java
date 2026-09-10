@@ -1,14 +1,11 @@
 package com.discoveryhub.archive.domain;
 
+import com.discoveryhub.archive.config.RetentionProperties;
 import com.discoveryhub.contracts.Attachment;
 import com.discoveryhub.contracts.Ids;
 import com.discoveryhub.contracts.Message;
-import com.discoveryhub.contracts.MessageType;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
-import org.springframework.stereotype.Component;
+import com.discoveryhub.contracts.RetentionLabels;
 
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -17,105 +14,77 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 
+import org.springframework.stereotype.Component;
+
 /**
- * Translates between the frozen {@link Message} wire format and the persistent entities, and back
- * out to the archived representation that downstream services see.
- *
- * <p>The archived shape is the same as the ingestion shape with one field dropped: attachment
- * {@code contentBase64} is gone, because the bytes now live on local disk (and, when S3 is
- * enabled, in an S3 offload bucket) and {@code sha256} is what everything downstream reasons about
- * (message-schema.md). This is what the storage service publishes to {@code messages.archived}
- * and what its read API returns.
+ * Translates between the frozen {@link Message} wire format and the two persistent shapes P2
+ * keeps for it: {@link ArchivedMessageDocument} (the whole message, attachment bytes included, in
+ * Mongo) and {@link MessageHoldStatus} (the slim hold/retention bookkeeping row in Postgres).
  */
 @Component
 public class MessageMapper {
 
-    private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
+    private final RetentionProperties retention;
 
-    private final ObjectMapper json;
-
-    public MessageMapper(ObjectMapper json) {
-        this.json = json;
+    public MessageMapper(RetentionProperties retention) {
+        this.retention = retention;
     }
 
-    /** Wire message -> entities ready to persist. Assigns {@code messageId} if the source omitted it. */
-    public MessageEntity toEntity(Message m) {
+    /** Wire message -> the Mongo document. Assigns {@code messageId} if the source omitted it. */
+    public ArchivedMessageDocument toDocument(Message m) {
         String messageId = m.messageId() != null ? m.messageId() : Ids.messageId(m.externalId());
-        MessageEntity e = new MessageEntity();
-        e.setMessageId(messageId);
-        e.setExternalId(m.externalId());
-        e.setSource(m.source());
-        e.setType(m.type());
-        e.setCustodianId(m.custodianId());
-        e.setFrom(m.from());
-        e.setTo(writeList(m.to()));
-        e.setCc(writeList(m.cc()));
-        e.setSubject(m.subject());
-        e.setBody(m.body());
-        e.setSentAt(m.sentAt());
-        e.setThreadId(m.threadId());
-        e.setInReplyTo(m.inReplyTo());
-        e.setLabels(writeList(m.labels()));
-        e.setOnHold(false);
-        e.setHoldCount(0);
-        e.setAttachmentCount(m.attachments().size());
-        e.setArchivedAt(Instant.now());
-        return e;
+        List<AttachmentDocument> attachments = new ArrayList<>(m.attachments().size());
+        for (int ordinal = 0; ordinal < m.attachments().size(); ordinal++) {
+            attachments.add(toDocument(m.attachments().get(ordinal), messageId, ordinal));
+        }
+        return new ArchivedMessageDocument(
+                messageId, m.externalId(), m.source(), m.type(), m.custodianId(),
+                m.from(), m.to(), m.cc(), m.subject(), m.body(), m.sentAt(),
+                m.threadId(), m.inReplyTo(), m.labels(), attachments, Instant.now());
     }
 
-    /** Wire attachment -> entity, decoding the base64 content and anchoring {@code sha256}. */
-    public AttachmentEntity toEntity(Attachment a, String messageId, int ordinal) {
+    /** Wire attachment -> embedded document. The base64 content is kept: it lives in Mongo now. */
+    private AttachmentDocument toDocument(Attachment a, String messageId, int ordinal) {
         byte[] bytes = a.contentBase64() != null && !a.contentBase64().isBlank()
                 ? Base64.getDecoder().decode(a.contentBase64())
                 : new byte[0];
-        AttachmentEntity e = new AttachmentEntity();
-        e.setAttachmentId(a.attachmentId() != null ? a.attachmentId() : Ids.attachmentId(messageId, ordinal));
-        e.setMessageId(messageId);
-        e.setOrdinal(ordinal);
-        e.setFilename(a.filename());
-        e.setContentType(a.contentType());
-        e.setSizeBytes(a.sizeBytes() > 0 ? a.sizeBytes() : bytes.length);
-        // sha256 is the chain-of-custody anchor. If the source omitted it, derive it from the bytes
-        // so the anchor always exists before anything downstream can reference it.
-        e.setSha256(a.sha256() != null && !a.sha256().isBlank() ? a.sha256() : sha256Hex(bytes));
-        // Bytes are not persisted in the row: hold them transiently for the storage service to write
-        // to local disk (+ optional S3), then clear.
-        e.setContentBytes(bytes);
-        return e;
+        String attachmentId = a.attachmentId() != null ? a.attachmentId() : Ids.attachmentId(messageId, ordinal);
+        long sizeBytes = a.sizeBytes() > 0 ? a.sizeBytes() : bytes.length;
+        // sha256 is the chain-of-custody anchor. If the source omitted it, derive it from the
+        // bytes so the anchor always exists before anything downstream can reference it.
+        String sha256 = a.sha256() != null && !a.sha256().isBlank() ? a.sha256() : sha256Hex(bytes);
+        return new AttachmentDocument(attachmentId, ordinal, a.filename(), a.contentType(),
+                sizeBytes, sha256, a.contentBase64());
     }
 
-    /** Entity -> archived wire message. Attachment bytes are not included; only {@code sha256}. */
-    public Message toArchived(MessageEntity e, List<AttachmentEntity> attachments) {
+    /**
+     * Wire message -> the slim Postgres hold/retention row. A message carrying
+     * {@code RetentionLabels.DEMO_RETENTION} gets a short, absolute
+     * {@code retentionOverrideAt} instead of the normal type-based cutoff — see
+     * {@link RetentionProperties#demoPeriod()}.
+     */
+    public MessageHoldStatus toHoldStatus(Message m) {
+        String messageId = m.messageId() != null ? m.messageId() : Ids.messageId(m.externalId());
+        Instant now = Instant.now();
+        Instant retentionOverrideAt = m.labels().contains(RetentionLabels.DEMO_RETENTION)
+                ? now.plus(retention.demoPeriod())
+                : null;
+        return new MessageHoldStatus(messageId, m.externalId(), m.custodianId(), m.type(),
+                m.sentAt(), now, retentionOverrideAt);
+    }
+
+    /** Mongo document -> archived wire message. Attachment bytes are not included; only {@code sha256}. */
+    public Message toArchived(ArchivedMessageDocument doc) {
         List<Attachment> wireAttachments = new ArrayList<>();
-        for (AttachmentEntity a : attachments) {
+        for (AttachmentDocument a : doc.attachments()) {
             wireAttachments.add(new Attachment(
-                    a.getAttachmentId(), a.getFilename(), a.getContentType(),
-                    a.getSizeBytes(), a.getSha256(), null));
+                    a.attachmentId(), a.filename(), a.contentType(), a.sizeBytes(), a.sha256(), null));
         }
         return new Message(
-                e.getMessageId(), e.getExternalId(), e.getSource(), e.getType(),
-                e.getCustodianId(), e.getFrom(), readList(e.getTo()), readList(e.getCc()),
-                e.getSubject(), e.getBody(), e.getSentAt(), e.getThreadId(), e.getInReplyTo(),
-                wireAttachments, readList(e.getLabels()));
-    }
-
-    private String writeList(List<String> values) {
-        try {
-            return json.writeValueAsString(values == null ? List.of() : values);
-        } catch (Exception ex) {
-            throw new IllegalStateException("failed to serialise message list field", ex);
-        }
-    }
-
-    private List<String> readList(String text) {
-        if (text == null || text.isBlank()) {
-            return List.of();
-        }
-        try {
-            return json.readValue(text, STRING_LIST);
-        } catch (Exception ex) {
-            throw new IllegalStateException("failed to parse message list field: " + text, ex);
-        }
+                doc.messageId(), doc.externalId(), doc.source(), doc.type(),
+                doc.custodianId(), doc.from(), doc.to(), doc.cc(),
+                doc.subject(), doc.body(), doc.sentAt(), doc.threadId(), doc.inReplyTo(),
+                wireAttachments, doc.labels());
     }
 
     static String sha256Hex(byte[] bytes) {
@@ -130,10 +99,5 @@ public class MessageMapper {
     /** Used by disposition to recompute an attachment checksum for verification. */
     public static String checksum(byte[] bytes) {
         return sha256Hex(bytes);
-    }
-
-    @SuppressWarnings("unused")
-    private static String utf8(String s) {
-        return s == null ? null : new String(s.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
     }
 }

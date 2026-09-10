@@ -65,10 +65,16 @@ class RunProgressIntegrationTest {
         registry.add("discoveryhub.disposition.archive.datasource.username", Containers.ARCHIVE_DB::getUsername);
         registry.add("discoveryhub.disposition.archive.datasource.password", Containers.ARCHIVE_DB::getPassword);
 
-        registry.add("discoveryhub.disposition.delete-mode", () -> "ARCHIVE_DB");
+        registry.add("spring.kafka.bootstrap-servers", Containers.KAFKA::getBootstrapServers);
+        // ARCHIVE_DB mode has no implementation now that P2 splits into MongoDB (content) and its
+        // own slim Postgres (hold/retention); KAFKA is the only mode. P2 is not running here, so
+        // nothing ever answers on disposition.results — but that is fine for what this test
+        // watches: the sweep counts a published DELETE_REQUESTED as deleted immediately, which is
+        // the same number these assertions checked under ARCHIVE_DB mode.
+        registry.add("discoveryhub.disposition.delete-mode", () -> "KAFKA");
         registry.add("discoveryhub.disposition.archive.hold-check-base-url", P4::baseUrl);
         registry.add("discoveryhub.disposition.schedule.enabled", () -> "false");
-        registry.add("spring.kafka.listener.auto-startup", () -> "false");
+        registry.add("spring.kafka.consumer.group-id", () -> "test-" + java.util.UUID.randomUUID());
     }
 
     /**

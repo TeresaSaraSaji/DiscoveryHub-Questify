@@ -34,44 +34,42 @@ public final class ArchiveSchema {
 
     /**
      * (Re)build P2's schema. Idempotent because the archive container is shared across test
-     * classes — the second class to run would otherwise get "relation messages already exists",
-     * a failure about test plumbing that looks like a migration bug.
+     * classes — the second class to run would otherwise get "relation message_hold_status already
+     * exists", a failure about test plumbing that looks like a migration bug.
      */
     public static void create(JdbcTemplate archive) {
-        archive.execute("DROP TABLE IF EXISTS attachments, messages CASCADE");
+        archive.execute("DROP TABLE IF EXISTS message_hold_status CASCADE");
         archive.execute(read("V2__messages.sql"));
     }
 
-    /** Wipe both tables between tests. Attachments cascade, but be explicit about the order. */
+    /** Wipe the table between tests. */
     public static void truncate(JdbcTemplate archive) {
-        archive.execute("TRUNCATE TABLE attachments, messages");
+        archive.execute("TRUNCATE TABLE message_hold_status");
     }
 
     /**
-     * Insert one message. {@code sentAt} drives eligibility, {@code onHold} is P2's mirror of P4's
-     * hold state — the two inputs every disposition decision turns on.
+     * Insert one message's hold/retention row. {@code sentAt} drives eligibility, {@code onHold}
+     * is P2's mirror of P4's hold state — the two inputs every disposition decision turns on.
      */
     public static void insertMessage(JdbcTemplate archive, String messageId, String externalId,
                                      String custodianId, String type, Instant sentAt, boolean onHold) {
         archive.update("""
-                        INSERT INTO messages (message_id, external_id, source, type, custodian_id,
-                                              from_addr, to_list, cc_list, subject, body, sent_at,
-                                              thread_id, labels, on_hold, hold_count)
-                        VALUES (?, ?, 'EXCHANGE', ?, ?, 'from@x.com', '[]', '[]', 'subj', 'body', ?,
-                                'thread-1', '[]', ?, ?)
+                        INSERT INTO message_hold_status (message_id, external_id, custodian_id,
+                                                          type, sent_at, on_hold, hold_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                messageId, externalId, type, custodianId, java.sql.Timestamp.from(sentAt),
+                messageId, externalId, custodianId, type, java.sql.Timestamp.from(sentAt),
                 onHold, onHold ? 1 : 0);
     }
 
     public static long countMessages(JdbcTemplate archive) {
-        Long count = archive.queryForObject("SELECT count(*) FROM messages", Long.class);
+        Long count = archive.queryForObject("SELECT count(*) FROM message_hold_status", Long.class);
         return count == null ? 0L : count;
     }
 
     public static boolean exists(JdbcTemplate archive, String messageId) {
         Long count = archive.queryForObject(
-                "SELECT count(*) FROM messages WHERE message_id = ?", Long.class, messageId);
+                "SELECT count(*) FROM message_hold_status WHERE message_id = ?", Long.class, messageId);
         return count != null && count > 0;
     }
 

@@ -1,5 +1,6 @@
 package com.discoveryhub.search;
 
+import com.discoveryhub.search.config.CaseClientProperties;
 import com.discoveryhub.search.config.SearchProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -16,7 +17,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * the archived shape with attachment {@code contentBase64} already dropped (message-schema.md).
  */
 @SpringBootApplication
-@EnableConfigurationProperties(SearchProperties.class)
+@EnableConfigurationProperties({ SearchProperties.class, CaseClientProperties.class })
 public class SearchApplication {
 
     public static void main(String[] args) {

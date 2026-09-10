@@ -1,12 +1,10 @@
 package com.discoveryhub.archive.api;
 
-import com.discoveryhub.archive.domain.AttachmentEntity;
-import com.discoveryhub.archive.domain.MessageEntity;
+import com.discoveryhub.archive.domain.ArchivedMessageDocument;
+import com.discoveryhub.archive.domain.AttachmentDocument;
 import com.discoveryhub.archive.domain.MessageMapper;
-import com.discoveryhub.archive.repository.AttachmentRepository;
-import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.repository.ArchivedMessageRepository;
 import com.discoveryhub.archive.retention.MessageDeletionService;
-import com.discoveryhub.archive.storage.AttachmentStore;
 import com.discoveryhub.contracts.Message;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -22,7 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.List;
+import java.util.Base64;
 
 /**
  * P2's read + delete API. The frontend fetches message bodies and attachment bytes here (architecture
@@ -38,28 +36,22 @@ import java.util.List;
 @RequestMapping("/messages")
 public class MessageController {
 
-    private final MessageRepository messages;
-    private final AttachmentRepository attachments;
+    private final ArchivedMessageRepository documents;
     private final MessageMapper mapper;
-    private final AttachmentStore storage;
     private final MessageDeletionService deletion;
 
-    public MessageController(MessageRepository messages, AttachmentRepository attachments,
-                             MessageMapper mapper, AttachmentStore storage,
+    public MessageController(ArchivedMessageRepository documents, MessageMapper mapper,
                              MessageDeletionService deletion) {
-        this.messages = messages;
-        this.attachments = attachments;
+        this.documents = documents;
         this.mapper = mapper;
-        this.storage = storage;
         this.deletion = deletion;
     }
 
     @GetMapping("/{messageId}")
     public ResponseEntity<Message> getMessage(@PathVariable("messageId") String messageId) {
-        MessageEntity entity = messages.findById(messageId)
+        ArchivedMessageDocument doc = documents.findById(messageId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "message not found: " + messageId));
-        List<AttachmentEntity> atts = attachments.findByMessageIdOrderByOrdinalAsc(messageId);
-        return ResponseEntity.ok(mapper.toArchived(entity, atts));
+        return ResponseEntity.ok(mapper.toArchived(doc));
     }
 
     @GetMapping
@@ -69,28 +61,31 @@ public class MessageController {
             @RequestParam(name = "size", defaultValue = "50") int size) {
         PageRequest pageable = PageRequest.of(page, Math.min(size, 500), Sort.by(Sort.Direction.DESC, "sentAt"));
         if (custodianId != null && !custodianId.isBlank()) {
-            return messages.findByCustodianId(custodianId, pageable).map(e ->
-                    mapper.toArchived(e, attachments.findByMessageIdOrderByOrdinalAsc(e.getMessageId())));
+            return documents.findByCustodianId(custodianId, pageable).map(mapper::toArchived);
         }
-        return messages.findAll(pageable).map(e ->
-                mapper.toArchived(e, attachments.findByMessageIdOrderByOrdinalAsc(e.getMessageId())));
+        return documents.findAll(pageable).map(mapper::toArchived);
     }
 
-    /** Raw attachment bytes for download / export packaging. Content type from the stored metadata;
-     *  the bytes themselves are streamed from local disk (falling back to the S3 offload copy if the
-     *  local file is unavailable). */
+    /** Raw attachment bytes for download / export packaging. Read straight off the message
+     *  document — attachment bytes live there now, there is no separate blob store. */
     @GetMapping("/{messageId}/attachments/{attachmentId}")
     public ResponseEntity<byte[]> getAttachmentBytes(@PathVariable("messageId") String messageId,
                                                      @PathVariable("attachmentId") String attachmentId) {
-        AttachmentEntity att = attachments.findByMessageIdAndAttachmentId(messageId, attachmentId)
+        ArchivedMessageDocument doc = documents.findById(messageId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "message not found: " + messageId));
+        AttachmentDocument att = doc.attachments().stream()
+                .filter(a -> a.attachmentId().equals(attachmentId))
+                .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "attachment not found: " + attachmentId));
+        byte[] bytes = att.contentBase64() != null ? Base64.getDecoder().decode(att.contentBase64()) : new byte[0];
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(
-                        att.getContentType() != null ? att.getContentType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
-                .header("Content-Disposition", "attachment; filename=\"" + att.getFilename() + "\"")
-                .header("X-Sha256", att.getSha256())
-                .body(storage.load(att));
+                        att.contentType() != null ? att.contentType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
+                .header("Content-Disposition", "attachment; filename=\"" + att.filename() + "\"")
+                .header("X-Sha256", att.sha256())
+                .body(bytes);
     }
 
     /**

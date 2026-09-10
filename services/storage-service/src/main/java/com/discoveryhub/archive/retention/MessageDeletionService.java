@@ -1,24 +1,18 @@
 package com.discoveryhub.archive.retention;
 
-import com.discoveryhub.archive.domain.AttachmentEntity;
-import com.discoveryhub.archive.domain.MessageEntity;
-import com.discoveryhub.archive.repository.AttachmentRepository;
-import com.discoveryhub.archive.repository.MessageRepository;
-import com.discoveryhub.archive.storage.AttachmentStore;
+import com.discoveryhub.archive.domain.MessageHoldStatus;
+import com.discoveryhub.archive.repository.ArchivedMessageRepository;
+import com.discoveryhub.archive.repository.MessageHoldStatusRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Optional;
 
 /**
  * The guarded single-message delete behind {@code DELETE /messages/{id}} (checkpoint 9). Separate
- * from the controller because it has to be {@link Transactional}: {@code deleteByMessageId} is a
- * derived delete query and {@code delete} is an {@code EntityManager.remove}, and neither runs
- * without a transaction — a controller method calling them directly throws
- * {@code TransactionRequiredException} <i>after</i> the blob deletions have already happened.
+ * from the controller because it has to be {@link Transactional} for the Postgres side.
  *
  * <p>Shares its hold semantics with {@link DispositionCommandListener}, which applies P2.2's
  * disposition decisions: the local {@code on_hold} flag is the fast path, the hold-service call is
@@ -32,16 +26,14 @@ public class MessageDeletionService {
 
     private static final Logger log = LoggerFactory.getLogger(MessageDeletionService.class);
 
-    private final MessageRepository messages;
-    private final AttachmentRepository attachments;
-    private final AttachmentStore storage;
+    private final MessageHoldStatusRepository holdStatuses;
+    private final ArchivedMessageRepository documents;
     private final HoldCheckClient holdCheck;
 
-    public MessageDeletionService(MessageRepository messages, AttachmentRepository attachments,
-                                  AttachmentStore storage, HoldCheckClient holdCheck) {
-        this.messages = messages;
-        this.attachments = attachments;
-        this.storage = storage;
+    public MessageDeletionService(MessageHoldStatusRepository holdStatuses, ArchivedMessageRepository documents,
+                                  HoldCheckClient holdCheck) {
+        this.holdStatuses = holdStatuses;
+        this.documents = documents;
         this.holdCheck = holdCheck;
     }
 
@@ -49,38 +41,35 @@ public class MessageDeletionService {
     public enum Outcome { DELETED, HELD, NOT_FOUND }
 
     /**
-     * Delete one message and its attachments, unless it is under legal hold.
+     * Delete one message, unless it is under legal hold.
      *
-     * <p>Rows go inside this transaction; the attachment blobs are handed to
-     * {@link AttachmentStore#deleteAfterCommit} so they are only destroyed once the row removal is
-     * durable. Doing it the other way round means a rollback leaves live rows pointing at bytes
-     * that no longer exist.
+     * <p>The Postgres row is deleted (and flushed) first, then the Mongo document. Doing it in
+     * this order means that if the Mongo delete throws, the exception rolls this transaction back
+     * and the Postgres row comes back — the two stores are never left disagreeing about whether
+     * the message still exists. The reverse order could leave a Postgres row pointing at content
+     * that Mongo had already lost.
      *
-     * <p>The row is loaded with {@link MessageRepository#findByIdForUpdate}, not plain
+     * <p>The row is loaded with {@link MessageHoldStatusRepository#findByIdForUpdate}, not plain
      * {@code findById}: without the lock, a concurrent {@code HoldsEventListener} could place a
      * hold on this exact message between the P4 check below returning "not held" and the delete
-     * that follows it, and this transaction would never see it. The lock makes that update wait
-     * until this transaction is done — by which point the row is either gone or the hold applies
-     * to a row that no longer exists, but never both "delete proceeded" and "hold landed unseen".
+     * that follows it, and this transaction would never see it.
      */
     @Transactional
     public Outcome delete(String messageId) {
-        Optional<MessageEntity> found = messages.findByIdForUpdate(messageId);
+        Optional<MessageHoldStatus> found = holdStatuses.findByIdForUpdate(messageId);
         if (found.isEmpty()) {
             return Outcome.NOT_FOUND;
         }
-        MessageEntity entity = found.get();
-        if (entity.isOnHold() || holdCheck.isHeld(messageId)) {
+        MessageHoldStatus status = found.get();
+        if (status.isOnHold() || holdCheck.isHeld(messageId)) {
             log.info("refusing delete of {}: under legal hold", messageId);
             return Outcome.HELD;
         }
 
-        List<AttachmentEntity> atts = attachments.findByMessageIdOrderByOrdinalAsc(messageId);
-        attachments.deleteByMessageId(messageId);
-        messages.delete(entity);
-        messages.flush();
-        storage.deleteAfterCommit(atts);
-        log.info("deleted message {} and {} attachment(s)", messageId, atts.size());
+        holdStatuses.delete(status);
+        holdStatuses.flush();
+        documents.deleteById(messageId);
+        log.info("deleted message {}", messageId);
         return Outcome.DELETED;
     }
 }

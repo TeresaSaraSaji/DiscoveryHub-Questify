@@ -16,12 +16,17 @@ import java.util.Map;
 /**
  * Reads the disposition candidate set from P2's archive.
  *
- * <p>Deliberately SQL over {@link JdbcTemplate} rather than JPA. Mapping P2's {@code messages}
- * table into an entity here would mean two services carrying a definition of the same table, and
- * the next schema change in P2 would break this service at runtime with an error about a column.
- * A named projection of five columns is a contract this service can survive; a mirrored entity is
- * not. The columns relied on are {@code message_id, external_id, custodian_id, type, sent_at,
- * on_hold} — see {@code V2__messages.sql} in storage-service.
+ * <p>Deliberately SQL over {@link JdbcTemplate} rather than JPA. Mapping P2's
+ * {@code message_hold_status} table into an entity here would mean two services carrying a
+ * definition of the same table, and the next schema change in P2 would break this service at
+ * runtime with an error about a column. A named projection of five columns is a contract this
+ * service can survive; a mirrored entity is not. The columns relied on are {@code message_id,
+ * external_id, custodian_id, type, sent_at, on_hold} — see {@code V2__messages.sql} in
+ * storage-service.
+ *
+ * <p>Reads only this slim bookkeeping table, never the Mongo message store: P2 moved message
+ * content (attachments included) to MongoDB, and this gateway never needed content in the first
+ * place — only the columns above.
  */
 @Component
 public class JdbcArchiveGateway implements ArchiveGateway {
@@ -51,7 +56,7 @@ public class JdbcArchiveGateway implements ArchiveGateway {
         // no type name is ever concatenated into the SQL.
         StringBuilder sql = new StringBuilder("""
                 SELECT message_id, external_id, custodian_id, type, sent_at, on_hold
-                FROM messages
+                FROM message_hold_status
                 WHERE (""");
         List<Object> args = new ArrayList<>();
         boolean first = true;
@@ -72,7 +77,7 @@ public class JdbcArchiveGateway implements ArchiveGateway {
 
     @Override
     public long countMessages() {
-        Long count = archive.queryForObject("SELECT count(*) FROM messages", Long.class);
+        Long count = archive.queryForObject("SELECT count(*) FROM message_hold_status", Long.class);
         return count == null ? 0L : count;
     }
 }

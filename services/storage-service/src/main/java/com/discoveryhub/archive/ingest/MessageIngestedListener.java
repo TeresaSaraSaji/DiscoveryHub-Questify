@@ -6,7 +6,6 @@ import com.discoveryhub.contracts.Message;
 import com.discoveryhub.contracts.Topics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
@@ -16,8 +15,8 @@ import tools.jackson.databind.ObjectMapper;
  * Consumes {@code messages.ingested} and hands each message to {@link ArchiveService}. On a store,
  * publishes {@code messages.archived} and a {@code message.archived} audit event; on a dedupe,
  * publishes a {@code message.deduped} audit event (dropping a re-send is normal, not an error —
- * message-schema.md). The unique constraint is the real guarantee, so a race past the fast-path
- * check is caught here and treated as a dedupe too.
+ * message-schema.md). {@link ArchiveService} itself catches a race past its fast-path check
+ * against the {@code UNIQUE(external_id)} constraint and reports it as a dedupe too.
  *
  * <p>The record arrives as a JSON string (see {@code application.yml} — Boot 4.1 ships Jackson 3,
  * but Spring Kafka's JsonDeserializer is built against Jackson 2, so we use String serdes and parse
@@ -56,20 +55,13 @@ public class MessageIngestedListener {
             log.warn("skipping unparseable messages.ingested payload: {}", ex.getMessage());
             return;
         }
-        try {
-            IngestionResult result = archive.ingest(message);
-            if (result.outcome() == IngestionOutcome.STORED) {
-                Message archived = mapper.toArchived(result.entity(), result.attachments());
-                publisher.publishArchived(archived);
-                publisher.publishAudit(audit.archived(result.entity().getMessageId(), result.attachments().size()));
-            } else {
-                publisher.publishAudit(audit.deduped(result.externalId()));
-            }
-        } catch (DataIntegrityViolationException ex) {
-            // The UNIQUE(external_id) constraint caught a race past existsByExternalId. This is the
-            // idempotency guarantee working, not a failure: record a dedupe and move on.
-            log.debug("deduped by constraint: externalId={}", message.externalId());
-            publisher.publishAudit(audit.deduped(message.externalId()));
+        IngestionResult result = archive.ingest(message);
+        if (result.outcome() == IngestionOutcome.STORED) {
+            Message archived = mapper.toArchived(result.document());
+            publisher.publishArchived(archived);
+            publisher.publishAudit(audit.archived(result.document().messageId(), archived.attachments().size()));
+        } else {
+            publisher.publishAudit(audit.deduped(result.externalId()));
         }
     }
 }

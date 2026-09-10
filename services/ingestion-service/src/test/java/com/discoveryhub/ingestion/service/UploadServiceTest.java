@@ -1,8 +1,10 @@
 package com.discoveryhub.ingestion.service;
 
 import com.discoveryhub.contracts.Message;
+import com.discoveryhub.contracts.RetentionLabels;
 import com.discoveryhub.ingestion.api.MessageBatchDecoder;
 import com.discoveryhub.ingestion.api.MessageStreamReader;
+import com.discoveryhub.ingestion.api.RetentionMode;
 import com.discoveryhub.ingestion.api.UploadResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,7 @@ class UploadServiceTest {
     void setUp() {
         publisher = new RecordingPublisher();
         IngestService ingest = new IngestService(new InMemoryDedupeStore(), publisher,
+                new InMemoryMessageIdMappingStore(),
                 Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC));
         service = new UploadService(
                 new MessageStreamReader(MAPPER), new MessageBatchDecoder(MAPPER),
@@ -153,6 +156,7 @@ class UploadServiceTest {
                 new MessageStreamReader(MAPPER), new MessageBatchDecoder(MAPPER),
                 new AttachmentHydrator(),
                 new IngestService(new InMemoryDedupeStore(), publisher,
+                        new InMemoryMessageIdMappingStore(),
                         Clock.fixed(Instant.parse("2024-05-11T21:37:00Z"), ZoneOffset.UTC)),
                 2, 2, 10);
 
@@ -178,6 +182,46 @@ class UploadServiceTest {
         assertThat(response.accepted()).isEqualTo(5);
         assertThat(publisher.ingested).extracting(Message::externalId)
                 .containsExactly("EXCH-0", "EXCH-1", "EXCH-2", "EXCH-3", "EXCH-4");
+    }
+
+    @Test
+    void normalRetentionModeAddsNoLabel() throws Exception {
+        service.ingest("f.json",
+                new ByteArrayInputStream(json("EXCH-DEMO-1", "body").getBytes(StandardCharsets.UTF_8)),
+                RetentionMode.NORMAL);
+
+        assertThat(publisher.ingested).hasSize(1);
+        assertThat(publisher.ingested.getFirst().labels()).doesNotContain(RetentionLabels.DEMO_RETENTION);
+    }
+
+    @Test
+    void demoRetentionModeTagsEveryMessageInTheUpload() throws Exception {
+        UploadResponse response = service.ingest("f.json",
+                new ByteArrayInputStream(
+                        (json("EXCH-DEMO-2", "a") + "\n" + json("EXCH-DEMO-3", "b") + "\n")
+                                .getBytes(StandardCharsets.UTF_8)),
+                RetentionMode.DEMO);
+
+        assertThat(response.accepted()).isEqualTo(2);
+        assertThat(publisher.ingested).hasSize(2);
+        assertThat(publisher.ingested).allSatisfy(m ->
+                assertThat(m.labels()).contains(RetentionLabels.DEMO_RETENTION));
+    }
+
+    @Test
+    void demoRetentionModeDoesNotChangeDedupeOrAnyOtherField() throws Exception {
+        // The label must be invisible to identity: uploading in DEMO mode must dedupe exactly as
+        // NORMAL mode would against the same externalId, and every other field must be untouched.
+        upload("first.json", json("EXCH-DEMO-4", "body"));
+        UploadResponse second = service.ingest("second.json",
+                new ByteArrayInputStream(json("EXCH-DEMO-4", "body").getBytes(StandardCharsets.UTF_8)),
+                RetentionMode.DEMO);
+
+        assertThat(second.duplicates()).isEqualTo(1);
+        assertThat(second.accepted()).isZero();
+        Message original = publisher.ingested.getFirst();
+        assertThat(original.externalId()).isEqualTo("EXCH-DEMO-4");
+        assertThat(original.body()).isEqualTo("body");
     }
 
     private static String json(String externalId, String body) {
