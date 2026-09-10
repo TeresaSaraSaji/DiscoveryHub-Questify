@@ -188,7 +188,7 @@ class SearchControllerTest {
     void addToCaseDelegatesToTheService() {
         BulkAddToCaseRequest request = new BulkAddToCaseRequest("case-1", false,
                 new SearchRequest("fraud", List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null));
-        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-1", 2, List.of("msg-1", "msg-2"), false);
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-1", 2, 2, 0, List.of("msg-1", "msg-2"), false);
         when(searchService.addToCase(request)).thenReturn(expected);
 
         BulkAddToCaseResponse result = controller.addToCase(request);
@@ -201,7 +201,7 @@ class SearchControllerTest {
     void addToCaseWithAllResultsDelegatesToTheService() {
         BulkAddToCaseRequest request = new BulkAddToCaseRequest("case-42", true,
                 new SearchRequest("fraud", List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null));
-        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-42", 100, List.of("msg-1"), true);
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-42", 100, 100, 0, List.of("msg-1"), true);
         when(searchService.addToCase(request)).thenReturn(expected);
 
         BulkAddToCaseResponse result = controller.addToCase(request);
