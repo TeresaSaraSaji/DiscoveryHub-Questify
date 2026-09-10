@@ -128,8 +128,13 @@ describe('search asks for nothing until it is asked', () => {
     // No query against the corpus. The history read is not one: it lists what has already been
     // asked, which is the page's own metadata, same as the case list for the "file to" control.
     http.expectNone((request) => request.url === 'http://localhost:8083/search');
+    // The panel shows the last five searches, so that is all it asks for.
     http
-      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .expectOne(
+        (request) =>
+          request.url === 'http://localhost:8083/search/history' &&
+          request.params.get('limit') === '5',
+      )
       .flush([]);
     http
       .expectOne((request) => request.url === 'http://localhost:8084/cases')

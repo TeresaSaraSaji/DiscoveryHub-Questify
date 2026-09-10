@@ -272,7 +272,7 @@ export class SearchPage {
    */
   private loadHistory(): void {
     this.api
-      .history(20)
+      .history(5)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: (entries) => {
