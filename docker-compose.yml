@@ -480,6 +480,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # The Angular UI, production build served by Nginx. Owner: Sahithi.
+  #
+  # No depends_on, deliberately. The API calls are made by the browser, not by this container, so
+  # `localhost:8081` in public/api-config.js resolves to the published host ports — which is why
+  # those URLs need no change to work from a container. A depends_on here would express a
+  # dependency that does not exist and delay the UI behind seven services it can already survive
+  # without: every panel loads independently and reports its own failure.
+  frontend:
+    profiles: ["app"]
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: discoveryhub-frontend
+    ports:
+      # 4200 is the port the UI is documented on and the one every service's CORS config allows.
+      # Inside, Nginx serves on 80.
+      - "4200:80"
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-archive-data:

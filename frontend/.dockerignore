@@ -1,0 +1,20 @@
+# Build context is this directory, and `npm ci` inside the image installs from the lockfile — so
+# shipping a host-built node_modules is both pointless and actively wrong: it is ~400 MB of
+# darwin-arm64 binaries (esbuild, lmdb, @parcel/watcher) that cannot run in a linux image.
+node_modules/
+
+# The image builds its own. A stale host dist/ copied in would be silently overwritten at best,
+# and served instead of the real build at worst.
+dist/
+.angular/
+
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Nothing in the image reads these.
+README.md
+*.log
