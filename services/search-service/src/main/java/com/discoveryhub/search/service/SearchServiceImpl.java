@@ -9,11 +9,14 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
 import com.discoveryhub.search.repository.SearchRepository;
 import com.discoveryhub.search.strategy.SearchSortStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.stereotype.Service;
@@ -49,6 +52,12 @@ import java.util.UUID;
 @Service
 public class SearchServiceImpl implements SearchService {
 
+    private static final Logger log = LoggerFactory.getLogger(SearchServiceImpl.class);
+
+    /** History reads default to a screenful and are capped: it is a glance back, not an export. */
+    private static final int DEFAULT_HISTORY_LIMIT = 20;
+    private static final int MAX_HISTORY_LIMIT = 100;
+
     private final SearchRepository repository;
     private final SearchQueryBuilder queryBuilder;
     private final List<SearchSortStrategy> strategies;
@@ -79,7 +88,44 @@ public class SearchServiceImpl implements SearchService {
         SearchRequest effective = clampPageSize(request);
         Sort sort = selectSort(effective);
         Query query = queryBuilder.build(effective, sort);
-        return repository.search(query, effective);
+        SearchResponse response = repository.search(query, effective);
+        recordHistory(effective, response);
+        return response;
+    }
+
+    /**
+     * Record the execution in the history index. First pages only — paging through a result set is
+     * the same question again, not a new one. Best-effort by design: history is a convenience, and
+     * a failure to write it must not turn a search that already succeeded into an error.
+     */
+    private void recordHistory(SearchRequest request, SearchResponse response) {
+        if (request.page() != 0) {
+            return;
+        }
+        try {
+            repository.saveHistoryEntry(new SearchHistoryEntry(
+                    UUID.randomUUID().toString(),
+                    request.query(),
+                    writeRequest(request),
+                    response.total(),
+                    response.tookMs(),
+                    Instant.now()));
+        } catch (RuntimeException ex) {
+            log.warn("failed to record search history entry: {}", ex.getMessage());
+        }
+    }
+
+    @Override
+    public List<SearchHistoryEntry> listHistory(Integer limit) {
+        int effective = limit == null || limit <= 0
+                ? DEFAULT_HISTORY_LIMIT
+                : Math.min(limit, MAX_HISTORY_LIMIT);
+        return repository.listHistory(effective);
+    }
+
+    @Override
+    public void clearHistory() {
+        repository.clearHistory();
     }
 
     @Override

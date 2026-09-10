@@ -4,6 +4,7 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 
@@ -36,6 +37,12 @@ public interface SearchService {
 
     /** Load a saved search by id and re-run it. Throws if the id does not exist. */
     SearchResponse runSavedSearch(String id);
+
+    /** The most recent executed searches, newest first. {@code limit} is clamped server-side. */
+    List<SearchHistoryEntry> listHistory(Integer limit);
+
+    /** Remove every history entry. */
+    void clearHistory();
 
     /** Add the matched messages to a case: the current page by default, or all matches if allResults. */
     BulkAddToCaseResponse addToCase(BulkAddToCaseRequest request);
