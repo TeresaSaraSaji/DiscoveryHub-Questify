@@ -2,6 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import { Component, DestroyRef, computed, effect, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { forkJoin, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
@@ -17,8 +18,6 @@ import {
   EMPTY_PAGE,
   Evidence,
   HoldEntity,
-  MATTER_TYPES,
-  MatterType,
   NEXT_STATUS,
   Page,
 } from '../../core/models';
@@ -31,11 +30,15 @@ import { Since } from '../../shared/since.pipe';
 /**
  * Cases and the holds on them — P4's two halves on one page, plus the proof from P2.2.
  *
- * The arrangement follows what someone actually does here: pick or open a matter, put custodians
- * and evidence on it, place a hold so retention stops touching any of it, and later show that the
+ * The arrangement follows what someone actually does here: pick a matter, put custodians and
+ * evidence on it, place a hold so retention stops touching any of it, and later show that the
  * hold did its job. That last panel comes from P2.2 rather than P4, which matters: it was written
  * at sweep time and outlives both the release of the hold and the closing of the case, so it is
  * evidence rather than a status display.
+ *
+ * Opening a matter is deliberately not here — it lives on `/cases/new`. It is the one thing on
+ * this screen that is done once per matter rather than repeatedly, and it does not belong beside
+ * a list that is read constantly.
  *
  * Two behaviours the UI must not smooth over:
  *
@@ -47,7 +50,7 @@ import { Since } from '../../shared/since.pipe';
  */
 @Component({
   selector: 'app-cases-page',
-  imports: [Alert, DecimalPipe, FormsModule, Paginator, Panel, Since],
+  imports: [Alert, DecimalPipe, FormsModule, Paginator, Panel, RouterLink, Since],
   templateUrl: './cases-page.html',
 })
 export class CasesPage {
@@ -56,9 +59,8 @@ export class CasesPage {
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly statuses = CASE_STATUSES;
-  protected readonly matterTypes = MATTER_TYPES;
 
-  /** Deep link from the dashboard: /cases?caseId=… */
+  /** Deep link from the dashboard, and from `/cases/new` once the case exists: /cases?caseId=… */
   readonly caseId = input('');
 
   protected readonly selected = signal('');
@@ -141,14 +143,6 @@ export class CasesPage {
 
   // ------------------------------------------------------------ forms
 
-  protected readonly newName = signal('');
-  protected readonly newDescription = signal('');
-  protected readonly newMatter = signal<MatterType>('INVESTIGATION');
-  protected readonly newOwner = signal('investigator');
-  protected readonly creating = signal(false);
-  protected readonly createFailure = signal<Failure | null>(null);
-  protected readonly createOk = signal<string | null>(null);
-
   protected readonly custodianId = signal('');
   protected readonly addingCustodian = signal(false);
   protected readonly custodianFailure = signal<Failure | null>(null);
@@ -188,40 +182,6 @@ export class CasesPage {
   protected filterStatus(status: string): void {
     this.casesPage.set(0);
     this.statusFilter.set((status || '') as CaseStatus | '');
-  }
-
-  protected createCase(): void {
-    const name = this.newName().trim();
-    if (!name) {
-      return;
-    }
-    this.createFailure.set(null);
-    this.createOk.set(null);
-    this.creating.set(true);
-
-    this.api
-      .createCase({
-        name,
-        description: this.newDescription().trim() || null,
-        matterType: this.newMatter(),
-        owner: this.newOwner().trim() || 'investigator',
-      })
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: (created) => {
-          this.creating.set(false);
-          this.createOk.set(`Case "${created.name}" opened as ${created.status}.`);
-          this.newName.set('');
-          this.newDescription.set('');
-          this.cases.reload();
-          this.caseStats.reload();
-          this.select(created.caseId);
-        },
-        error: (error: unknown) => {
-          this.creating.set(false);
-          this.createFailure.set(classify(error, describe('p4case')));
-        },
-      });
   }
 
   /** One step forward only. The service refuses anything else with a 409 naming from and to. */

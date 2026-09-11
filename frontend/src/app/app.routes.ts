@@ -1,7 +1,7 @@
 import { Routes } from '@angular/router';
 
 /**
- * Six pages, lazily loaded, and **no resolvers**.
+ * Seven pages, lazily loaded, and **no resolvers**.
  *
  * A resolver would fetch before activating the route, which is the one thing this UI must not do:
  * six services on six ports, and a route that waited on any of them would refuse to open a page
@@ -18,6 +18,15 @@ export const routes: Routes = [
     path: 'search',
     title: 'Search · DiscoveryHub',
     loadComponent: () => import('./pages/search/search-page').then((m) => m.SearchPage),
+  },
+  // Opening a matter is its own page rather than a panel on the list: it is linkable, the back
+  // button cancels it, and the list is not permanently half-covered by a form used once per
+  // matter. Listed before 'cases' to read as a pair, not out of necessity — a childless route
+  // never matches a URL with segments left over, so 'cases' cannot swallow 'cases/new'.
+  {
+    path: 'cases/new',
+    title: 'Open a case · DiscoveryHub',
+    loadComponent: () => import('./pages/cases/new-case-page').then((m) => m.NewCasePage),
   },
   {
     path: 'cases',
