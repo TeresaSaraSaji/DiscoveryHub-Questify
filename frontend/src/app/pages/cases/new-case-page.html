@@ -1,0 +1,73 @@
+<header class="page__head">
+  <div>
+    <h1>Open a case</h1>
+    <p class="page__lede">
+      A new matter starts in DRAFT and moves forward one step at a time: DRAFT → ACTIVE →
+      UNDER_REVIEW → CLOSED. Closing it makes it read-only and releases its holds.
+    </p>
+  </div>
+  <a class="link" routerLink="/cases">← Back to cases</a>
+</header>
+
+<app-panel heading="Matter details" hint="Only the name is required" service="p4case">
+  <div class="form">
+    <label class="field field--span2">
+      <span>Name</span>
+      <input
+        type="text"
+        [ngModel]="name()"
+        (ngModelChange)="name.set($event)"
+        name="name"
+        placeholder="Regulatory Inquiry"
+        autocomplete="off"
+      />
+    </label>
+    <label class="field">
+      <span>Matter type</span>
+      <select [value]="matterType()" (change)="matterType.set($any($event.target).value)">
+        @for (type of matterTypes; track type) {
+          <option [value]="type">{{ type }}</option>
+        }
+      </select>
+    </label>
+    <label class="field">
+      <span>Owner</span>
+      <input
+        type="text"
+        [ngModel]="owner()"
+        (ngModelChange)="owner.set($event)"
+        name="owner"
+        autocomplete="off"
+      />
+    </label>
+    <label class="field field--span2">
+      <span>Description</span>
+      <input
+        type="text"
+        [ngModel]="description()"
+        (ngModelChange)="description.set($event)"
+        name="description"
+        placeholder="Optional"
+        autocomplete="off"
+      />
+    </label>
+  </div>
+
+  <div class="controls controls--tight">
+    <button
+      type="button"
+      class="btn btn--primary"
+      (click)="create()"
+      [disabled]="creating() || !name().trim()"
+    >
+      {{ creating() ? 'Opening…' : 'Create case' }}
+    </button>
+    <a class="btn" routerLink="/cases">Cancel</a>
+  </div>
+
+  <app-alert [failure]="failure()" />
+
+  <p class="note">
+    Custodians, evidence and holds go on the case once it exists — this form only opens it.
+  </p>
+</app-panel>

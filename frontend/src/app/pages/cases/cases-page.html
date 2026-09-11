@@ -3,15 +3,18 @@
     <h1>Cases &amp; Legal Hold</h1>
     <p class="page__lede">Manage matters, file evidence, and place holds that stop retention.</p>
   </div>
-  <label class="field field--inline">
-    <span>Status</span>
-    <select [value]="statusFilter()" (change)="filterStatus($any($event.target).value)">
-      <option value="">All</option>
-      @for (status of statuses; track status) {
-        <option [value]="status">{{ status }}</option>
-      }
-    </select>
-  </label>
+  <div class="controls controls--wrap">
+    <label class="field field--inline">
+      <span>Status</span>
+      <select [value]="statusFilter()" (change)="filterStatus($any($event.target).value)">
+        <option value="">All</option>
+        @for (status of statuses; track status) {
+          <option [value]="status">{{ status }}</option>
+        }
+      </select>
+    </label>
+    <a class="btn btn--primary" routerLink="/cases/new">Open a case</a>
+  </div>
 </header>
 
 <div class="grid grid--4">
@@ -54,105 +57,43 @@
   </app-panel>
 </div>
 
-<div class="grid grid--2">
-  <app-panel heading="Cases" hint="Select one to work on it" service="p4case" [source]="cases">
-    @if (caseRows().content.length === 0 && !cases.isLoading()) {
-      <p class="empty">No cases match. Open one below.</p>
-    }
-    <table class="table">
-      <thead>
-        <tr>
-          <th>Case</th>
-          <th>Matter</th>
-          <th>Owner</th>
-          <th>Created on</th>
-          <th>Status</th>
+<app-panel heading="Cases" hint="Select one to work on it" service="p4case" [source]="cases">
+  @if (caseRows().content.length === 0 && !cases.isLoading()) {
+    <p class="empty">No cases match. <a class="link" routerLink="/cases/new">Open one</a>.</p>
+  }
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Case</th>
+        <th>Matter</th>
+        <th>Owner</th>
+        <th>Created on</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (item of caseRows().content; track item.caseId) {
+        <tr
+          class="row--clickable"
+          [class.row--selected]="item.caseId === selected()"
+          (click)="select(item.caseId)"
+        >
+          <td>
+            {{ item.name }}
+            <div class="mono dim">{{ item.caseId.slice(0, 8) }}…</div>
+          </td>
+          <td class="dim">{{ item.matterType }}</td>
+          <td class="dim">{{ item.owner }}</td>
+          <td class="dim">{{ item.createdAt | since: 'clock' }}</td>
+          <td>
+            <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
+          </td>
         </tr>
-      </thead>
-      <tbody>
-        @for (item of caseRows().content; track item.caseId) {
-          <tr
-            class="row--clickable"
-            [class.row--selected]="item.caseId === selected()"
-            (click)="select(item.caseId)"
-          >
-            <td>
-              {{ item.name }}
-              <div class="mono dim">{{ item.caseId.slice(0, 8) }}…</div>
-            </td>
-            <td class="dim">{{ item.matterType }}</td>
-            <td class="dim">{{ item.owner }}</td>
-            <td class="dim">{{ item.createdAt | since: 'clock' }}</td>
-            <td>
-              <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
-            </td>
-          </tr>
-        }
-      </tbody>
-    </table>
-    <app-paginator [page]="caseRows()" [busy]="cases.isLoading()" (go)="casesPage.set($event)" />
-  </app-panel>
-
-  <app-panel heading="Open a case" hint="Starts in DRAFT" service="p4case">
-    <div class="form">
-      <label class="field field--span2">
-        <span>Name</span>
-        <input
-          type="text"
-          [ngModel]="newName()"
-          (ngModelChange)="newName.set($event)"
-          name="newName"
-          placeholder="Regulatory Inquiry"
-          autocomplete="off"
-        />
-      </label>
-      <label class="field">
-        <span>Matter type</span>
-        <select [value]="newMatter()" (change)="newMatter.set($any($event.target).value)">
-          @for (type of matterTypes; track type) {
-            <option [value]="type">{{ type }}</option>
-          }
-        </select>
-      </label>
-      <label class="field">
-        <span>Owner</span>
-        <input
-          type="text"
-          [ngModel]="newOwner()"
-          (ngModelChange)="newOwner.set($event)"
-          name="newOwner"
-          autocomplete="off"
-        />
-      </label>
-      <label class="field field--span2">
-        <span>Description</span>
-        <input
-          type="text"
-          [ngModel]="newDescription()"
-          (ngModelChange)="newDescription.set($event)"
-          name="newDescription"
-          placeholder="Optional"
-          autocomplete="off"
-        />
-      </label>
-    </div>
-    <div class="controls controls--tight">
-      <button
-        type="button"
-        class="btn btn--primary"
-        (click)="createCase()"
-        [disabled]="creating() || !newName().trim()"
-      >
-        {{ creating() ? 'Opening…' : 'Create case' }}
-      </button>
-    </div>
-    <app-alert [failure]="createFailure()" [success]="createOk()" />
-    <p class="note">
-      A case moves forward one step at a time: DRAFT → ACTIVE → UNDER_REVIEW → CLOSED. Closing it
-      makes it read-only and releases its holds.
-    </p>
-  </app-panel>
-</div>
+      }
+    </tbody>
+  </table>
+  <app-paginator [page]="caseRows()" [busy]="cases.isLoading()" (go)="casesPage.set($event)" />
+</app-panel>
 
 @if (!selected()) {
   <app-panel heading="Case detail" hint="Nothing selected yet" service="p4case">
