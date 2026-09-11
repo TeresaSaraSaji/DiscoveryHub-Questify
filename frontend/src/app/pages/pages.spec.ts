@@ -125,8 +125,17 @@ describe('search asks for nothing until it is asked', () => {
     const fixture = mount(SearchPage);
     const http = TestBed.inject(HttpTestingController);
 
-    http.expectNone((request) => request.url.includes('/search'));
-    // The one request it does make is the case list, for the "file to case" control.
+    // No query against the corpus. The history read is not one: it lists what has already been
+    // asked, which is the page's own metadata, same as the case list for the "file to" control.
+    http.expectNone((request) => request.url === 'http://localhost:8083/search');
+    // The panel shows the last five searches, so that is all it asks for.
+    http
+      .expectOne(
+        (request) =>
+          request.url === 'http://localhost:8083/search/history' &&
+          request.params.get('limit') === '5',
+      )
+      .flush([]);
     http
       .expectOne((request) => request.url === 'http://localhost:8084/cases')
       .flush({
@@ -344,6 +353,408 @@ describe('search asks for nothing until it is asked', () => {
     await settleAsync(fixture);
 
     expect(text(fixture)).toContain('That is an answer, not a failure');
+  });
+});
+
+/**
+ * Selecting results and revealing more of them.
+ *
+ * The result list starts at one batch and grows only when asked ("Show more" appends the next
+ * batch); a tick on a row survives that growth, and "Add selected" files exactly the ticked ids
+ * through P3's add-selected endpoint — never a re-run of the search, which could match a
+ * different set than the reviewer saw.
+ */
+describe('search result selection and show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  function aResult(id: string) {
+    return {
+      messageId: id,
+      externalId: null,
+      custodianId: 'cust-1',
+      from: 'a@example.com',
+      to: [],
+      subject: `Subject ${id}`,
+      sentAt: '2020-05-01T10:00:00Z',
+      snippet: '',
+      highlights: null,
+      score: 1,
+      onHold: false,
+      attachmentCount: 0,
+      attachmentFilenames: null,
+    };
+  }
+
+  async function searchedFixture(total: number) {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('atlas');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-1'), aResult('msg-2')],
+      total,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+    // The history refresh the successful first page triggered.
+    http
+      .match((request) => request.url === 'http://localhost:8083/search/history')
+      .forEach((request) => request.flush([]));
+    await settleAsync(fixture);
+    return { fixture, http };
+  }
+
+  it('shows one batch and appends the next on Show more', async () => {
+    const { fixture, http } = await searchedFixture(4);
+
+    expect(text(fixture)).toContain('Showing 2 of 4');
+    const showMore = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Show more');
+    expect(showMore).toBeTruthy();
+
+    showMore!.click();
+    settle(fixture);
+
+    const next = http.expectOne('http://localhost:8083/search');
+    expect(next.request.body.page).toBe(1);
+    next.flush({
+      results: [aResult('msg-3'), aResult('msg-4')],
+      total: 4,
+      page: 1,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    const rendered = text(fixture);
+    // Appended, not replaced: the first batch is still on screen.
+    expect(rendered).toContain('Subject msg-1');
+    expect(rendered).toContain('Subject msg-4');
+    expect(rendered).toContain('Showing 4 of 4');
+    // Everything shown, nothing more to ask for.
+    expect(rendered).not.toContain('Show more');
+  });
+
+  it('files exactly the ticked ids through the add-selected endpoint', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    const checkboxes = [...host.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]')];
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[1].click();
+    settle(fixture);
+
+    const page = fixture.componentInstance as unknown as {
+      fileCaseId: { set(v: string): void };
+    };
+    page.fileCaseId.set('case-9');
+    settle(fixture);
+
+    const addSelected = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Add selected (1)'),
+    );
+    expect(addSelected).toBeTruthy();
+    addSelected!.click();
+    settle(fixture);
+
+    const filed = http.expectOne('http://localhost:8083/search/add-selected-to-case');
+    // The ticked id, verbatim — not the search, not the page.
+    expect(filed.request.body).toEqual({ caseId: 'case-9', messageIds: ['msg-2'] });
+    filed.flush({
+      caseId: 'case-9',
+      matched: 1,
+      added: 1,
+      alreadyPresent: 0,
+      messageIds: ['msg-2'],
+      truncated: false,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('1 selected message filed on case-9');
+    // Filing clears the picks, so the same tick cannot be double-filed by accident.
+    expect(text(fixture)).toContain('Add selected (0)');
+  });
+
+  it('a new search clears the previous selection', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    host.querySelector<HTMLInputElement>('tbody input[type=checkbox]')!.click();
+    settle(fixture);
+    expect(text(fixture)).toContain('Add selected (1)');
+
+    host.querySelector<HTMLButtonElement>('.btn--primary')!.click();
+    settle(fixture);
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-9')],
+      total: 1,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Add selected (0)');
+  });
+});
+
+/**
+ * The history panel reads what has already been asked and can put it back into the form. It must
+ * never take the page down: a history failure stays in its own panel, and a re-run goes through
+ * the same form and the same POST /search as a hand-typed query.
+ */
+describe('search history', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('lists recent searches with their answers', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+        {
+          id: 'h-2',
+          query: null,
+          requestJson: '{"custodianIds":["cust-004"],"page":0,"size":20}',
+          totalHits: 3,
+          tookMs: 2,
+          executedAt: '2026-09-10T11:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Recent searches');
+    expect(rendered).toContain('project atlas');
+    // A pure filter search has no keyword to show, and must not render as blank.
+    expect(rendered).toContain('(filters only)');
+    expect(rendered).toContain('42');
+  });
+
+  it('re-runs an entry through the form, filters included', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'fraud',
+          requestJson:
+            '{"query":"fraud","custodianIds":["cust-004"],"hasAttachment":true,"page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const runButton = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Run again');
+    expect(runButton).toBeTruthy();
+    runButton!.click();
+    settle(fixture);
+
+    const search = http.expectOne('http://localhost:8083/search');
+    expect(search.request.body.query).toBe('fraud');
+    expect(search.request.body.custodianIds).toEqual(['cust-004']);
+    expect(search.request.body.hasAttachment).toBe(true);
+    // Recorded searches restart at the first page: the question is re-asked, not resumed.
+    expect(search.request.body.page).toBe(0);
+  });
+
+  it('keeps a history failure inside its own panel', async () => {
+    const fixture = mount(SearchPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    // The search form is intact and usable...
+    expect(rendered).toContain('Enter a keyword or set a filter');
+    // ...and the history panel says what happened without emptying the page.
+    expect(rendered).toContain('Recent searches');
+  });
+
+  it('drops recent searches under the keyword input on focus, and a pick re-runs', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const input = host.querySelector<HTMLInputElement>('input[name="query"]');
+    expect(host.querySelector('.suggest__list')).toBeNull();
+
+    input!.dispatchEvent(new Event('focus'));
+    settle(fixture);
+
+    const item = host.querySelector<HTMLButtonElement>('.suggest__item');
+    expect(item?.textContent).toContain('project atlas');
+    expect(item?.textContent).toContain('42 hits');
+
+    item!.click();
+    settle(fixture);
+
+    const search = http.expectOne('http://localhost:8083/search');
+    expect(search.request.body.query).toBe('project atlas');
+    // Picking closes the list.
+    expect(host.querySelector('.suggest__list')).toBeNull();
+  });
+
+  it('narrows the dropdown to what has been typed', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'project atlas',
+          requestJson: '{"query":"project atlas","page":0,"size":20}',
+          totalHits: 42,
+          tookMs: 7,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+        {
+          id: 'h-2',
+          query: 'invoice fraud',
+          requestJson: '{"query":"invoice fraud","page":0,"size":20}',
+          totalHits: 9,
+          tookMs: 3,
+          executedAt: '2026-09-10T11:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const page = fixture.componentInstance as unknown as {
+      query: { set(v: string): void };
+      historyOpen: { set(v: boolean): void };
+    };
+    page.historyOpen.set(true);
+    page.query.set('invoice');
+    settle(fixture);
+
+    const items = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLElement>('.suggest__item'),
+    ].map((item) => item.textContent ?? '');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toContain('invoice fraud');
+  });
+
+  it('clears the history on request', async () => {
+    const fixture = mount(SearchPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8083/search/history')
+      .flush([
+        {
+          id: 'h-1',
+          query: 'fraud',
+          requestJson: '{"query":"fraud","page":0,"size":20}',
+          totalHits: 1,
+          tookMs: 1,
+          executedAt: '2026-09-10T12:00:00Z',
+        },
+      ]);
+    await failEverything(fixture);
+
+    const clearButton = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Clear history');
+    expect(clearButton).toBeTruthy();
+    clearButton!.click();
+    settle(fixture);
+
+    const clear = http.expectOne('http://localhost:8083/search/history');
+    expect(clear.request.method).toBe('DELETE');
+    clear.flush(null, { status: 204, statusText: 'No Content' });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Nothing has been searched yet');
+  });
+});
+
+/** The evidence list can run to hundreds of rows; it grows ten at a time, like search results. */
+describe('case evidence show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('shows ten rows and grows on Show more', async () => {
+    const fixture = mount(CasesPage);
+    const page = fixture.componentInstance as unknown as { selected: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.selected.set('case-1');
+    settle(fixture);
+
+    const evidence = Array.from({ length: 12 }, (_, i) => ({
+      id: `ev-${i}`,
+      messageId: `msg-${i}`,
+      source: 'SEARCH',
+      addedAt: '2026-09-10T12:00:00Z',
+    }));
+    http
+      .match((request) => request.url === 'http://localhost:8084/cases/case-1/evidence')
+      .forEach((request) => request.flush(evidence));
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const shownRows = () =>
+      [...host.querySelectorAll('td.mono')].filter((cell) => cell.textContent?.startsWith('msg-'))
+        .length;
+
+    expect(shownRows()).toBe(10);
+    expect(text(fixture)).toContain('Showing 10 of 12');
+
+    const showMore = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Show more',
+    );
+    expect(showMore).toBeTruthy();
+    showMore!.click();
+    settle(fixture);
+
+    expect(shownRows()).toBe(12);
+    // Everything shown; the growth control has nothing left to offer.
+    expect(text(fixture)).not.toContain('Showing 12 of 12');
   });
 });
 
