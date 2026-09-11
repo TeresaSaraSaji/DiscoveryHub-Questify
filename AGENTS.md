@@ -77,6 +77,22 @@ Two things make that work, and both are configuration rather than code:
   `@Value` and the actuator placeholder both resolve it from the environment, so the one variable
   covers the panels and the status strip. No `CorsConfig` needs editing.
 
+**Sharing the link shares the delete button.** The retention page runs a real sweep, and on a
+shared host a visitor who clicks it destroys the host's data, not their own. This has already
+happened once: a `MANUAL`, non-dry-run sweep took 486 messages out of the archive, and holds saved
+only the 14 they covered. The deletion is permanent — P1 refuses the re-upload as duplicate,
+because dedupe outlives the message. Restoring means clearing Redis *and* deleting the orphaned
+`message_id_map` rows in `postgres-ingestion` (the ones whose `message_id` is no longer in Mongo),
+and only then re-uploading.
+
+There is no configuration that makes this safe. `discoveryhub.disposition.schedule.enabled` is
+already `false`, and that only stops the *timer* — `POST /disposition/runs` still sweeps on demand,
+which is exactly what the button does. `dryRun` is a query parameter on that request, not a
+setting, so nothing on the host can force it. Say so before handing the URL round.
+
+Note also that a sweep deletes from P2 without removing the document from P3, so Elasticsearch
+keeps returning hits for messages the archive no longer holds until the index is rebuilt.
+
 The UI is served by `ng serve --host 0.0.0.0`. There is no authentication anywhere in the stack, so
 whoever can reach the port can delete a case — keep this on a network you trust.
 
