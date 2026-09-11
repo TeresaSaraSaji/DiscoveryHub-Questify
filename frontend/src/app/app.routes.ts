@@ -33,6 +33,16 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'exports',
+    title: 'Evidence Exports · DiscoveryHub',
+    loadComponent: () => import('./pages/exports/exports-page').then((m) => m.ExportsPage),
+  },
+  {
+    path: 'audit',
+    title: 'Audit Trail · DiscoveryHub',
+    loadComponent: () => import('./pages/audit/audit-page').then((m) => m.AuditPage),
+  },
+  {
     path: 'export-audit',
     title: 'Exports & Audit · DiscoveryHub',
     loadComponent: () => import('./pages/export-audit/export-audit').then((m) => m.ExportAudit),
