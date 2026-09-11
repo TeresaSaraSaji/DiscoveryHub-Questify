@@ -3,7 +3,8 @@
 Retention and disposition (FR-5). Owns the retention policy, the scheduled sweep that destroys
 expired messages, and the ledger that proves what it did.
 
-Port **8087**. Own database **postgres-disposition** on host port 5437. API browsable at
+Port **8087**. Own database **postgres-disposition** on host port 5438 (it was 5437 until P1
+gained its own Postgres and took that port). API browsable at
 http://localhost:8087/swagger-ui.html.
 
 ```bash
@@ -187,7 +188,9 @@ skips everything with `P4 reports an active hold, or could not be reached`, chec
 
 ## What P4 has to provide
 
-Three endpoints. None exists yet, so all are handled safely: unreachable means "held".
+Three endpoints, all now served by hold-service (`api/HoldController`). The failure handling
+remains as designed: any of them unreachable means "held", so a P4 outage stops deletion rather
+than permitting it.
 
 ### `GET /holds/active` — the case-level guard
 

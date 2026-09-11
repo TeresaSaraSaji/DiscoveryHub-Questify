@@ -128,7 +128,9 @@ a failure, and the throw blanks the whole page. Every list in the frontend goes 
 `valueOr()`; `frontend/src/app/pages/pages.spec.ts` mounts every page with every service down to
 keep it that way. This has been introduced three times.
 
-**`GET /holds/active` and `POST /holds/evidence-check` do not exist** on hold-service, though
-`DISPOSITION.md` specifies them and P2.2 calls both. They answer 404 and 405, so P2.2 fails closed
-and a sweep skips every candidate with `holdScopeAvailable: false`. A sweep that deleted nothing is
-therefore not evidence that holds work.
+**A sweep that deleted nothing is not evidence that holds work.** Every hold path fails closed —
+P2's `GET /holds/check`, and P2.2's `GET /holds/active` and `POST /holds/evidence-check` (all
+three served by hold-service now) — so an unreachable or misconfigured P4 produces the exact same
+result as holds doing their job: every candidate skipped, refusals throughout the audit trail, no
+errors anywhere. Before believing a quiet sweep, check `holdScopeAvailable` in the candidates
+preview and P2's logs for `hold check failed`.

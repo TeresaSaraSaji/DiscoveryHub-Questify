@@ -67,14 +67,16 @@ export class Dashboard {
     {
       path: '/cases',
       label: 'Cases & holds',
-      detail: 'Open a matter, file evidence, place a hold',
+      detail: 'Pick a matter, file evidence, place a hold',
     },
+    { path: '/cases/new', label: 'Open a case', detail: 'Start a new matter in DRAFT' },
     {
       path: '/retention',
       label: 'Retention & disposition',
       detail: 'Policy, sweeps and the ledger',
     },
-    { path: '/export-audit', label: 'Exports & audit', detail: 'Evidence packages and activity' },
+    { path: '/exports', label: 'Evidence exports', detail: 'Package a case and verify it' },
+    { path: '/audit', label: 'Audit trail', detail: 'Who did what, across every service' },
   ] as const;
 
   // Fixed inputs, so these read once and stay put. The dashboard is a snapshot, not a monitor.

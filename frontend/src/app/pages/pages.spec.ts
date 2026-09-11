@@ -2,14 +2,17 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Type } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { Router, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
+import { AuditPage } from './audit/audit-page';
 import { CaseDetail } from './cases/case-detail';
 import { CasesPage } from './cases/cases-page';
+import { NewCasePage } from './cases/new-case-page';
 import { Dashboard } from './dashboard/dashboard';
-import { ExportAudit } from './export-audit/export-audit';
+import { ExportsPage } from './exports/exports-page';
 import { RetentionDisposition } from './retention-disposition/retention-disposition';
 import { SearchPage } from './search/search-page';
 
@@ -110,13 +113,38 @@ describe('every page survives every service being down', () => {
     expect(rendered).toContain('is not reachable');
   });
 
-  it('renders Exports & Audit', async () => {
-    const fixture = mount(ExportAudit);
+  it('renders Open a case, which needs no service to read from', async () => {
+    const fixture = mount(NewCasePage);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Exports & Audit Trail');
-    expect(rendered).toContain('Audit trail');
+    expect(rendered).toContain('Open a case');
+    expect(rendered).toContain('Matter details');
+    // It reads nothing, so there is nothing to be unreachable. A form for creating a case must
+    // not refuse to draw because a stats endpoint is down.
+    expect((fixture.nativeElement as HTMLElement).querySelector('.failure')).toBeNull();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.btn--primary')
+        ?.disabled,
+    ).toBe(true);
+  });
+
+  it('renders Evidence Exports', async () => {
+    const fixture = mount(ExportsPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Evidence Exports');
+    expect(rendered).toContain('Request an export');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders the Audit Trail', async () => {
+    const fixture = mount(AuditPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Audit Trail');
     expect(rendered).toContain('is not reachable');
   });
 
@@ -377,6 +405,161 @@ describe('search asks for nothing until it is asked', () => {
 });
 
 /**
+ * Selecting results and revealing more of them.
+ *
+ * The result list starts at one batch and grows only when asked ("Show more" appends the next
+ * batch); a tick on a row survives that growth, and "Add selected" files exactly the ticked ids
+ * through P3's add-selected endpoint — never a re-run of the search, which could match a
+ * different set than the reviewer saw.
+ */
+describe('search result selection and show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  function aResult(id: string) {
+    return {
+      messageId: id,
+      externalId: null,
+      custodianId: 'cust-1',
+      from: 'a@example.com',
+      to: [],
+      subject: `Subject ${id}`,
+      sentAt: '2020-05-01T10:00:00Z',
+      snippet: '',
+      highlights: null,
+      score: 1,
+      onHold: false,
+      attachmentCount: 0,
+      attachmentFilenames: null,
+    };
+  }
+
+  async function searchedFixture(total: number) {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('atlas');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-1'), aResult('msg-2')],
+      total,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+    // The history refresh the successful first page triggered.
+    http
+      .match((request) => request.url === 'http://localhost:8083/search/history')
+      .forEach((request) => request.flush([]));
+    await settleAsync(fixture);
+    return { fixture, http };
+  }
+
+  it('shows one batch and appends the next on Show more', async () => {
+    const { fixture, http } = await searchedFixture(4);
+
+    expect(text(fixture)).toContain('Showing 2 of 4');
+    const showMore = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Show more');
+    expect(showMore).toBeTruthy();
+
+    showMore!.click();
+    settle(fixture);
+
+    const next = http.expectOne('http://localhost:8083/search');
+    expect(next.request.body.page).toBe(1);
+    next.flush({
+      results: [aResult('msg-3'), aResult('msg-4')],
+      total: 4,
+      page: 1,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    const rendered = text(fixture);
+    // Appended, not replaced: the first batch is still on screen.
+    expect(rendered).toContain('Subject msg-1');
+    expect(rendered).toContain('Subject msg-4');
+    expect(rendered).toContain('Showing 4 of 4');
+    // Everything shown, nothing more to ask for.
+    expect(rendered).not.toContain('Show more');
+  });
+
+  it('files exactly the ticked ids through the add-selected endpoint', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    const checkboxes = [...host.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]')];
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[1].click();
+    settle(fixture);
+
+    const page = fixture.componentInstance as unknown as {
+      fileCaseId: { set(v: string): void };
+    };
+    page.fileCaseId.set('case-9');
+    settle(fixture);
+
+    const addSelected = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Add selected (1)'),
+    );
+    expect(addSelected).toBeTruthy();
+    addSelected!.click();
+    settle(fixture);
+
+    const filed = http.expectOne('http://localhost:8083/search/add-selected-to-case');
+    // The ticked id, verbatim — not the search, not the page.
+    expect(filed.request.body).toEqual({ caseId: 'case-9', messageIds: ['msg-2'] });
+    filed.flush({
+      caseId: 'case-9',
+      matched: 1,
+      added: 1,
+      alreadyPresent: 0,
+      messageIds: ['msg-2'],
+      truncated: false,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('1 selected message filed on case-9');
+    // Filing clears the picks, so the same tick cannot be double-filed by accident.
+    expect(text(fixture)).toContain('Add selected (0)');
+  });
+
+  it('a new search clears the previous selection', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    host.querySelector<HTMLInputElement>('tbody input[type=checkbox]')!.click();
+    settle(fixture);
+    expect(text(fixture)).toContain('Add selected (1)');
+
+    host.querySelector<HTMLButtonElement>('.btn--primary')!.click();
+    settle(fixture);
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-9')],
+      total: 1,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Add selected (0)');
+  });
+});
+
+/**
  * The history panel reads what has already been asked and can put it back into the form. It must
  * never take the page down: a history failure stays in its own panel, and a re-run goes through
  * the same form and the same POST /search as a hand-typed query.
@@ -576,6 +759,178 @@ describe('search history', () => {
   });
 });
 
+/**
+ * Opening a case is a route of its own, and the two things that has to keep true are that
+ * `/cases/new` actually reaches this component and that a rejected create does not lose what was
+ * typed. The second is the reason this is not a navigation-on-submit-and-hope: case-service
+ * answers 409 on a duplicate name, and a form that had already navigated away would have thrown
+ * the user's input on the floor.
+ */
+describe('opening a case on /cases/new', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('is reachable at its own URL', async () => {
+    TestBed.configureTestingModule({
+      providers: [provideRouter(routes), provideHttpClient(), provideHttpClientTesting()],
+    });
+    const harness = await RouterTestingHarness.create();
+    const component = await harness.navigateByUrl('/cases/new');
+
+    expect(component).toBeInstanceOf(NewCasePage);
+    expect(TestBed.inject(Router).url).toBe('/cases/new');
+  });
+
+  it('posts the form to case-service and lands on the case it just opened', async () => {
+    const fixture = mount(NewCasePage);
+    const http = TestBed.inject(HttpTestingController);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+    const page = fixture.componentInstance as unknown as {
+      name: { set(v: string): void };
+      owner: { set(v: string): void };
+    };
+    page.name.set('  Q4 Broker Investigation  ');
+    page.owner.set('teresa');
+    settle(fixture);
+
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    const created = http.expectOne('http://localhost:8084/cases');
+    expect(created.request.method).toBe('POST');
+    // Trimmed, and an empty description is null rather than "".
+    expect(created.request.body).toEqual({
+      name: 'Q4 Broker Investigation',
+      description: null,
+      matterType: 'INVESTIGATION',
+      owner: 'teresa',
+    });
+
+    created.flush({
+      caseId: 'e3a1c0de-0000-4000-8000-000000000001',
+      name: 'Q4 Broker Investigation',
+      description: null,
+      matterType: 'INVESTIGATION',
+      owner: 'teresa',
+      status: 'DRAFT',
+      createdAt: '2026-09-11T09:00:00Z',
+      updatedAt: null,
+      closedAt: null,
+    });
+    await settleAsync(fixture);
+
+    expect(navigate).toHaveBeenCalledWith(['/cases'], {
+      queryParams: { caseId: 'e3a1c0de-0000-4000-8000-000000000001' },
+    });
+  });
+
+  it('keeps the form and says why when case-service refuses', async () => {
+    const fixture = mount(NewCasePage);
+    const http = TestBed.inject(HttpTestingController);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+    const page = fixture.componentInstance as unknown as { name: { set(v: string): void } };
+    page.name.set('Q3 Broker Investigation');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http
+      .expectOne('http://localhost:8084/cases')
+      .flush(
+        { detail: 'A case with that name is already open.' },
+        { status: 409, statusText: 'Conflict' },
+      );
+    await settleAsync(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.textContent).toContain('Rejected.');
+    expect(host.textContent).toContain('already open');
+    // Still here, still filled in, and ready to be corrected rather than retyped.
+    expect(navigate).not.toHaveBeenCalled();
+    expect(host.querySelector<HTMLButtonElement>('.btn--primary')?.disabled).toBe(false);
+  });
+
+  it('is linked from the case list, and from the list when it is empty', async () => {
+    const fixture = mount(CasesPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8084/cases')
+      .flush({
+        content: [],
+        number: 0,
+        size: 20,
+        totalElements: 0,
+        totalPages: 0,
+        first: true,
+        last: true,
+      });
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    // No cases at all is exactly when the way to open one has to be on screen, and the panel
+    // holding that message is the one most likely to be showing a failure instead.
+    expect(host.textContent).toContain('No cases match');
+    const targets = [...host.querySelectorAll<HTMLAnchorElement>('a[href]')].map((anchor) =>
+      anchor.getAttribute('href'),
+    );
+    expect(targets.filter((href) => href === '/cases/new')).toHaveLength(2);
+  });
+});
+
+/** The evidence list can run to hundreds of rows; it grows ten at a time, like search results. */
+describe('case evidence show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('shows ten rows and grows on Show more', async () => {
+    // The evidence list moved to the case's own page, so the case is a route input now rather
+    // than a signal set from the outside.
+    const fixture = mount(CaseDetail);
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    fixture.componentRef.setInput('caseId', 'case-1');
+    settle(fixture);
+
+    const evidence = Array.from({ length: 12 }, (_, i) => ({
+      id: `ev-${i}`,
+      messageId: `msg-${i}`,
+      source: 'SEARCH',
+      addedAt: '2026-09-10T12:00:00Z',
+    }));
+    http
+      .match((request) => request.url === 'http://localhost:8084/cases/case-1/evidence')
+      .forEach((request) => request.flush(evidence));
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const shownRows = () =>
+      [...host.querySelectorAll('td.mono')].filter((cell) => cell.textContent?.startsWith('msg-'))
+        .length;
+
+    expect(shownRows()).toBe(10);
+    expect(text(fixture)).toContain('Showing 10 of 12');
+
+    const showMore = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Show more',
+    );
+    expect(showMore).toBeTruthy();
+    showMore!.click();
+    settle(fixture);
+
+    expect(shownRows()).toBe(12);
+    // Everything shown; the growth control has nothing left to offer.
+    expect(text(fixture)).not.toContain('Showing 12 of 12');
+  });
+});
+
 describe('a page whose services answer', () => {
   beforeEach(() => TestBed.resetTestingModule());
 
@@ -653,6 +1008,52 @@ describe('a page whose services answer', () => {
     // An empty list must never be reported as a failure: upstream, unreachable means *held*, so
     // rendering the two the same way would state the exact inverse of what the system is doing.
     expect(holdsPanel!.querySelector('.failure')).toBeNull();
+  });
+
+  /**
+   * FR-2.1: a matter has an opening date, and the list is where someone looks for it. Wall clock
+   * only — the relative form ("3d ago") already sits in the detail panel below, and a column that
+   * re-renders differently every minute is no use for reconciling a list against a log.
+   */
+  it('dates every case in the list, to the second and without a relative suffix', async () => {
+    const fixture = mount(CasesPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http
+      .expectOne((request) => request.url === 'http://localhost:8084/cases')
+      .flush({
+        content: [
+          {
+            caseId: '9c1fb101-1b94-4321-813f-329f8b71c03f',
+            name: 'Q3 Broker Investigation',
+            description: 'Insider trading probe',
+            matterType: 'INVESTIGATION',
+            owner: 'teresa',
+            status: 'CLOSED',
+            createdAt: '2026-09-08T22:09:12Z',
+            updatedAt: null,
+            closedAt: null,
+          },
+        ],
+        number: 0,
+        size: 20,
+        totalElements: 1,
+        totalPages: 1,
+        first: true,
+        last: true,
+      });
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const headers = [...host.querySelectorAll('th')].map((th) => th.textContent?.trim());
+    expect(headers).toContain('Created on');
+
+    const created = [...host.querySelectorAll('tbody tr')][0].children[
+      headers.indexOf('Created on')
+    ];
+    // Date and time in one cell, as one field.
+    expect(created.textContent).toMatch(/\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}.*\d{1,2}:\d{2}:\d{2}/);
+    expect(created.textContent).not.toContain('ago');
   });
 
   it('counts the corpus on the dashboard', async () => {

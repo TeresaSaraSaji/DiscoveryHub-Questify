@@ -236,7 +236,7 @@
     [source]="cases"
   >
     @if (caseRows().content.length === 0 && !cases.isLoading()) {
-      <p class="empty">No cases yet. Open one from the Cases page.</p>
+      <p class="empty">No cases yet. <a class="link" routerLink="/cases/new">Open one</a>.</p>
     }
     <table class="table">
       <thead>
@@ -345,7 +345,7 @@
   @if (auditRows().totalElements > 0) {
     <p class="note">
       {{ auditRows().totalElements | number }} events recorded.
-      <a class="link" routerLink="/export-audit">See the full trail</a>.
+      <a class="link" routerLink="/audit">See the full trail</a>.
     </p>
   }
 </app-panel>

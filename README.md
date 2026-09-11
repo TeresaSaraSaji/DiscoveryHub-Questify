@@ -10,7 +10,7 @@ defensible evidence packages, and keep an append-only chain of custody.
 ```bash
 git clone git@github.com:TeresaSaraSaji/DiscoveryHub-Questify.git
 cd DiscoveryHub-Questify
-docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 3x Postgres
+docker compose up -d          # Kafka, Redis, Elasticsearch, MinIO, MongoDB, 6x Postgres
 ./infra/smoke-test.sh         # everything reachable from the host?
 mvn -q package                # build every module
 java -jar services/ingestion-service/target/ingestion-service-0.1.0-SNAPSHOT.jar
@@ -112,7 +112,7 @@ infrastructure failure returns a retryable status.
 
 ## P2.2 Disposition
 
-Retention and disposition (FR-5) is its own service on **8086**, with its own database. It owns the
+Retention and disposition (FR-5) is its own service on **8087**, with its own database. It owns the
 retention policy, the scheduled sweep, and the ledger of what each sweep deleted or skipped.
 Details are in `services/disposition-service/DISPOSITION.md`.
 
@@ -139,11 +139,12 @@ The sweep is bounded by `batch-size` and makes one call to P4 per candidate, so 
 it asynchronously and watch it rather than holding the request open (NFR-3):
 
 ```bash
-curl -X POST "localhost:8086/disposition/runs?async=true"   # 202 + a QUEUED run id
-curl -N localhost:8086/disposition/runs/stream              # progress, then the stream closes
+curl -X POST "localhost:8087/disposition/runs?async=true"   # 202 + a QUEUED run id
+curl -N localhost:8087/disposition/runs/stream              # progress, then the stream closes
 ```
 
-It needs three endpoints from **P4**, all specified in DISPOSITION.md:
+It relies on three endpoints from **P4**, all specified in DISPOSITION.md and served by
+hold-service:
 
 - `GET /holds/check?messageId=` — the shape P2 already assumes, so there is one contract, not two.
 - `GET /holds/active` — holds as *scope* (custodians, date range, case) rather than expanded to
@@ -196,6 +197,12 @@ cd frontend && npm install && npm start
 opens with 12,000 messages on it has answered a question nobody asked. P3 agrees: it rejects a
 query with no criterion at all with a 400.
 
+**Executed searches are recorded.** P3 keeps the last searches in its own `search-history`
+Elasticsearch index (first pages only — paging is the same question again) and serves them at
+`GET /search/history`; the search bar drops the last five on focus and either they or the panel
+below can re-run one with every filter restored. History is written by the service as a side
+effect of searching — there is no POST, so a client cannot invent history it never executed.
+
 **It works with any subset of the services running.** Every region of every page issues its own
 request and renders its own error and retry, so one service being down costs you that panel and
 nothing else. There are no route resolvers. A failed request is never rendered as an empty result —
@@ -224,14 +231,15 @@ services.
 | 9092 | Kafka | all |
 | 8090 | Kafka UI | all |
 | 6379 | Redis — dedupe keys | P1 |
-| 5433 | PostgreSQL `archive` / `archive` / `archive` | P2 |
+| 5433 | PostgreSQL `archive` / `archive` / `archive` — hold state + retention bookkeeping only (`postgres-archive-meta`) | P2 |
 | 5434 | PostgreSQL `cases` / `cases` / `cases` | P4 (case) |
 | 5435 | PostgreSQL `audit` / `audit` / `audit` | P5 |
 | 5436 | PostgreSQL `holds` / `holds` / `holds` | P4 (hold) |
-| 5437 | PostgreSQL `disposition` / `disposition` / `disposition` | P2.2 |
-| 27017 | MongoDB | unclaimed |
+| 5437 | PostgreSQL `ingestion` / `ingestion` / `ingestion` | P1 |
+| 5438 | PostgreSQL `disposition` / `disposition` / `disposition` | P2.2 |
+| 27017 | MongoDB `archive` — message content, attachment bytes included | P2 |
 | 9200 | Elasticsearch | P3 |
-| 9000 | MinIO API (`minioadmin` / `minioadmin`) | P2, P5 |
+| 9000 | MinIO API (`minioadmin` / `minioadmin`) — export packages | P5 |
 | 9001 | MinIO console | — |
 
 Every application port is now claimed.
@@ -241,16 +249,18 @@ The split keeps case and hold as separate bounded contexts with their own datast
 coordinating via `cases.events` (close → release) and the synchronous `GET /holds/check` endpoint
 that P2 calls before deleting anything.
 
-**P2.2 moved to 8087, and its database to host port 5437.** It had 8086/5436 first, but
+**P2.2 moved to 8087, and its database to host port 5438.** It had 8086/5436 first, but
 hold-service claimed both while disposition was still on an unmerged branch. Moving disposition was
 the cheaper fix: hold-service is already on main and `storage-service`'s `HOLDS_BASE_URL` points at
-8086. Only the host port of `postgres-disposition` changed — inside the compose network it is still
-5432, so no service's connection string moved.
+8086. Its database then moved a second time, 5437 → 5438, when P1 gained its own Postgres
+(`message_id_map`) and took 5437 — a branch that predates that move quietly points P2.2 at P1's
+database. Only host ports changed — inside the compose network every Postgres is still 5432, so no
+service's connection string moved.
 
 ## Conventions
 
-**One datastore, one owner (NFR-1).** The three PostgreSQL instances are separate containers, not
-three schemas in one database. No connection string lets one service read another's tables. If you
+**One datastore, one owner (NFR-1).** The six PostgreSQL instances are separate containers, not
+six schemas in one database. No connection string lets one service read another's tables. If you
 need data another service owns, call its API or consume its events.
 
 **Topic auto-create is off.** A typo fails loudly instead of quietly creating a one-partition topic

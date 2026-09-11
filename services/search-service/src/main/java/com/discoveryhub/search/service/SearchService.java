@@ -1,5 +1,6 @@
 package com.discoveryhub.search.service;
 
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
@@ -46,4 +47,7 @@ public interface SearchService {
 
     /** Add the matched messages to a case: the current page by default, or all matches if allResults. */
     BulkAddToCaseResponse addToCase(BulkAddToCaseRequest request);
+
+    /** Add exactly the hand-picked message ids to a case. No search is re-run. */
+    BulkAddToCaseResponse addSelectedToCase(AddSelectedToCaseRequest request);
 }

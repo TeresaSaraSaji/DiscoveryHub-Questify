@@ -43,10 +43,16 @@ export class App {
       icon: 'M2 4h12M2 8h12M2 12h7',
     },
     {
-      path: '/export-audit',
-      label: 'Exports & Audit',
-      hint: 'Evidence packages and the chain of custody — P5',
+      path: '/exports',
+      label: 'Exports',
+      hint: 'Evidence packages — P5',
       icon: 'M8 2v7m0 0 3-3m-3 3L5 6M3 11v2h10v-2',
+    },
+    {
+      path: '/audit',
+      label: 'Audit Trail',
+      hint: 'The chain of custody, across every service — P5',
+      icon: 'M4 2h8v12H4zM6 5h4M6 8h4M6 11h2',
     },
   ];
 }
