@@ -92,10 +92,15 @@ public class JdbcArchiveGateway implements ArchiveGateway {
             sql.append("))");
         }
 
-        // Oldest first: a sweep is bounded by batch-size, so when there is more work than one
-        // batch the most overdue messages go first and successive runs make monotonic progress
-        // rather than revisiting an arbitrary slice.
-        sql.append("\nORDER BY sent_at\nLIMIT ?");
+        // Overridden rows first, then oldest.
+        //
+        // A sweep is bounded by batch-size, and a demoed message is recent by definition — it was
+        // uploaded minutes ago — so under plain `ORDER BY sent_at` it sorts behind every overdue
+        // message in the corpus and a batch-sized sweep would never reach it. Ordering the
+        // explicit deadlines first is what makes "upload with the short policy, run a sweep, watch
+        // it go" hold regardless of how much ordinary backlog exists. Within each arm the most
+        // overdue still goes first, so successive runs make monotonic progress through the backlog.
+        sql.append("\nORDER BY (retention_override_at IS NOT NULL) DESC, sent_at\nLIMIT ?");
         args.add(limit);
 
         return archive.query(sql.toString(), MAPPER, args.toArray());

@@ -35,7 +35,7 @@ public interface ArchiveGateway {
      *
      * @param cutoffs one cutoff per communication type; a type absent from the map is not swept,
      *                though overridden messages are still returned
-     * @param limit   maximum rows to return, oldest first
+     * @param limit   maximum rows to return: overridden messages first, then oldest
      */
     List<ArchiveCandidate> findCandidates(Map<MessageType, Instant> cutoffs, int limit);
 
