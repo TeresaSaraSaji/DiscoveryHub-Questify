@@ -1,6 +1,7 @@
 package com.discoveryhub.search.controller;
 
 import com.discoveryhub.contracts.MessageType;
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
@@ -145,5 +146,13 @@ public class SearchController {
     @PostMapping("/add-to-case")
     public BulkAddToCaseResponse addToCase(@Valid @RequestBody BulkAddToCaseRequest request) {
         return searchService.addToCase(request);
+    }
+
+    @Operation(summary = "Add hand-picked messages to a case",
+            description = "Files exactly the given message ids as evidence. Unlike /add-to-case, no " +
+                    "search is re-run: the ids the reviewer ticked are the decision, verbatim.")
+    @PostMapping("/add-selected-to-case")
+    public BulkAddToCaseResponse addSelectedToCase(@Valid @RequestBody AddSelectedToCaseRequest request) {
+        return searchService.addSelectedToCase(request);
     }
 }
