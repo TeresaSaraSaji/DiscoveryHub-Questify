@@ -163,6 +163,13 @@ class RunProgressIntegrationTest {
         insert(1);
         disposition.run(TriggerSource.MANUAL, false, "warm-up");
 
+        // Clear the archive before staging the run this test actually watches. Under KAFKA
+        // delete-mode nothing removes the swept row — the sweep counts a published
+        // DELETE_REQUESTED as deleted and P2, which would do the deleting, is not running here.
+        // So the warm-up's msg-0 is still sitting in message_hold_status, and without this the
+        // insert below collides with it on the primary key and the run that does happen sees four
+        // candidates rather than the three asserted at the end.
+        ArchiveSchema.truncate(archive);
         insert(3);
         CompletableFuture<HttpResponse<String>> stream = http.sendAsync(
                 HttpRequest.newBuilder(uri("/disposition/runs/stream")).GET().build(),

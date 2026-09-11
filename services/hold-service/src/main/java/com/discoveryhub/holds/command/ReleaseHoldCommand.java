@@ -7,22 +7,24 @@ import com.discoveryhub.holds.messaging.HoldEventFactory;
 import com.discoveryhub.holds.messaging.HoldKafkaPublisher;
 import com.discoveryhub.holds.repository.HoldCoverageRepository;
 import com.discoveryhub.holds.repository.HoldRepository;
+import com.discoveryhub.holds.service.HoldReleasePlan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.util.List;
 
 /**
  * Concrete command: release a hold — flip it to {@code RELEASED}, publish a per-message
- * {@code holds.events} with {@code held=false} for every message it covered, and audit the
- * release. Coverage rows are left in place (the hold is RELEASED, so the joined
+ * {@code holds.events} with {@code held=false} for every message it was the last hold on, and
+ * audit the release. Coverage rows are left in place (the hold is RELEASED, so the joined
  * {@code status = 'ACTIVE'} check in {@code GET /holds/check} stops matching), preserving the
  * history of what the hold covered.
  *
- * <p>Overlapping holds (FR-4.5) are handled by counting: another active hold's coverage for the
- * same messageId keeps answering "held" because that hold is still ACTIVE. Releasing this hold
- * only removes <i>this</i> hold's protection.
+ * <p>Overlapping holds (FR-4.5): releasing this hold only removes <i>this</i> hold's protection,
+ * so the release events are restricted to the messages no other ACTIVE hold covers — see
+ * {@link HoldReleasePlan}. This path is the one where overlap is most likely: it is what
+ * {@code case.closed} runs, and closing a case releases all of its holds at once while another
+ * case's investigation may well be holding the same custodian's mailbox.
  *
  * <p>Idempotency: a {@code RELEASE} redelivered for a hold that is already {@code RELEASED} is a
  * no-op — re-running it would overwrite {@code releasedAt} with a new timestamp (destroying the
@@ -81,16 +83,19 @@ public final class ReleaseHoldCommand implements HoldCommand {
                     hold.getHoldId());
             return;
         }
-        List<String> messageIds = coverage.findMessageIdsByHoldId(hold.getHoldId());
+        HoldReleasePlan plan = HoldReleasePlan.forRelease(coverage, hold.getHoldId());
         hold.setStatus(HoldStatus.RELEASED);
         hold.setReleasedAt(Instant.now());
         hold.setReleasedReason(reason);
         holds.save(hold);
 
-        for (String messageId : messageIds) {
+        for (String messageId : plan.unprotected()) {
             publisher.publishHoldEvent(eventFactory.released(messageId, hold.getCaseId(), correlationId));
         }
-        publisher.publishAudit(audit.holdReleased(hold.getHoldId(), hold.getCaseId(), reason));
-        log.info("hold {} released ({} messages, reason={})", hold.getHoldId(), messageIds.size(), reason);
+        publisher.publishAudit(audit.holdReleased(hold.getHoldId(), hold.getCaseId(), reason,
+                plan.unprotected().size(), plan.stillHeld().size()));
+        log.info("hold {} released ({} of {} messages unprotected, {} still held elsewhere, reason={})",
+                hold.getHoldId(), plan.unprotected().size(), plan.covered().size(),
+                plan.stillHeld().size(), reason);
     }
 }

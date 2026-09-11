@@ -209,6 +209,25 @@ class HoldControllerTest {
         assertThat(result.held()).isFalse();
     }
 
+    // ---------------------------------------------------------- covering (overlapping holds)
+
+    @Test
+    void coveringListsEveryActiveHoldOnTheMessage() {
+        when(holdService.activeHoldsCoveringMessage("msg-1")).thenReturn(
+                List.of(hold("hold-a", HoldStatus.ACTIVE), hold("hold-b", HoldStatus.ACTIVE)));
+
+        List<HoldEntity> result = controller.covering("msg-1");
+
+        assertThat(result).extracting(HoldEntity::getHoldId).containsExactly("hold-a", "hold-b");
+    }
+
+    @Test
+    void coveringIsEmptyForAnUnheldMessage() {
+        when(holdService.activeHoldsCoveringMessage("msg-2")).thenReturn(List.of());
+
+        assertThat(controller.covering("msg-2")).isEmpty();
+    }
+
     // ---------------------------------------------------------- P2.2's case-level guards
 
     @Test

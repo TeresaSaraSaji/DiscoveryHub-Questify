@@ -154,6 +154,28 @@ It needs three endpoints from **P4**, all specified in DISPOSITION.md:
   attach any message to a case, including one the hold's own custodian and date scope never
   covered, and deleting it would destroy part of a production someone already selected.
 
+### Overlapping holds
+
+Two holds routinely cover the same message — "Rahul's mailbox" and "the Phoenix investigation" are
+different scopes on different cases that overlap on whatever Rahul sent about Phoenix. Releasing
+one of them does **not** unprotect the message; only the last release does. P4 owns that decision
+because it owns `hold_coverage`, and it makes it in one place, `HoldReleasePlan`: a release
+publishes `held=false` on `holds.events` only for the messages no other ACTIVE hold covers, and the
+`hold.released` audit records both counts (`unprotectedMessages`, `stillHeldMessages`).
+
+Two consequences worth knowing before touching either side:
+
+- **`held=false` is state, not a decrement.** P2's mirror sets `on_hold = false` and
+  `hold_count = 0` when it arrives, because P4 has already established that nothing else covers the
+  message. A mirror that decremented instead would never reach zero for a message that was ever
+  held twice — it would sit at 1, permanently `on_hold`, permanently exempt from retention.
+- **`GET /holds/check` was always right about overlap** — it joins coverage to ACTIVE holds, so it
+  refused the delete even while the events were wrong. That is why this bug was survivable rather
+  than catastrophic, and also why it was invisible: nothing was ever deleted, the flags were just
+  quietly wrong. `GET /holds/covering?messageId=` is the endpoint that shows *which* holds are
+  responsible, which is the question an investigator asks after releasing theirs and finding the
+  message still held.
+
 ## Frontend
 
 Angular on **4200**. Details in `frontend/README.md`.
