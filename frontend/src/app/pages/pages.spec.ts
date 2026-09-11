@@ -4,7 +4,8 @@ import { Type } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CaseBroadcast } from '../core/case-broadcast';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
 import { AuditPage } from './audit/audit-page';
@@ -748,6 +749,8 @@ describe('search history', () => {
  */
 describe('opening a case on /cases/new', () => {
   beforeEach(() => TestBed.resetTestingModule());
+  // window.open is spied on per test; leaving it stubbed would follow into the next file.
+  afterEach(() => vi.restoreAllMocks());
 
   it('is reachable at its own URL', async () => {
     TestBed.configureTestingModule({
@@ -760,10 +763,39 @@ describe('opening a case on /cases/new', () => {
     expect(TestBed.inject(Router).url).toBe('/cases/new');
   });
 
-  it('posts the form to case-service and lands on the case it just opened', async () => {
+  /** A stand-in for the tab `window.open` hands back, recording what was done to it. */
+  function fakeTab() {
+    return {
+      opener: {} as unknown,
+      location: { replace: vi.fn() },
+      close: vi.fn(),
+    };
+  }
+
+  function submit(fixture: ComponentFixture<unknown>): void {
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+  }
+
+  const CREATED = {
+    caseId: 'e3a1c0de-0000-4000-8000-000000000001',
+    name: 'Q4 Broker Investigation',
+    description: null,
+    matterType: 'INVESTIGATION',
+    owner: 'teresa',
+    status: 'DRAFT',
+    createdAt: '2026-09-11T09:00:00Z',
+    updatedAt: null,
+    closedAt: null,
+  };
+
+  it('posts the form and shows the new case in a new tab', async () => {
     const fixture = mount(NewCasePage);
     const http = TestBed.inject(HttpTestingController);
-    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const tab = fakeTab();
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
 
     const page = fixture.componentInstance as unknown as {
       name: { set(v: string): void };
@@ -772,11 +804,12 @@ describe('opening a case on /cases/new', () => {
     page.name.set('  Q4 Broker Investigation  ');
     page.owner.set('teresa');
     settle(fixture);
+    submit(fixture);
 
-    (fixture.nativeElement as HTMLElement)
-      .querySelector<HTMLButtonElement>('.btn--primary')
-      ?.click();
-    settle(fixture);
+    // The tab is claimed during the click, while the user gesture is still live — opening it
+    // from the response instead is what every popup blocker exists to stop.
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    expect(tab.location.replace).not.toHaveBeenCalled();
 
     const created = http.expectOne('http://localhost:8084/cases');
     expect(created.request.method).toBe('POST');
@@ -788,36 +821,81 @@ describe('opening a case on /cases/new', () => {
       owner: 'teresa',
     });
 
-    created.flush({
-      caseId: 'e3a1c0de-0000-4000-8000-000000000001',
-      name: 'Q4 Broker Investigation',
-      description: null,
-      matterType: 'INVESTIGATION',
-      owner: 'teresa',
-      status: 'DRAFT',
-      createdAt: '2026-09-11T09:00:00Z',
-      updatedAt: null,
-      closedAt: null,
-    });
+    created.flush(CREATED);
     await settleAsync(fixture);
 
-    expect(navigate).toHaveBeenCalledWith(['/cases'], {
-      queryParams: { caseId: 'e3a1c0de-0000-4000-8000-000000000001' },
-    });
+    expect(tab.location.replace).toHaveBeenCalledWith(
+      '/cases?caseId=e3a1c0de-0000-4000-8000-000000000001',
+    );
+    // The new tab must not be able to script the one that opened it.
+    expect(tab.opener).toBeNull();
+    // This tab stays on the form, cleared and ready for the next matter.
+    expect(TestBed.inject(Router).url).not.toContain('caseId');
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.textContent).toContain('is open in a new tab');
+    expect(host.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('');
+  });
+
+  it('tells the other tabs so their case list is not a row behind', async () => {
+    const fixture = mount(NewCasePage);
+    const http = TestBed.inject(HttpTestingController);
+    vi.spyOn(window, 'open').mockReturnValue(fakeTab() as unknown as Window);
+    const announce = vi.spyOn(TestBed.inject(CaseBroadcast), 'announce');
+
+    (fixture.componentInstance as unknown as { name: { set(v: string): void } }).name.set('Q4');
+    settle(fixture);
+    submit(fixture);
+    http.expectOne('http://localhost:8084/cases').flush(CREATED);
+    await settleAsync(fixture);
+
+    expect(announce).toHaveBeenCalled();
+  });
+
+  it('reloads the case list in a tab that hears the announcement', async () => {
+    const fixture = mount(CasesPage);
+    const http = TestBed.inject(HttpTestingController);
+    await failEverything(fixture);
+
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'discoveryhub:cases-changed', newValue: '1' }),
+    );
+    await settleAsync(fixture);
+
+    // The list asks P4 again rather than waiting for someone to hit reload.
+    expect(http.match((request) => request.url === 'http://localhost:8084/cases')).toHaveLength(1);
+  });
+
+  it('offers a link instead when the popup blocker eats the tab', async () => {
+    const fixture = mount(NewCasePage);
+    const http = TestBed.inject(HttpTestingController);
+    // What a blocker returns.
+    vi.spyOn(window, 'open').mockReturnValue(null);
+
+    (fixture.componentInstance as unknown as { name: { set(v: string): void } }).name.set('Q4');
+    settle(fixture);
+    submit(fixture);
+    http.expectOne('http://localhost:8084/cases').flush(CREATED);
+    await settleAsync(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    // The case was created regardless, so saying nothing would lose it entirely.
+    expect(host.textContent).toContain('the tab was blocked');
+    const link = [...host.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]')].find(
+      (anchor) => anchor.getAttribute('href')?.includes('caseId='),
+    );
+    expect(link).toBeTruthy();
   });
 
   it('keeps the form and says why when case-service refuses', async () => {
     const fixture = mount(NewCasePage);
     const http = TestBed.inject(HttpTestingController);
-    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const tab = fakeTab();
+    vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
 
     const page = fixture.componentInstance as unknown as { name: { set(v: string): void } };
     page.name.set('Q3 Broker Investigation');
     settle(fixture);
-    (fixture.nativeElement as HTMLElement)
-      .querySelector<HTMLButtonElement>('.btn--primary')
-      ?.click();
-    settle(fixture);
+    submit(fixture);
 
     http
       .expectOne('http://localhost:8084/cases')
@@ -830,8 +908,13 @@ describe('opening a case on /cases/new', () => {
     const host = fixture.nativeElement as HTMLElement;
     expect(host.textContent).toContain('Rejected.');
     expect(host.textContent).toContain('already open');
+    // No case, so no tab: a blank one left open is debris from an action that did not happen.
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.replace).not.toHaveBeenCalled();
     // Still here, still filled in, and ready to be corrected rather than retyped.
-    expect(navigate).not.toHaveBeenCalled();
+    expect(host.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe(
+      'Q3 Broker Investigation',
+    );
     expect(host.querySelector<HTMLButtonElement>('.btn--primary')?.disabled).toBe(false);
   });
 

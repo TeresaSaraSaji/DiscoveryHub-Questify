@@ -6,6 +6,7 @@ import { RouterLink } from '@angular/router';
 import { forkJoin, timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
+import { CaseBroadcast } from '../../core/case-broadcast';
 import { CasesApi } from '../../core/cases.api';
 import { DispositionApi } from '../../core/disposition.api';
 import { Failure, classify } from '../../core/failure';
@@ -56,6 +57,7 @@ import { Since } from '../../shared/since.pipe';
 export class CasesPage {
   private readonly api = inject(CasesApi);
   private readonly disposition = inject(DispositionApi);
+  private readonly broadcast = inject(CaseBroadcast);
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly statuses = CASE_STATUSES;
@@ -73,6 +75,14 @@ export class CasesPage {
       if (incoming) {
         this.selected.set(incoming);
       }
+    });
+
+    // A case opened in another tab is a row this list does not have yet, and nothing else would
+    // ever tell it. Only the list and the counts: the selected case's own detail is unaffected
+    // by a different matter being created.
+    this.broadcast.listen(this.destroyRef, () => {
+      this.cases.reload();
+      this.caseStats.reload();
     });
   }
 

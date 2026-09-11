@@ -67,7 +67,24 @@
 
   <app-alert [failure]="failure()" />
 
+  @if (opened(); as just) {
+    @if (blocked()) {
+      <div class="alert alert--warn" role="alert">
+        <strong>Opened, but the tab was blocked.</strong>
+        "{{ just.name }}" was created — your browser stopped the new tab from opening.
+        <a class="link" [href]="just.url" target="_blank" rel="noopener">Open it</a>, or allow
+        pop-ups for this site.
+      </div>
+    } @else {
+      <div class="alert alert--ok" role="status">
+        "{{ just.name }}" is open in a new tab, in DRAFT.
+        <a class="link" [href]="just.url" target="_blank" rel="noopener">Show it again</a>
+      </div>
+    }
+  }
+
   <p class="note">
-    Custodians, evidence and holds go on the case once it exists — this form only opens it.
+    Custodians, evidence and holds go on the case once it exists — this form only opens it. The case
+    opens in a new tab, and this one stays here ready for the next matter.
   </p>
 </app-panel>
