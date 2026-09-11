@@ -360,6 +360,65 @@ class DispositionIntegrationTest {
                 .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-recent")).isFalse());
     }
 
+    /**
+     * The per-message override, which is how one uploaded batch is disposed of inside a demo while
+     * the corpus keeps its seven years.
+     *
+     * <p>P1 tags an upload {@code RetentionLabels.DEMO_RETENTION} and P2 stamps
+     * {@code retention_override_at} on those rows only. Both messages here are minutes old and
+     * email retention is seven years, so the type-based rule protects both — only the override
+     * makes the difference, which is precisely what this asserts.
+     */
+    @Test
+    void aMessageWithARetentionOverrideIsDisposedOfBeforeItsTypesPeriod() {
+        Instant justNow = Instant.now().minus(Duration.ofMinutes(1));
+        ArchiveSchema.insertMessage(archive, "msg-demo", "EXCH-1", "cust-1", "EMAIL", justNow, false,
+                Instant.now().minus(Duration.ofSeconds(30)));
+        ArchiveSchema.insertMessage(archive, "msg-normal", "EXCH-2", "cust-1", "EMAIL", justNow, false);
+
+        assertThat(disposition.run(TriggerSource.MANUAL, false, "test").getDeletedCount()).isEqualTo(1);
+
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-demo")).isFalse());
+        // The whole point of a per-message override: nothing else of the same type moved.
+        assertThat(ArchiveSchema.exists(archive, "msg-normal")).isTrue();
+    }
+
+    /** Before the override falls due the message is ordinary, and seven years still protects it. */
+    @Test
+    void aMessageWithAFutureRetentionOverrideIsLeftAlone() {
+        ArchiveSchema.insertMessage(archive, "msg-demo", "EXCH-1", "cust-1", "EMAIL",
+                Instant.now(), false, Instant.now().plus(Duration.ofMinutes(5)));
+
+        assertThat(disposition.run(TriggerSource.MANUAL, false, "test").getDeletedCount()).isZero();
+        assertThat(ArchiveSchema.exists(archive, "msg-demo")).isTrue();
+    }
+
+    /**
+     * A demoed message is swept even when the ordinary backlog is larger than one batch.
+     *
+     * <p>This is the failure the ordering exists to prevent, and it is invisible on an empty
+     * archive. A sweep is bounded by {@code batch-size} (five here) and a demoed message is recent
+     * by definition, so under a plain oldest-first order the six older messages below would fill
+     * the batch and the demo would sit there — through every sweep, for as long as the backlog
+     * outlasts it. The demo is the explicit instruction, so it goes first.
+     */
+    @Test
+    void aRetentionOverrideIsSweptAheadOfAnOlderBacklogThatFillsTheBatch() {
+        for (int i = 0; i < 6; i++) {
+            ArchiveSchema.insertMessage(archive, "msg-backlog-" + i, "EXCH-B" + i, "cust-1", "EMAIL",
+                    LONG_AGO.plus(Duration.ofSeconds(i)), false);
+        }
+        ArchiveSchema.insertMessage(archive, "msg-demo", "EXCH-DEMO", "cust-1", "EMAIL",
+                Instant.now(), false, Instant.now().minus(Duration.ofSeconds(30)));
+
+        // batch-size is 5: the demo plus four of the backlog, not five of the backlog.
+        assertThat(disposition.run(TriggerSource.MANUAL, false, "test").getDeletedCount()).isEqualTo(5);
+
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-demo")).isFalse());
+    }
+
     /** A shortened period must survive a restart, or a demo silently reverts to seven years. */
     @Test
     void aChangedPolicyIsNotOverwrittenByTheConfiguredSeed() {

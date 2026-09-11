@@ -40,6 +40,10 @@ public final class ArchiveSchema {
     public static void create(JdbcTemplate archive) {
         archive.execute("DROP TABLE IF EXISTS message_hold_status CASCADE");
         archive.execute(read("V2__messages.sql"));
+        // V4 adds retention_override_at, which the eligibility query reads. Only the migrations
+        // that shape the one table this service reads are applied — V3 and V6 create and then drop
+        // P2's own disposition tables, which this service has never touched.
+        archive.execute(read("V4__retention_override.sql"));
     }
 
     /** Wipe the table between tests. */
@@ -53,13 +57,26 @@ public final class ArchiveSchema {
      */
     public static void insertMessage(JdbcTemplate archive, String messageId, String externalId,
                                      String custodianId, String type, Instant sentAt, boolean onHold) {
+        insertMessage(archive, messageId, externalId, custodianId, type, sentAt, onHold, null);
+    }
+
+    /**
+     * As above, with the per-message retention override P2 stamps on a message P1 tagged
+     * {@code RetentionLabels.DEMO_RETENTION} — the absolute instant it becomes eligible,
+     * regardless of its type's period. {@code null} is every ordinary message.
+     */
+    public static void insertMessage(JdbcTemplate archive, String messageId, String externalId,
+                                     String custodianId, String type, Instant sentAt, boolean onHold,
+                                     Instant retentionOverrideAt) {
         archive.update("""
                         INSERT INTO message_hold_status (message_id, external_id, custodian_id,
-                                                          type, sent_at, on_hold, hold_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                                          type, sent_at, on_hold, hold_count,
+                                                          retention_override_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 messageId, externalId, custodianId, type, java.sql.Timestamp.from(sentAt),
-                onHold, onHold ? 1 : 0);
+                onHold, onHold ? 1 : 0,
+                retentionOverrideAt == null ? null : java.sql.Timestamp.from(retentionOverrideAt));
     }
 
     public static long countMessages(JdbcTemplate archive) {

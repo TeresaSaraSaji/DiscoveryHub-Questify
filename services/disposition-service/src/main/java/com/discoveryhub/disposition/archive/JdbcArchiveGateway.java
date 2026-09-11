@@ -22,7 +22,8 @@ import java.util.Map;
  * runtime with an error about a column. A named projection of five columns is a contract this
  * service can survive; a mirrored entity is not. The columns relied on are {@code message_id,
  * external_id, custodian_id, type, sent_at, on_hold} — see {@code V2__messages.sql} in
- * storage-service.
+ * storage-service — and {@code retention_override_at}, from {@code V4__retention_override.sql},
+ * which is read in the eligibility predicate but not projected.
  *
  * <p>Reads only this slim bookkeeping table, never the Mongo message store: P2 moved message
  * content (attachments included) to MongoDB, and this gateway never needed content in the first
@@ -47,29 +48,59 @@ public class JdbcArchiveGateway implements ArchiveGateway {
 
     @Override
     public List<ArchiveCandidate> findCandidates(Map<MessageType, Instant> cutoffs, int limit) {
-        if (cutoffs.isEmpty() || limit <= 0) {
+        if (limit <= 0) {
             return List.of();
         }
+        // Two ways to be past retention, and they are mutually exclusive by construction:
+        //
+        //  - `retention_override_at` set — P1 tagged the message RetentionLabels.DEMO_RETENTION at
+        //    upload and P2 stamped an absolute deadline on that one row. Eligible once that
+        //    instant passes, whatever its type's period says.
+        //  - `retention_override_at` null, which is every ordinary message — the type cutoff.
+        //
+        // The type clauses sit behind `IS NULL` so a demoed message cannot also come up early
+        // through its type by coincidence. This is deliberately the same shape as P2's own
+        // MessageHoldStatusRepository.findDispositionEligible: two services agreeing on what
+        // "past retention" means, rather than one of them quietly meaning something narrower.
+        //
+        // Note the override arm survives an empty `cutoffs`: no retention policy configured is a
+        // reason not to delete ordinary messages, but the override is an explicit per-message
+        // instruction and does not depend on a policy existing.
+        StringBuilder sql = new StringBuilder("""
+                SELECT message_id, external_id, custodian_id, type, sent_at, on_hold
+                FROM message_hold_status
+                WHERE (retention_override_at IS NOT NULL AND retention_override_at <= ?)""");
+        List<Object> args = new ArrayList<>();
+        // The gateway's own clock rather than a parameter: `cutoffs` already carries the caller's
+        // `now` folded into each type's deadline, and threading a second one through the seam
+        // buys nothing a sub-millisecond difference could affect.
+        args.add(Timestamp.from(Instant.now()));
+
         // One OR-group per type rather than an ANY over two parallel arrays: each type has its own
         // cutoff, so the predicate has to pair them, and `type = ANY(...) AND sent_at <= ANY(...)`
         // would happily match an email against the chat cutoff. Built by index, values bound —
         // no type name is ever concatenated into the SQL.
-        StringBuilder sql = new StringBuilder("""
-                SELECT message_id, external_id, custodian_id, type, sent_at, on_hold
-                FROM message_hold_status
-                WHERE (""");
-        List<Object> args = new ArrayList<>();
-        boolean first = true;
-        for (Map.Entry<MessageType, Instant> entry : cutoffs.entrySet()) {
-            sql.append(first ? "" : " OR ").append("(type = ? AND sent_at <= ?)");
-            args.add(entry.getKey().name());
-            args.add(Timestamp.from(entry.getValue()));
-            first = false;
+        if (!cutoffs.isEmpty()) {
+            sql.append("\n   OR (retention_override_at IS NULL AND (");
+            boolean first = true;
+            for (Map.Entry<MessageType, Instant> entry : cutoffs.entrySet()) {
+                sql.append(first ? "" : " OR ").append("(type = ? AND sent_at <= ?)");
+                args.add(entry.getKey().name());
+                args.add(Timestamp.from(entry.getValue()));
+                first = false;
+            }
+            sql.append("))");
         }
-        // Oldest first: a sweep is bounded by batch-size, so when there is more work than one
-        // batch the most overdue messages go first and successive runs make monotonic progress
-        // rather than revisiting an arbitrary slice.
-        sql.append(") ORDER BY sent_at LIMIT ?");
+
+        // Overridden rows first, then oldest.
+        //
+        // A sweep is bounded by batch-size, and a demoed message is recent by definition — it was
+        // uploaded minutes ago — so under plain `ORDER BY sent_at` it sorts behind every overdue
+        // message in the corpus and a batch-sized sweep would never reach it. Ordering the
+        // explicit deadlines first is what makes "upload with the short policy, run a sweep, watch
+        // it go" hold regardless of how much ordinary backlog exists. Within each arm the most
+        // overdue still goes first, so successive runs make monotonic progress through the backlog.
+        sql.append("\nORDER BY (retention_override_at IS NOT NULL) DESC, sent_at\nLIMIT ?");
         args.add(limit);
 
         return archive.query(sql.toString(), MAPPER, args.toArray());
