@@ -2,6 +2,7 @@ package com.discoveryhub.search.controller;
 
 import com.discoveryhub.contracts.MessageType;
 import com.discoveryhub.search.exception.SearchException;
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
@@ -238,6 +239,19 @@ class SearchControllerTest {
 
         assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(searchService).deleteSavedSearch("any-id");
+    }
+
+    @Test
+    void addSelectedToCaseDelegatesToTheService() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest("case-1", List.of("msg-1"));
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse(
+                "case-1", 1, 1, 0, List.of("msg-1"), false);
+        when(searchService.addSelectedToCase(request)).thenReturn(expected);
+
+        BulkAddToCaseResponse result = controller.addSelectedToCase(request);
+
+        assertThat(result).isEqualTo(expected);
+        verify(searchService).addSelectedToCase(request);
     }
 
     @Test

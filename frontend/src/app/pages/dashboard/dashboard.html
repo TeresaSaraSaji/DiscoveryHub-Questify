@@ -95,6 +95,139 @@
   </div>
 }
 
+<app-panel
+  heading="Add messages"
+  hint="Load email and chat from a file or a folder, and choose how long they are kept"
+  service="p1"
+>
+  <div class="controls controls--wrap">
+    <label class="btn btn--small">
+      Choose files
+      <input type="file" multiple accept=".json,.ndjson,.jsonl" (change)="pick($event)" hidden />
+    </label>
+    <label class="btn btn--small">
+      Choose folder
+      <input type="file" multiple webkitdirectory (change)="pick($event)" hidden />
+    </label>
+
+    <label class="field field--inline">
+      <span>Retention</span>
+      <select
+        [value]="retentionMode()"
+        (change)="retentionMode.set($any($event.target).value)"
+        [disabled]="ingesting()"
+      >
+        <option value="NORMAL">Standard — 7 years for email, 3 for chat</option>
+        <option value="DEMO">Demo — deleted about a minute after upload</option>
+      </select>
+    </label>
+
+    <button
+      type="button"
+      class="btn btn--primary btn--small"
+      (click)="ingest()"
+      [disabled]="!canIngest()"
+    >
+      @if (ingesting()) {
+        Adding…
+      } @else if (picked().length) {
+        Add {{ picked().length }} file{{ picked().length === 1 ? '' : 's' }}
+      } @else {
+        Add
+      }
+    </button>
+    <button
+      type="button"
+      class="btn btn--ghost btn--small"
+      (click)="clearPicked()"
+      [disabled]="ingesting() || !picked().length"
+    >
+      Clear
+    </button>
+  </div>
+
+  @if (picked().length === 0 && !ingesting() && !ingestTotals()) {
+    <p class="empty">
+      A JSON array, NDJSON, or one message per file — the shapes P1 reads. A folder is uploaded a
+      file at a time.
+    </p>
+  }
+
+  @if (skipped() > 0) {
+    <p class="note">
+      {{ skipped() }} file{{ skipped() === 1 ? '' : 's' }} left out: not .json, .ndjson or .jsonl.
+    </p>
+  }
+
+  @if (retentionMode() === 'DEMO' && (picked().length > 0 || ingesting())) {
+    <div class="alert alert--warn" role="status">
+      <strong>Demo retention.</strong> These messages become eligible for disposition about a minute
+      after upload, and the next sweep will delete them. Only this upload is affected — everything
+      already archived keeps its normal period. Do not use this for real data.
+    </div>
+  }
+
+  @if (ingestProgress(); as progress) {
+    <p class="note">
+      File {{ progress.index }} of {{ progress.of }} · {{ progress.name }} ·
+      {{ progress.processed | number }} messages read
+    </p>
+  }
+
+  <app-alert [failure]="ingestFailure()" />
+
+  @if (ingestTotals(); as totals) {
+    <p class="figure__note">
+      {{ totals.files | number }} file{{ totals.files === 1 ? '' : 's' }} ·
+      <span class="tag tag--ok">{{ totals.accepted | number }} added</span>
+      @if (totals.duplicates > 0) {
+        · <span class="tag">{{ totals.duplicates | number }} already present</span>
+      }
+      @if (totals.rejected > 0) {
+        · <span class="tag tag--warn">{{ totals.rejected | number }} rejected</span>
+      }
+      @if (totals.failed > 0) {
+        · <span class="tag tag--danger">{{ totals.failed | number }} failed</span>
+      }
+    </p>
+    @if (totals.accepted === 0 && totals.duplicates > 0) {
+      <p class="note">
+        Nothing new was added: every message was already in the archive. Dedupe ignores labels, so
+        re-uploading archived messages cannot put them under a different retention rule — use
+        messages with external ids that are not in the corpus yet.
+      </p>
+    }
+    @if (totals.accepted > 0 && retentionMode() === 'DEMO') {
+      <p class="note">
+        Run a sweep from the <a routerLink="/retention">retention page</a> once the minute is up.
+      </p>
+    }
+  }
+
+  @if (ingestProblems().length > 0) {
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Message</th>
+          <th>Outcome</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (problem of ingestProblems(); track $index) {
+          <tr>
+            <td class="mono dim">{{ problem.externalId ?? problem.messageId ?? '—' }}</td>
+            <td>
+              <span [class]="outcomeClass(problem.outcome)">{{ problem.outcome }}</span>
+            </td>
+            <td class="dim">{{ problem.reason ?? '—' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</app-panel>
+
 <div class="grid grid--2">
   <app-panel
     heading="Recent cases"
@@ -212,7 +345,7 @@
   @if (auditRows().totalElements > 0) {
     <p class="note">
       {{ auditRows().totalElements | number }} events recorded.
-      <a class="link" routerLink="/export-audit">See the full trail</a>.
+      <a class="link" routerLink="/audit">See the full trail</a>.
     </p>
   }
 </app-panel>

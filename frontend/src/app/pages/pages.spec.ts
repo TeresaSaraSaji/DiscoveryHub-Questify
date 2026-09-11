@@ -7,10 +7,11 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
+import { AuditPage } from './audit/audit-page';
 import { CasesPage } from './cases/cases-page';
 import { NewCasePage } from './cases/new-case-page';
 import { Dashboard } from './dashboard/dashboard';
-import { ExportAudit } from './export-audit/export-audit';
+import { ExportsPage } from './exports/exports-page';
 import { RetentionDisposition } from './retention-disposition/retention-disposition';
 import { SearchPage } from './search/search-page';
 
@@ -108,13 +109,22 @@ describe('every page survives every service being down', () => {
     ).toBe(true);
   });
 
-  it('renders Exports & Audit', async () => {
-    const fixture = mount(ExportAudit);
+  it('renders Evidence Exports', async () => {
+    const fixture = mount(ExportsPage);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Exports & Audit Trail');
-    expect(rendered).toContain('Audit trail');
+    expect(rendered).toContain('Evidence Exports');
+    expect(rendered).toContain('Request an export');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders the Audit Trail', async () => {
+    const fixture = mount(AuditPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Audit Trail');
     expect(rendered).toContain('is not reachable');
   });
 
@@ -371,6 +381,161 @@ describe('search asks for nothing until it is asked', () => {
     await settleAsync(fixture);
 
     expect(text(fixture)).toContain('That is an answer, not a failure');
+  });
+});
+
+/**
+ * Selecting results and revealing more of them.
+ *
+ * The result list starts at one batch and grows only when asked ("Show more" appends the next
+ * batch); a tick on a row survives that growth, and "Add selected" files exactly the ticked ids
+ * through P3's add-selected endpoint — never a re-run of the search, which could match a
+ * different set than the reviewer saw.
+ */
+describe('search result selection and show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  function aResult(id: string) {
+    return {
+      messageId: id,
+      externalId: null,
+      custodianId: 'cust-1',
+      from: 'a@example.com',
+      to: [],
+      subject: `Subject ${id}`,
+      sentAt: '2020-05-01T10:00:00Z',
+      snippet: '',
+      highlights: null,
+      score: 1,
+      onHold: false,
+      attachmentCount: 0,
+      attachmentFilenames: null,
+    };
+  }
+
+  async function searchedFixture(total: number) {
+    const fixture = mount(SearchPage);
+    const page = fixture.componentInstance as unknown as { query: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.query.set('atlas');
+    settle(fixture);
+    (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLButtonElement>('.btn--primary')
+      ?.click();
+    settle(fixture);
+
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-1'), aResult('msg-2')],
+      total,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+    // The history refresh the successful first page triggered.
+    http
+      .match((request) => request.url === 'http://localhost:8083/search/history')
+      .forEach((request) => request.flush([]));
+    await settleAsync(fixture);
+    return { fixture, http };
+  }
+
+  it('shows one batch and appends the next on Show more', async () => {
+    const { fixture, http } = await searchedFixture(4);
+
+    expect(text(fixture)).toContain('Showing 2 of 4');
+    const showMore = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ].find((button) => button.textContent?.trim() === 'Show more');
+    expect(showMore).toBeTruthy();
+
+    showMore!.click();
+    settle(fixture);
+
+    const next = http.expectOne('http://localhost:8083/search');
+    expect(next.request.body.page).toBe(1);
+    next.flush({
+      results: [aResult('msg-3'), aResult('msg-4')],
+      total: 4,
+      page: 1,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    const rendered = text(fixture);
+    // Appended, not replaced: the first batch is still on screen.
+    expect(rendered).toContain('Subject msg-1');
+    expect(rendered).toContain('Subject msg-4');
+    expect(rendered).toContain('Showing 4 of 4');
+    // Everything shown, nothing more to ask for.
+    expect(rendered).not.toContain('Show more');
+  });
+
+  it('files exactly the ticked ids through the add-selected endpoint', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    const checkboxes = [...host.querySelectorAll<HTMLInputElement>('tbody input[type=checkbox]')];
+    expect(checkboxes).toHaveLength(2);
+    checkboxes[1].click();
+    settle(fixture);
+
+    const page = fixture.componentInstance as unknown as {
+      fileCaseId: { set(v: string): void };
+    };
+    page.fileCaseId.set('case-9');
+    settle(fixture);
+
+    const addSelected = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+      button.textContent?.includes('Add selected (1)'),
+    );
+    expect(addSelected).toBeTruthy();
+    addSelected!.click();
+    settle(fixture);
+
+    const filed = http.expectOne('http://localhost:8083/search/add-selected-to-case');
+    // The ticked id, verbatim — not the search, not the page.
+    expect(filed.request.body).toEqual({ caseId: 'case-9', messageIds: ['msg-2'] });
+    filed.flush({
+      caseId: 'case-9',
+      matched: 1,
+      added: 1,
+      alreadyPresent: 0,
+      messageIds: ['msg-2'],
+      truncated: false,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('1 selected message filed on case-9');
+    // Filing clears the picks, so the same tick cannot be double-filed by accident.
+    expect(text(fixture)).toContain('Add selected (0)');
+  });
+
+  it('a new search clears the previous selection', async () => {
+    const { fixture, http } = await searchedFixture(2);
+    const host = fixture.nativeElement as HTMLElement;
+
+    host.querySelector<HTMLInputElement>('tbody input[type=checkbox]')!.click();
+    settle(fixture);
+    expect(text(fixture)).toContain('Add selected (1)');
+
+    host.querySelector<HTMLButtonElement>('.btn--primary')!.click();
+    settle(fixture);
+    http.expectOne('http://localhost:8083/search').flush({
+      results: [aResult('msg-9')],
+      total: 1,
+      page: 0,
+      size: 10,
+      tookMs: 1,
+    });
+    await settleAsync(fixture);
+
+    expect(text(fixture)).toContain('Add selected (0)');
   });
 });
 
@@ -695,6 +860,53 @@ describe('opening a case on /cases/new', () => {
       anchor.getAttribute('href'),
     );
     expect(targets.filter((href) => href === '/cases/new')).toHaveLength(2);
+  });
+});
+
+/** The evidence list can run to hundreds of rows; it grows ten at a time, like search results. */
+describe('case evidence show more', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+
+  it('shows ten rows and grows on Show more', async () => {
+    const fixture = mount(CasesPage);
+    const page = fixture.componentInstance as unknown as { selected: { set(v: string): void } };
+    const http = TestBed.inject(HttpTestingController);
+    http
+      .match(() => true)
+      .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
+
+    page.selected.set('case-1');
+    settle(fixture);
+
+    const evidence = Array.from({ length: 12 }, (_, i) => ({
+      id: `ev-${i}`,
+      messageId: `msg-${i}`,
+      source: 'SEARCH',
+      addedAt: '2026-09-10T12:00:00Z',
+    }));
+    http
+      .match((request) => request.url === 'http://localhost:8084/cases/case-1/evidence')
+      .forEach((request) => request.flush(evidence));
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const shownRows = () =>
+      [...host.querySelectorAll('td.mono')].filter((cell) => cell.textContent?.startsWith('msg-'))
+        .length;
+
+    expect(shownRows()).toBe(10);
+    expect(text(fixture)).toContain('Showing 10 of 12');
+
+    const showMore = [...host.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Show more',
+    );
+    expect(showMore).toBeTruthy();
+    showMore!.click();
+    settle(fixture);
+
+    expect(shownRows()).toBe(12);
+    // Everything shown; the growth control has nothing left to offer.
+    expect(text(fixture)).not.toContain('Showing 12 of 12');
   });
 });
 

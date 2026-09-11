@@ -90,6 +90,23 @@ export class CasesPage {
   protected readonly custodianRows = valueOr(this.custodians, [] as CaseCustodian[]);
   protected readonly evidenceRows = valueOr(this.evidence, [] as Evidence[]);
 
+  /**
+   * How much of the evidence list is on screen. The whole list arrives in one response — P4 does
+   * not page it — but a matter can carry hundreds of rows, and a wall of ids buries the controls
+   * under it. Ten at a time, grown by "Show more", same as the search results.
+   */
+  protected readonly evidenceVisible = signal(10);
+  protected readonly visibleEvidence = computed(() =>
+    this.evidenceRows().slice(0, this.evidenceVisible()),
+  );
+  protected readonly evidenceRemaining = computed(
+    () => this.evidenceRows().length - this.visibleEvidence().length,
+  );
+
+  protected showMoreEvidence(): void {
+    this.evidenceVisible.update((count) => count + 10);
+  }
+
   protected readonly current = computed(() =>
     this.detail.hasValue() ? this.detail.value() : undefined,
   );
@@ -157,6 +174,8 @@ export class CasesPage {
   protected select(id: string): void {
     this.protectedPage.set(0);
     this.selected.set(id);
+    // Another matter's evidence starts collapsed again.
+    this.evidenceVisible.set(10);
     this.clearMessages();
   }
 

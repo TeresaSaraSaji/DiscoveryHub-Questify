@@ -1,7 +1,10 @@
 <header class="page__head">
   <div>
-    <h1>Exports &amp; Audit Trail</h1>
-    <p class="page__lede">Request and download evidence packages, and view all system activity.</p>
+    <h1>Evidence Exports</h1>
+    <p class="page__lede">
+      Request, verify and download evidence packages. Who asked for each one is recorded on the
+      <a class="link" routerLink="/audit">audit trail</a>.
+    </p>
   </div>
 </header>
 
@@ -221,129 +224,3 @@
     </table>
   </app-panel>
 </div>
-
-<app-panel
-  heading="Audit trail"
-  hint="Append-only, newest first. Every service writes its own events."
-  service="p5"
-  [source]="audit"
->
-  <div class="controls controls--wrap">
-    <label class="field field--inline">
-      <span>Service</span>
-      <select [value]="draft().service" (change)="selectService($any($event.target).value)">
-        <option value="">All services</option>
-        @for (option of serviceOptions; track option.value) {
-          <option [value]="option.value">{{ option.label }}</option>
-        }
-      </select>
-    </label>
-    <label class="field field--inline">
-      <span>Action</span>
-      <select
-        [value]="draft().action"
-        (change)="patchFilter({ action: $any($event.target).value })"
-      >
-        <option value="">All actions</option>
-        @for (group of actionGroups(); track group.label) {
-          <optgroup [label]="group.label">
-            @for (action of group.actions; track action) {
-              <option [value]="action">{{ action }}</option>
-            }
-          </optgroup>
-        }
-      </select>
-    </label>
-    <label class="field field--inline">
-      <span>Outcome</span>
-      <select
-        [value]="draft().outcome"
-        (change)="patchFilter({ outcome: $any($event.target).value })"
-      >
-        <option value="">Any outcome</option>
-        @for (option of outcomeOptions; track option.value) {
-          <option [value]="option.value">{{ option.label }}</option>
-        }
-      </select>
-    </label>
-    <label class="field field--inline">
-      <span>Subject</span>
-      <input
-        type="text"
-        class="mono"
-        [ngModel]="draft().subjectId"
-        (ngModelChange)="patchFilter({ subjectId: $event })"
-        (keyup.enter)="search()"
-        name="auditSubject"
-        placeholder="messageId or caseId"
-        autocomplete="off"
-      />
-    </label>
-    <button type="button" class="btn btn--primary btn--small" (click)="search()">Search</button>
-    <button type="button" class="btn btn--ghost btn--small" (click)="clearFilter()">Clear</button>
-    <button
-      type="button"
-      class="btn btn--ghost btn--small"
-      (click)="showRefusalsOnly()"
-      title="A hold blocking a delete is recorded here"
-    >
-      Refusals only
-    </button>
-  </div>
-
-  @if (filterDirty()) {
-    <p class="note">Filters staged. Press Search to apply them.</p>
-  }
-
-  @if (auditRows().content.length === 0 && !audit.isLoading()) {
-    <p class="empty">
-      No audit events match.
-      @if (filterActive()) {
-        Try widening the filters, or Clear to see the whole trail.
-      }
-    </p>
-  }
-
-  <table class="table">
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>Service</th>
-        <th>Action</th>
-        <th>Outcome</th>
-        <th>Subject</th>
-        <th>Actor</th>
-        <th>Detail</th>
-      </tr>
-    </thead>
-    <tbody>
-      @for (event of auditRows().content; track event.eventId) {
-        <tr>
-          <td class="dim">{{ event.occurredAt | since }}</td>
-          <td>
-            <span class="tag">{{ event.service }}</span>
-          </td>
-          <td class="mono">{{ event.action }}</td>
-          <td>
-            <span [class]="outcomeClass(event.outcome)">{{ event.outcome }}</span>
-          </td>
-          <td class="mono dim">
-            {{ event.subjectId ?? '—' }}
-            <div class="dim">{{ event.subjectType }}</div>
-          </td>
-          <td class="dim">{{ event.actor }}</td>
-          <td class="cell--detail">
-            @for (pair of detailPairs(event.detail); track pair.key) {
-              <span class="tag mono">{{ pair.key }}={{ pair.value }}</span>
-            }
-          </td>
-        </tr>
-      }
-    </tbody>
-  </table>
-  <app-paginator [page]="auditRows()" [busy]="audit.isLoading()" (go)="auditPage.set($event)" />
-  <p class="note">
-    There are no write endpoints for this trail anywhere in the system, by design. It is appended to
-    by the services as they work and read here.
-  </p>
-</app-panel>
