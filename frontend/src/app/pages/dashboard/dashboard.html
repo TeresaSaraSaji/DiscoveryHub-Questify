@@ -103,7 +103,7 @@
     [source]="cases"
   >
     @if (caseRows().content.length === 0 && !cases.isLoading()) {
-      <p class="empty">No cases yet. Open one from the Cases page.</p>
+      <p class="empty">No cases yet. <a class="link" routerLink="/cases/new">Open one</a>.</p>
     }
     <table class="table">
       <thead>

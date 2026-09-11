@@ -47,8 +47,9 @@ export class Dashboard {
     {
       path: '/cases',
       label: 'Cases & holds',
-      detail: 'Open a matter, file evidence, place a hold',
+      detail: 'Pick a matter, file evidence, place a hold',
     },
+    { path: '/cases/new', label: 'Open a case', detail: 'Start a new matter in DRAFT' },
     {
       path: '/retention',
       label: 'Retention & disposition',
