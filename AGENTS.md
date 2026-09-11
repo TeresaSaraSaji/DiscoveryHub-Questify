@@ -48,6 +48,31 @@ curl -F "file=@tools/corpus-generator/fixtures/messages.ndjson" \
   "http://localhost:8081/messages/upload?async=true"
 ```
 
+## Sharing one stack with the team
+
+Nothing syncs between machines. `docker compose up` on a second laptop creates a second, empty set
+of databases in its own volumes — Docker packages services, it does not connect hosts. A case is
+shared only because everybody is pointed at the one machine that owns it.
+
+One machine runs the stack and everyone else opens the URL it prints:
+
+```bash
+docker compose up -d kafka kafka-init redis postgres-archive postgres-cases \
+  postgres-holds postgres-audit postgres-disposition elasticsearch minio minio-init
+./infra/serve-lan.sh
+```
+
+Two things make that work, and both are configuration rather than code:
+
+- `frontend/public/api-config.js` derives the service host from `window.location.hostname`, so a
+  visitor's browser calls the host's services instead of its own empty machine.
+- `DISCOVERYHUB_WEB_CORS_ALLOWED_ORIGINS` adds the host's LAN address to the allowed origins.
+  `@Value` and the actuator placeholder both resolve it from the environment, so the one variable
+  covers the panels and the status strip. No `CorsConfig` needs editing.
+
+The UI is served by `ng serve --host 0.0.0.0`. There is no authentication anywhere in the stack, so
+whoever can reach the port can delete a case — keep this on a network you trust.
+
 ## Traps that have cost real time
 
 **A stale process on a port.** A service whose port is taken logs `APPLICATION FAILED TO START` and
