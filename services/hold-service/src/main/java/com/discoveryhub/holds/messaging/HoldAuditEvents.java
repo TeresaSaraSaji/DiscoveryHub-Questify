@@ -34,10 +34,31 @@ public final class HoldAuditEvents {
     }
 
     public AuditEvent holdReleased(String holdId, String caseId, String reason) {
+        return holdReleased(holdId, caseId, reason, -1, -1);
+    }
+
+    /**
+     * Release audit carrying the overlap split (FR-4.5): how many of the hold's messages actually
+     * stopped being protected, and how many stayed evidence because another active hold still
+     * covers them. Without both numbers the audit trail cannot answer "why is message 123 still
+     * held after we released the hold on it?" — the answer is in {@code stillHeldMessages}, and an
+     * auditor who can only see the covered total has to reconstruct it by hand.
+     *
+     * <p>Counts below zero are omitted, which is how the {@code (holdId, caseId, reason)} overload
+     * says "this caller did not compute the split".
+     */
+    public AuditEvent holdReleased(String holdId, String caseId, String reason,
+                                   int unprotectedMessages, int stillHeldMessages) {
         Map<String, String> detail = new LinkedHashMap<>();
         detail.put("caseId", caseId);
         if (reason != null) {
             detail.put("reason", reason);
+        }
+        if (unprotectedMessages >= 0) {
+            detail.put("unprotectedMessages", String.valueOf(unprotectedMessages));
+        }
+        if (stillHeldMessages >= 0) {
+            detail.put("stillHeldMessages", String.valueOf(stillHeldMessages));
         }
         return event("hold.released", AuditEvent.Outcome.SUCCESS, "hold", holdId, holdId, detail);
     }

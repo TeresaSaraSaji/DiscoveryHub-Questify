@@ -40,6 +40,16 @@ discoveryhub:
     # but bounded so a runaway query cannot dump a million ids into one audit event.
     max-bulk-results: 10000
 
+    # case-service, for filing search results as evidence. P4 owns case membership, so the write
+    # goes to P4 — synchronously, so the response and the audit record state what was actually
+    # written rather than what was matched.
+    case-service:
+      base-url: ${CASES_BASE_URL:http://localhost:8084}
+      timeout: 10s
+      # Ids per request. case-service commits a batch in one transaction and the bulk cap is
+      # 10,000, so this bounds how long a lock is held on another service's database.
+      batch-size: 500
+
 server:
   port: ${SERVER_PORT:8083}
 

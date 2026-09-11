@@ -23,7 +23,7 @@ check "kafka          localhost:9092" \
 check "redis          localhost:6379    P1 dedupe" \
   docker exec discoveryhub-redis redis-cli ping
 check "postgres       localhost:5433    P2 archive" \
-  docker exec discoveryhub-postgres-archive psql -U archive -d archive -c "select 1"
+  docker exec discoveryhub-postgres-archive-meta psql -U archive -d archive -c "select 1"
 check "postgres       localhost:5434    P4 cases" \
   docker exec discoveryhub-postgres-cases psql -U cases -d cases -c "select 1"
 check "postgres       localhost:5435    P5 audit" \

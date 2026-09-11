@@ -222,9 +222,26 @@ export interface SavedSearch {
   createdAt: string;
 }
 
+/** One executed search, recorded by P3 as a side effect of answering it. */
+export interface SearchHistoryEntry {
+  id: string;
+  /** The free-text part of the request, null for a pure filter search. */
+  query: string | null;
+  /** The serialised `SearchRequest`, replayable by parsing it back into the form. */
+  requestJson: string;
+  /** Hits at the time it ran; a re-run may answer differently. */
+  totalHits: number;
+  tookMs: number;
+  executedAt: string;
+}
+
 export interface BulkAddToCaseResponse {
   caseId: string;
+  /** Messages the search matched. */
+  matched: number;
+  /** Evidence rows case-service actually created. Differs from `matched` when some were already filed. */
   added: number;
+  alreadyPresent: number;
   messageIds: string[];
   truncated: boolean;
 }

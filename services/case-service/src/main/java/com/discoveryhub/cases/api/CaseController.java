@@ -40,11 +40,13 @@ import java.util.Map;
  * POST   /cases/{id}/evidence               add one message as evidence
  * POST   /cases/{id}/evidence/batch         add a page of search results as evidence
  * DELETE /cases/{id}/evidence/{messageId}   remove an evidence item
+ * POST   /cases/evidence/lookup             bulk evidence membership by messageId, any case
  * GET    /cases/stats                       dashboard counts (totalCases, activeCases, closedCases)
  * </pre>
  *
- * <p>{@code /cases/stats} is a literal path and takes precedence over {@code /cases/{id}}, so the
- * dashboard count endpoint is not mistaken for a case whose id happens to be "stats".
+ * <p>{@code /cases/stats} and {@code /cases/evidence/lookup} are both literal paths and take
+ * precedence over {@code /cases/{id}}, so neither is mistaken for a case whose id happens to
+ * match.
  */
 @RestController
 @RequestMapping("/cases")
@@ -76,6 +78,17 @@ public class CaseController {
     @GetMapping("/stats")
     public Map<String, Object> stats() {
         return service.stats();
+    }
+
+    /**
+     * P4's held-case evidence guard for disposition (DISPOSITION.md): "of these messages, which
+     * are evidence items, and on which case?" Answered here without regard to hold status —
+     * hold-service (which calls this) is the one that knows which cases are under an active hold,
+     * and filters this raw membership with that data.
+     */
+    @PostMapping("/evidence/lookup")
+    public List<EvidenceLookupItem> lookupEvidence(@RequestBody EvidenceLookupRequest request) {
+        return service.lookupEvidence(request.messageIds());
     }
 
     @GetMapping("/{id}")

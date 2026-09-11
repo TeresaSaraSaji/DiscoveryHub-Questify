@@ -88,6 +88,7 @@ class HoldServiceTest {
         HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.ACTIVE, Instant.now());
         when(holds.findById("hold-1")).thenReturn(Optional.of(hold));
         when(coverage.findMessageIdsByHoldId("hold-1")).thenReturn(List.of("m1", "m2"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-1")).thenReturn(List.of("m1", "m2"));
         when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         HoldEntity result = service.releaseHold("hold-1", "manual");
@@ -97,6 +98,79 @@ class HoldServiceTest {
         assertThat(result.getReleasedReason()).isEqualTo("manual");
         verify(eventPublisher, org.mockito.Mockito.times(2)).publishHoldEvent(any());
         verify(eventPublisher).publishAudit(any());
+    }
+
+    @Test
+    void releasingOneOfTwoOverlappingHoldsLeavesTheSharedMessageHeld() {
+        // Hold A covers Rahul's emails (m123, m124); hold B — the Phoenix investigation — also
+        // covers m123. Releasing A must announce m124 as unprotected and say nothing about m123,
+        // because B still protects it.
+        HoldEntity holdA = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findById("hold-a")).thenReturn(Optional.of(holdA));
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m123", "m124"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of("m124"));
+        when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.releaseHold("hold-a", "manual");
+
+        ArgumentCaptor<com.discoveryhub.contracts.HoldEvent> events =
+                ArgumentCaptor.forClass(com.discoveryhub.contracts.HoldEvent.class);
+        verify(eventPublisher).publishHoldEvent(events.capture());
+        assertThat(events.getValue().messageId()).isEqualTo("m124");
+        assertThat(events.getValue().held()).isFalse();
+    }
+
+    @Test
+    void releasingTheLastOverlappingHoldFinallyFreesTheSharedMessage() {
+        // Continuing from the hold-a release: with A gone, releasing B leaves nothing covering
+        // m123, so this is the release that announces it.
+        HoldEntity holdB = new HoldEntity("hold-b", "case-2", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findById("hold-b")).thenReturn(Optional.of(holdB));
+        when(coverage.findMessageIdsByHoldId("hold-b")).thenReturn(List.of("m123"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-b")).thenReturn(List.of("m123"));
+        when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.releaseHold("hold-b", "manual");
+
+        ArgumentCaptor<com.discoveryhub.contracts.HoldEvent> events =
+                ArgumentCaptor.forClass(com.discoveryhub.contracts.HoldEvent.class);
+        verify(eventPublisher).publishHoldEvent(events.capture());
+        assertThat(events.getValue().messageId()).isEqualTo("m123");
+        assertThat(events.getValue().held()).isFalse();
+    }
+
+    @Test
+    void releasingAHoldWhollyCoveredByAnotherPublishesNoReleaseEvents() {
+        HoldEntity hold = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findById("hold-a")).thenReturn(Optional.of(hold));
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m1", "m2"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of());
+        when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        HoldEntity result = service.releaseHold("hold-a", "manual");
+
+        // The hold itself is released — it is the messages that stay protected, not the hold.
+        assertThat(result.getStatus()).isEqualTo(HoldStatus.RELEASED);
+        verify(eventPublisher, never()).publishHoldEvent(any());
+        verify(eventPublisher).publishAudit(any());
+    }
+
+    @Test
+    void releaseAuditRecordsTheOverlapSplit() {
+        HoldEntity hold = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(holds.findById("hold-a")).thenReturn(Optional.of(hold));
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m1", "m2", "m3"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of("m3"));
+        when(holds.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.releaseHold("hold-a", "manual");
+
+        ArgumentCaptor<com.discoveryhub.contracts.AuditEvent> auditEvent =
+                ArgumentCaptor.forClass(com.discoveryhub.contracts.AuditEvent.class);
+        verify(eventPublisher).publishAudit(auditEvent.capture());
+        assertThat(auditEvent.getValue().detail())
+                .containsEntry("unprotectedMessages", "1")
+                .containsEntry("stillHeldMessages", "2");
     }
 
     @Test
@@ -154,6 +228,29 @@ class HoldServiceTest {
         assertThat(count).isEqualTo(1);
         verify(coverage, never()).countByHoldId(any());
         verify(holds, never()).findByCaseIdAndStatus(any(), any());
+    }
+
+    @Test
+    void activeHoldsCoveringAMessageListsBothOverlappingHoldsNewestFirst() {
+        HoldEntity older = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE,
+                Instant.parse("2024-01-01T00:00:00Z"));
+        HoldEntity newer = new HoldEntity("hold-b", "case-2", HoldStatus.ACTIVE,
+                Instant.parse("2024-06-01T00:00:00Z"));
+        when(coverage.findActiveHoldIdsByMessageId("m123")).thenReturn(List.of("hold-a", "hold-b"));
+        when(holds.findAllById(List.of("hold-a", "hold-b"))).thenReturn(List.of(older, newer));
+
+        List<HoldEntity> covering = service.activeHoldsCoveringMessage("m123");
+
+        assertThat(covering).extracting(HoldEntity::getHoldId).containsExactly("hold-b", "hold-a");
+    }
+
+    @Test
+    void activeHoldsCoveringAnUnheldMessageIsEmptyAndSkipsTheHoldLookup() {
+        when(coverage.findActiveHoldIdsByMessageId("m999")).thenReturn(List.of());
+
+        assertThat(service.activeHoldsCoveringMessage("m999")).isEmpty();
+
+        verify(holds, never()).findAllById(any());
     }
 
     @Test

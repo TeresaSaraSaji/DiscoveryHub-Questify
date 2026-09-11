@@ -29,9 +29,10 @@ import static org.mockito.Mockito.when;
  * every message it covered, and audit the release. Coverage rows are left in place (the hold is
  * RELEASED, so the joined {@code status = 'ACTIVE'} check stops matching) — not deleted.
  *
- * <p>Overlapping holds (FR-4.5) are handled by the coverage table, not by this command: releasing
- * this hold only removes <i>this</i> hold's protection; another active hold's coverage for the
- * same messageId still answers "held" because that hold is still ACTIVE.
+ * <p>Overlapping holds (FR-4.5): releasing this hold only removes <i>this</i> hold's protection,
+ * so a message another ACTIVE hold still covers gets no release event. This path is what
+ * {@code case.closed} runs, so it is the one where a case closing out from under a message held
+ * by a second case's investigation would do the damage.
  */
 @ExtendWith(MockitoExtension.class)
 class ReleaseHoldCommandTest {
@@ -56,6 +57,7 @@ class ReleaseHoldCommandTest {
     void flipsStatusToReleasedAndPublishesPerMessageEvents() {
         HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.ACTIVE, Instant.now());
         when(coverage.findMessageIdsByHoldId("hold-1")).thenReturn(List.of("m1", "m2", "m3"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-1")).thenReturn(List.of("m1", "m2", "m3"));
 
         command(hold, "manual release").execute();
 
@@ -74,6 +76,7 @@ class ReleaseHoldCommandTest {
     void publishesReleaseEventsWithHeldFalse() {
         HoldEntity hold = new HoldEntity("hold-1", "case-1", HoldStatus.ACTIVE, Instant.now());
         when(coverage.findMessageIdsByHoldId("hold-1")).thenReturn(List.of("m1"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-1")).thenReturn(List.of("m1"));
 
         command(hold, "case closed").execute();
 
@@ -106,6 +109,51 @@ class ReleaseHoldCommandTest {
         assertThat(hold.getStatus()).isEqualTo(HoldStatus.RELEASED);
         verify(publisher, never()).publishHoldEvent(any());
         verify(publisher).publishAudit(any());
+    }
+
+    @Test
+    void aMessageStillCoveredByAnotherActiveHoldGetsNoReleaseEvent() {
+        // case-1 is closing, so its hold on m123 and m124 is released. The Phoenix investigation
+        // on case-2 also holds m123, so only m124 may be announced as unprotected.
+        HoldEntity hold = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m123", "m124"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of("m124"));
+
+        command(hold, "case closed").execute();
+
+        ArgumentCaptor<com.discoveryhub.contracts.HoldEvent> events =
+                ArgumentCaptor.forClass(com.discoveryhub.contracts.HoldEvent.class);
+        verify(publisher).publishHoldEvent(events.capture());
+        assertThat(events.getValue().messageId()).isEqualTo("m124");
+    }
+
+    @Test
+    void closingACaseWhoseEveryMessageIsHeldElsewherePublishesNoReleaseEvents() {
+        HoldEntity hold = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m123", "m124"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of());
+
+        command(hold, "case closed").execute();
+
+        assertThat(hold.getStatus()).isEqualTo(HoldStatus.RELEASED);
+        verify(publisher, never()).publishHoldEvent(any());
+        verify(publisher).publishAudit(any());
+    }
+
+    @Test
+    void releaseAuditRecordsTheOverlapSplit() {
+        HoldEntity hold = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE, Instant.now());
+        when(coverage.findMessageIdsByHoldId("hold-a")).thenReturn(List.of("m1", "m2", "m3"));
+        when(coverage.findMessageIdsUnprotectedByReleasing("hold-a")).thenReturn(List.of("m1", "m2"));
+
+        command(hold, "case closed").execute();
+
+        ArgumentCaptor<com.discoveryhub.contracts.AuditEvent> auditEvent =
+                ArgumentCaptor.forClass(com.discoveryhub.contracts.AuditEvent.class);
+        verify(publisher).publishAudit(auditEvent.capture());
+        assertThat(auditEvent.getValue().detail())
+                .containsEntry("unprotectedMessages", "2")
+                .containsEntry("stillHeldMessages", "1");
     }
 
     @Test

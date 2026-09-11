@@ -35,6 +35,31 @@ public interface HoldCoverageRepository extends JpaRepository<HoldCoverageEntity
     List<String> findMessageIdsByHoldId(@Param("holdId") String holdId);
 
     /**
+     * Of the messages this hold covers, the ones no <i>other</i> ACTIVE hold covers — the only
+     * ones that actually stop being protected when this hold is released (FR-4.5).
+     *
+     * <p>A message under hold A ("Rahul's mailbox") and hold B ("Phoenix investigation") is still
+     * evidence after A is released; it becomes disposition-eligible only once both are gone.
+     *
+     * <p>{@code :holdId} is excluded explicitly rather than relying on the releasing hold having
+     * already been flipped to {@code RELEASED}: the caller computes this before or after the flip
+     * depending on the path, and an unflushed status change would otherwise make the hold appear
+     * to keep protecting its own messages, so nothing would ever be reported as unprotected.
+     */
+    @Query("""
+            select c.messageId from HoldCoverageEntity c
+            where c.holdId = :holdId
+              and not exists (
+                select 1 from HoldCoverageEntity o
+                join HoldEntity h on h.holdId = o.holdId
+                where o.messageId = c.messageId
+                  and o.holdId <> :holdId
+                  and h.status = com.discoveryhub.holds.domain.HoldStatus.ACTIVE
+              )
+            """)
+    List<String> findMessageIdsUnprotectedByReleasing(@Param("holdId") String holdId);
+
+    /**
      * Distinct held-message count for a case (FR-4.4). Overlapping active holds on the same case
      * (FR-4.5) can cover the same messageId; summing {@link #countByHoldId} per hold double-counts
      * those messages, so this counts distinct message ids across every active hold on the case.

@@ -71,6 +71,15 @@ public class UploadController {
                     audit apply exactly as they do to POST /messages, so uploading the same file
                     twice adds nothing.
 
+                    retentionMode chooses how long the uploaded messages are kept before P2's
+                    disposition sweep is allowed to delete them:
+                      - NORMAL (default): the type-based retention period (discoveryhub.retention),
+                        the same as every other message.
+                      - DEMO: a short, per-message override (minutes, not years) so this specific
+                        upload — and nothing else — becomes disposition-eligible within the length
+                        of a demo. Pick this for a file you are about to show being disposed of;
+                        picking it for a real upload means it is deleted far sooner than intended.
+
                     With async=true the file is spooled to disk, 202 Accepted is returned with a
                     job id, and progress is polled from GET /messages/uploads/{jobId}. Use it for
                     anything large: the 12,000-message corpus takes around 75 seconds, which is
@@ -78,7 +87,8 @@ public class UploadController {
     @PostMapping(path = "/messages/upload", consumes = "multipart/form-data")
     public ResponseEntity<?> upload(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "async", defaultValue = "false") boolean async) {
+            @RequestParam(value = "async", defaultValue = "false") boolean async,
+            @RequestParam(value = "retentionMode", defaultValue = "NORMAL") RetentionMode retentionMode) {
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body(IngestResponse.of(List.of(
                     IngestResult.rejected(null, "no file uploaded, or the file is empty"))));
@@ -88,7 +98,7 @@ public class UploadController {
 
         if (async) {
             try (var in = file.getInputStream()) {
-                UploadJob job = asyncUploadService.submit(filename, in);
+                UploadJob job = asyncUploadService.submit(filename, in, retentionMode);
                 return ResponseEntity.accepted()
                         .header("Location", "/messages/uploads/" + job.jobId())
                         .body(job);
@@ -103,7 +113,7 @@ public class UploadController {
         }
 
         try (var in = file.getInputStream()) {
-            UploadResponse response = uploadService.ingest(filename, in);
+            UploadResponse response = uploadService.ingest(filename, in, retentionMode);
             // Same convention as the JSON endpoint: per-item problems are a 2xx outcome, and only
             // an infrastructure failure gets a retryable status so a client knows to re-send.
             HttpStatus status = response.failed() > 0 ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.OK;

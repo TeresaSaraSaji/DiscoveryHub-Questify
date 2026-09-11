@@ -1,10 +1,8 @@
 package com.discoveryhub.archive.api;
 
 import com.discoveryhub.archive.domain.MessageMapper;
-import com.discoveryhub.archive.repository.AttachmentRepository;
-import com.discoveryhub.archive.repository.MessageRepository;
+import com.discoveryhub.archive.repository.ArchivedMessageRepository;
 import com.discoveryhub.archive.retention.MessageDeletionService;
-import com.discoveryhub.archive.storage.AttachmentStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -27,10 +25,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MessageControllerTest {
 
-    @Mock MessageRepository messages;
-    @Mock AttachmentRepository attachments;
+    @Mock ArchivedMessageRepository documents;
     @Mock MessageMapper mapper;
-    @Mock AttachmentStore storage;
     @Mock MessageDeletionService deletion;
 
     @InjectMocks MessageController controller;

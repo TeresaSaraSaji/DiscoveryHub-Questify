@@ -2,7 +2,13 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { baseUrl } from './api-config';
-import { BulkAddToCaseResponse, SavedSearch, SearchRequest, SearchResponse } from './models';
+import {
+  BulkAddToCaseResponse,
+  SavedSearch,
+  SearchHistoryEntry,
+  SearchRequest,
+  SearchResponse,
+} from './models';
 
 /**
  * Nothing on the search page loads until the user asks for something.
@@ -70,12 +76,29 @@ export class SearchApi {
   }
 
   /**
+   * Recent executed searches, newest first. P3 records these itself as it answers, so unlike a
+   * saved search there is nothing to write from here — the history exists because searching did.
+   */
+  history(limit = 20): Observable<SearchHistoryEntry[]> {
+    return this.http.get<SearchHistoryEntry[]>(this.url('/search/history'), {
+      params: { limit },
+    });
+  }
+
+  clearHistory(): Observable<void> {
+    return this.http.delete<void>(this.url('/search/history'));
+  }
+
+  /**
    * File search results as evidence on a case.
    *
-   * **Eventually consistent.** P3 publishes an `add-to-case` event and returns the ids it
-   * collected; case-service consumes it and writes the evidence rows. So the case's evidence list
-   * will not contain these immediately, and the UI says as much rather than showing a count that
-   * disagrees with the next screen.
+   * **Synchronous and confirmed.** P3 collects the matching ids and calls case-service to write
+   * the evidence rows before answering, so `added` is what P4 created, not what P3 matched, and
+   * the case's evidence list contains them the moment this returns.
+   *
+   * This used to publish an event that nothing consumed while reporting success, so the count here
+   * described a write that never happened. If case-service is down the call now fails with a 502
+   * rather than claiming the messages were filed.
    *
    * @param allResults false adds the current page only; true scrolls every match, capped at 10,000
    */

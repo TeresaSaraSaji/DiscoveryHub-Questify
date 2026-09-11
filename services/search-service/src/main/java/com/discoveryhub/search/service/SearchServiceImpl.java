@@ -1,5 +1,7 @@
 package com.discoveryhub.search.service;
 
+import com.discoveryhub.search.client.BulkEvidenceResult;
+import com.discoveryhub.search.client.CaseEvidenceWriter;
 import com.discoveryhub.search.config.SearchProperties;
 import com.discoveryhub.search.exception.SearchException;
 import com.discoveryhub.search.kafka.SearchKafkaPublisher;
@@ -7,11 +9,14 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
 import com.discoveryhub.search.repository.SearchRepository;
 import com.discoveryhub.search.strategy.SearchSortStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.stereotype.Service;
@@ -47,11 +52,18 @@ import java.util.UUID;
 @Service
 public class SearchServiceImpl implements SearchService {
 
+    private static final Logger log = LoggerFactory.getLogger(SearchServiceImpl.class);
+
+    /** History reads default to a screenful and are capped: it is a glance back, not an export. */
+    private static final int DEFAULT_HISTORY_LIMIT = 20;
+    private static final int MAX_HISTORY_LIMIT = 100;
+
     private final SearchRepository repository;
     private final SearchQueryBuilder queryBuilder;
     private final List<SearchSortStrategy> strategies;
     private final SearchProperties properties;
     private final SearchKafkaPublisher publisher;
+    private final CaseEvidenceWriter caseEvidence;
     private final ObjectMapper json;
 
     public SearchServiceImpl(SearchRepository repository,
@@ -59,12 +71,14 @@ public class SearchServiceImpl implements SearchService {
                              List<SearchSortStrategy> strategies,
                              SearchProperties properties,
                              SearchKafkaPublisher publisher,
+                             CaseEvidenceWriter caseEvidence,
                              ObjectMapper json) {
         this.repository = repository;
         this.queryBuilder = queryBuilder;
         this.strategies = strategies;
         this.properties = properties;
         this.publisher = publisher;
+        this.caseEvidence = caseEvidence;
         this.json = json;
     }
 
@@ -74,7 +88,44 @@ public class SearchServiceImpl implements SearchService {
         SearchRequest effective = clampPageSize(request);
         Sort sort = selectSort(effective);
         Query query = queryBuilder.build(effective, sort);
-        return repository.search(query, effective);
+        SearchResponse response = repository.search(query, effective);
+        recordHistory(effective, response);
+        return response;
+    }
+
+    /**
+     * Record the execution in the history index. First pages only — paging through a result set is
+     * the same question again, not a new one. Best-effort by design: history is a convenience, and
+     * a failure to write it must not turn a search that already succeeded into an error.
+     */
+    private void recordHistory(SearchRequest request, SearchResponse response) {
+        if (request.page() != 0) {
+            return;
+        }
+        try {
+            repository.saveHistoryEntry(new SearchHistoryEntry(
+                    UUID.randomUUID().toString(),
+                    request.query(),
+                    writeRequest(request),
+                    response.total(),
+                    response.tookMs(),
+                    Instant.now()));
+        } catch (RuntimeException ex) {
+            log.warn("failed to record search history entry: {}", ex.getMessage());
+        }
+    }
+
+    @Override
+    public List<SearchHistoryEntry> listHistory(Integer limit) {
+        int effective = limit == null || limit <= 0
+                ? DEFAULT_HISTORY_LIMIT
+                : Math.min(limit, MAX_HISTORY_LIMIT);
+        return repository.listHistory(effective);
+    }
+
+    @Override
+    public void clearHistory() {
+        repository.clearHistory();
     }
 
     @Override
@@ -138,8 +189,25 @@ public class SearchServiceImpl implements SearchService {
             messageIds = response.results().stream().map(SearchResult::messageId).toList();
         }
 
-        publisher.publishAddToCase(request.caseId(), messageIds);
-        return new BulkAddToCaseResponse(request.caseId(), messageIds.size(), messageIds, truncated);
+        // Finding the messages is only half the action. Case membership is P4's data, so the write
+        // goes to P4 — and it goes now, synchronously, so that what is reported below is what
+        // actually happened. This call used to be a Kafka event nothing consumed, which meant the
+        // response, the audit record and the UI all described a write that never occurred.
+        BulkEvidenceResult filed;
+        try {
+            filed = caseEvidence.fileEvidence(request.caseId(), messageIds, writeRequest(searchRequest));
+        } catch (CaseEvidenceWriter.CaseEvidenceException ex) {
+            publisher.publishAddToCaseFailed(
+                    request.caseId(), messageIds.size(), ex.partial().added(), ex.getMessage());
+            // 502, not 500: P3 did its job and a dependency did not. The caller needs to know the
+            // messages were *not* filed, which is the whole point of doing the write before
+            // answering.
+            throw new SearchException(ex.getMessage(), 502);
+        }
+
+        publisher.publishAddToCase(request.caseId(), messageIds, filed.added(), filed.alreadyPresent());
+        return new BulkAddToCaseResponse(request.caseId(), messageIds.size(), filed.added(),
+                filed.alreadyPresent(), messageIds, truncated);
     }
 
     private void requireACriterion(SearchRequest request) {

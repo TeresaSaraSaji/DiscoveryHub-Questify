@@ -6,6 +6,7 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
@@ -188,7 +189,7 @@ class SearchControllerTest {
     void addToCaseDelegatesToTheService() {
         BulkAddToCaseRequest request = new BulkAddToCaseRequest("case-1", false,
                 new SearchRequest("fraud", List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null));
-        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-1", 2, List.of("msg-1", "msg-2"), false);
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-1", 2, 2, 0, List.of("msg-1", "msg-2"), false);
         when(searchService.addToCase(request)).thenReturn(expected);
 
         BulkAddToCaseResponse result = controller.addToCase(request);
@@ -201,7 +202,7 @@ class SearchControllerTest {
     void addToCaseWithAllResultsDelegatesToTheService() {
         BulkAddToCaseRequest request = new BulkAddToCaseRequest("case-42", true,
                 new SearchRequest("fraud", List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null));
-        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-42", 100, List.of("msg-1"), true);
+        BulkAddToCaseResponse expected = new BulkAddToCaseResponse("case-42", 100, 100, 0, List.of("msg-1"), true);
         when(searchService.addToCase(request)).thenReturn(expected);
 
         BulkAddToCaseResponse result = controller.addToCase(request);
@@ -237,6 +238,36 @@ class SearchControllerTest {
 
         assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         verify(searchService).deleteSavedSearch("any-id");
+    }
+
+    @Test
+    void listHistoryDelegatesTheLimitToTheService() {
+        SearchHistoryEntry entry = new SearchHistoryEntry(
+                "h-1", "fraud", "{}", 42, 7, Instant.parse("2024-05-11T21:37:00Z"));
+        when(searchService.listHistory(10)).thenReturn(List.of(entry));
+
+        List<SearchHistoryEntry> result = controller.listHistory(10);
+
+        assertThat(result).containsExactly(entry);
+        verify(searchService).listHistory(10);
+    }
+
+    @Test
+    void listHistoryPassesANullLimitThroughForTheServiceToDefault() {
+        when(searchService.listHistory(null)).thenReturn(List.of());
+
+        List<SearchHistoryEntry> result = controller.listHistory(null);
+
+        assertThat(result).isEmpty();
+        verify(searchService).listHistory(null);
+    }
+
+    @Test
+    void clearHistoryReturnsNoContent() {
+        ResponseEntity<Void> result = controller.clearHistory();
+
+        assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(searchService).clearHistory();
     }
 
     @Test

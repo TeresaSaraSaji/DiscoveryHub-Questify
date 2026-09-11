@@ -1,10 +1,13 @@
 package com.discoveryhub.ingestion.service;
 
+import com.discoveryhub.contracts.Message;
+import com.discoveryhub.contracts.RetentionLabels;
 import com.discoveryhub.ingestion.api.IngestResponse;
 import com.discoveryhub.ingestion.api.IngestResult;
 import com.discoveryhub.ingestion.api.MessageBatch;
 import com.discoveryhub.ingestion.api.MessageBatchDecoder;
 import com.discoveryhub.ingestion.api.MessageStreamReader;
+import com.discoveryhub.ingestion.api.RetentionMode;
 import com.discoveryhub.ingestion.api.UploadResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,28 +67,43 @@ public class UploadService {
     }
 
     public UploadResponse ingest(String filename, InputStream in) throws IOException {
-        return ingest(filename, in, processed -> { });
+        return ingest(filename, in, RetentionMode.NORMAL, processed -> { });
+    }
+
+    public UploadResponse ingest(String filename, InputStream in, LongConsumer onProgress)
+            throws IOException {
+        return ingest(filename, in, RetentionMode.NORMAL, onProgress);
+    }
+
+    public UploadResponse ingest(String filename, InputStream in, RetentionMode retentionMode)
+            throws IOException {
+        return ingest(filename, in, retentionMode, processed -> { });
     }
 
     /**
+     * @param retentionMode {@link RetentionMode#DEMO} tags every message in this upload with
+     *                       {@code RetentionLabels.DEMO_RETENTION} so P2 gives it a short,
+     *                       per-message eligibility window instead of the normal, type-based
+     *                       retention period — see {@code com.discoveryhub.contracts.RetentionLabels}.
      * @param onProgress called after each chunk with the running count, so an asynchronous caller
      *                   can report progress instead of presenting a black box
      */
-    public UploadResponse ingest(String filename, InputStream in, LongConsumer onProgress)
-            throws IOException {
+    public UploadResponse ingest(String filename, InputStream in, RetentionMode retentionMode,
+                                 LongConsumer onProgress) throws IOException {
         Tally tally = new Tally();
         long started = System.currentTimeMillis();
 
         int total = reader.readInChunks(in, chunkSize, maxMessages, chunk -> {
             MessageBatch decoded = decoder.decode(chunk);
-            IngestResponse response = ingestService.ingest(hydrate(decoded));
+            IngestResponse response = ingestService.ingest(applyRetentionMode(hydrate(decoded), retentionMode));
             tally.add(response);
             onProgress.accept(tally.processed());
         });
 
-        log.info("upload {}: {} messages, {} accepted, {} duplicates, {} rejected, {} failed in {} ms",
+        log.info("upload {}: {} messages, {} accepted, {} duplicates, {} rejected, {} failed in {} ms"
+                        + " (retentionMode={})",
                 filename, total, tally.accepted, tally.duplicates, tally.rejected, tally.failed,
-                System.currentTimeMillis() - started);
+                System.currentTimeMillis() - started, retentionMode);
 
         return new UploadResponse(filename, total, tally.accepted, tally.duplicates,
                 tally.rejected, tally.failed, List.copyOf(tally.problems), tally.truncated);
@@ -100,6 +118,36 @@ public class UploadService {
                     : MessageBatch.Entry.decoded(hydrator.hydrate(entry.message())));
         }
         return new MessageBatch(hydrated);
+    }
+
+    /**
+     * DEMO tags every decoded message with {@code RetentionLabels.DEMO_RETENTION}; NORMAL passes
+     * the batch through untouched. The label is invisible to dedupe: {@code ContentHash}
+     * deliberately excludes {@code labels}, so tagging a message this way never changes its
+     * identity or lets a demo re-upload be treated as a different message.
+     */
+    private MessageBatch applyRetentionMode(MessageBatch batch, RetentionMode retentionMode) {
+        if (retentionMode != RetentionMode.DEMO) {
+            return batch;
+        }
+        List<MessageBatch.Entry> tagged = new ArrayList<>(batch.size());
+        for (MessageBatch.Entry entry : batch.entries()) {
+            tagged.add(entry.rejection() != null
+                    ? entry
+                    : MessageBatch.Entry.decoded(withDemoRetentionLabel(entry.message())));
+        }
+        return new MessageBatch(tagged);
+    }
+
+    private static Message withDemoRetentionLabel(Message m) {
+        if (m.labels().contains(RetentionLabels.DEMO_RETENTION)) {
+            return m;
+        }
+        List<String> labels = new ArrayList<>(m.labels());
+        labels.add(RetentionLabels.DEMO_RETENTION);
+        return new Message(m.messageId(), m.externalId(), m.source(), m.type(), m.custodianId(),
+                m.from(), m.to(), m.cc(), m.subject(), m.body(), m.sentAt(), m.threadId(), m.inReplyTo(),
+                m.attachments(), labels);
     }
 
     private final class Tally {

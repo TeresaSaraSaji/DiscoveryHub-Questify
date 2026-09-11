@@ -5,7 +5,11 @@ spring:
   # This service's own database (NFR-1). Flyway and JPA bind here because the bean is @Primary;
   # see config/DataSourceConfig for why both datasources have to be declared by hand.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5437/disposition}
+    # 5438, not 5436: postgres-holds took 5436 when hold-service arrived and postgres-disposition
+    # moved. The old default still connected — to the holds database — and failed with
+    # "password authentication failed for user disposition", which reads like a credentials
+    # problem rather than a service pointing at the wrong datastore.
+    url: ${DB_URL:jdbc:postgresql://localhost:5438/disposition}
     username: ${DB_USER:disposition}
     password: ${DB_PASSWORD:disposition}
 
@@ -60,14 +64,11 @@ discoveryhub:
         CHAT: P1095D    # three years
 
   disposition:
-    # KAFKA publishes to disposition.commands and lets P2 own the write; ARCHIVE_DB deletes from
-    # P2's database directly. KAFKA is now the default: P2 has the consumer
-    # (archive/DispositionCommandListener) and answers on disposition.results, so the ledger is
-    # settled with what P2 actually did rather than stopping at DELETE_REQUESTED.
-    #
-    # This restores the property NFR-1 cares about — only P2 writes P2's tables — and the NFR-2
-    # one: with P2 down, commands queue on the topic and apply when it returns instead of the
-    # sweep failing. ARCHIVE_DB remains for a P2-less local run; see DISPOSITION.md.
+    # KAFKA publishes to disposition.commands and lets P2 own the write; P2's consumer
+    # (archive.ingest.DispositionCommandListener) reuses its own guarded delete. ARCHIVE_DB — a
+    # direct SQL DELETE against P2's database — is retired: P2 now splits message content into
+    # MongoDB and hold/retention bookkeeping into its own Postgres, so there is no single table a
+    # direct DELETE could remove a message from any more. See DISPOSITION.md.
     delete-mode: KAFKA
 
     # Candidates per run, oldest first. The corpus is 10,000+ messages (NFR-3); a bounded sweep
@@ -101,10 +102,9 @@ discoveryhub:
       # The sweep is the one destructive process in the system, and the committed corpus is mostly
       # past retention already (fixtures dated 2017-2026, defaults of seven and three years, so
       # ~500 eligible on any given day). Enabled by default it fires within seconds of
-      # `docker compose up`, before anyone has read the configuration, and in ARCHIVE_DB mode it
-      # deletes real fixture data — then again every tick. That is not hypothetical: it happened
-      # during testing, and only the run being in KAFKA mode meant the deletions were published
-      # rather than performed.
+      # `docker compose up`, before anyone has read the configuration — that is not hypothetical,
+      # it happened during testing, back when the default delete mode wrote straight to P2's
+      # database and every tick took another bite out of the fixture corpus.
       #
       # FR-5.2's "scheduled disposition process" exists and works; starting it is a deliberate act:
       #
@@ -117,13 +117,18 @@ discoveryhub:
       cron: "0 */5 * * * *"
 
     archive:
-      # P4 Case & Hold, for the hold check.
-      hold-check-base-url: ${CASES_BASE_URL:http://localhost:8086}
+      # hold-service, not case-service: GET /holds/check, GET /holds/active and
+      # POST /holds/evidence-check all live on hold-service. Pointing this at case-service (the
+      # old CASES_BASE_URL default) made every one of those calls 404 and look identical to P4
+      # being down.
+      hold-check-base-url: ${HOLDS_BASE_URL:http://localhost:8086}
 
-      # P2's archive database. Read for the eligibility query; written only by the single guarded
-      # DELETE in archive/JdbcMessageDeleter, and only in ARCHIVE_DB delete mode. No Flyway and no
-      # entities point here — adding a second migration history to P2's database would break P2 on
-      # startup under ddl-auto: validate.
+      # P2's archive database (now its slim hold/retention table, message_hold_status — message
+      # content lives in MongoDB and this service never touches it). Read-only: the eligibility
+      # query in JdbcArchiveGateway. Deletion goes through disposition.commands and P2's own
+      # consumer now, not a direct write here. No Flyway and no entities point at this datasource
+      # — adding a second migration history to P2's database would break P2 on startup under
+      # ddl-auto: validate.
       datasource:
         url: ${ARCHIVE_DB_URL:jdbc:postgresql://localhost:5433/archive}
         username: ${ARCHIVE_DB_USER:archive}
@@ -135,6 +140,11 @@ discoveryhub:
           pool-name: archive-readwrite
 
 server:
+  # 8087, not 8086: hold-service took 8086 when P4 split into case-service and hold-service. The
+  # compose file already overrides SERVER_PORT=8087, so this only bit anyone running the service
+  # from an IDE — which is the workflow the root README recommends. Two services defaulting to the
+  # same port means whichever starts second dies on bind, and the one that started first then
+  # answers hold checks for itself.
   port: ${SERVER_PORT:8087}
 
 management:

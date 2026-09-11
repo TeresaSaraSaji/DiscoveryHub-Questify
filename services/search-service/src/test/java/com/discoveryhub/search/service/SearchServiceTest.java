@@ -1,5 +1,7 @@
 package com.discoveryhub.search.service;
 
+import com.discoveryhub.search.client.BulkEvidenceResult;
+import com.discoveryhub.search.client.CaseEvidenceWriter;
 import com.discoveryhub.search.config.SearchProperties;
 import com.discoveryhub.search.exception.SearchException;
 import com.discoveryhub.search.kafka.SearchKafkaPublisher;
@@ -7,6 +9,7 @@ import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
@@ -32,6 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,6 +60,9 @@ class SearchServiceTest {
     @Mock
     private SearchKafkaPublisher publisher;
 
+    @Mock
+    private CaseEvidenceWriter caseEvidence;
+
     private SearchServiceImpl service;
 
     @BeforeEach
@@ -66,6 +74,7 @@ class SearchServiceTest {
                 strategies,
                 PROPERTIES,
                 publisher,
+                caseEvidence,
                 new ObjectMapper());
     }
 
@@ -240,22 +249,81 @@ class SearchServiceTest {
     }
 
     @Test
-    void addToCaseAddsTheCurrentPageAndPublishesAnAuditEvent() {
-        // Req 6: "add all results on this page to case" — the default form.
+    void addToCaseFilesTheCurrentPageOnTheCaseAndAuditsWhatWasWritten() {
         SearchRequest search = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
         BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", false, search);
-        List<SearchResult> page = List.of(
-                result("msg-1"), result("msg-2"), result("msg-3"));
+        List<SearchResult> page = List.of(result("msg-1"), result("msg-2"), result("msg-3"));
         when(repository.search(any(Query.class), any(SearchRequest.class)))
                 .thenReturn(new SearchResponse(page, 3, 0, 20, 1L));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(3, 3, 0));
 
         BulkAddToCaseResponse response = service.addToCase(addRequest);
 
+        // The write is the action, not an afterthought: the ids must reach P4.
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-1", "msg-2", "msg-3")), anyString());
         assertThat(response.caseId()).isEqualTo("case-1");
+        assertThat(response.matched()).isEqualTo(3);
         assertThat(response.added()).isEqualTo(3);
+        assertThat(response.alreadyPresent()).isZero();
         assertThat(response.messageIds()).containsExactly("msg-1", "msg-2", "msg-3");
         assertThat(response.truncated()).isFalse();
-        verify(publisher).publishAddToCase("case-1", List.of("msg-1", "msg-2", "msg-3"));
+        verify(publisher).publishAddToCase("case-1", List.of("msg-1", "msg-2", "msg-3"), 3, 0);
+    }
+
+    @Test
+    void addToCaseReportsWhatP4WroteRatherThanWhatWasMatched() {
+        // Overlapping result sets are normal. Reporting the match count as "added" is how this
+        // action used to claim it had filed messages that were already there — or, worse, none.
+        SearchRequest search = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", false, search);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(result("msg-1"), result("msg-2")), 2, 0, 20, 1L));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 1, 1));
+
+        BulkAddToCaseResponse response = service.addToCase(addRequest);
+
+        assertThat(response.matched()).isEqualTo(2);
+        assertThat(response.added()).isEqualTo(1);
+        assertThat(response.alreadyPresent()).isEqualTo(1);
+        verify(publisher).publishAddToCase("case-1", List.of("msg-1", "msg-2"), 1, 1);
+    }
+
+    @Test
+    void addToCaseFailsLoudlyAndAuditsAFailureWhenTheCaseServiceIsDown() {
+        // NFR-2: search keeps working, this one action is refused, and the caller is told. The
+        // failure mode that must never come back is a 200 for a write that did not happen.
+        SearchRequest search = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", false, search);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(result("msg-1")), 1, 0, 20, 1L));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenThrow(new CaseEvidenceWriter.CaseEvidenceException(
+                        "case-1", BulkEvidenceResult.empty(), new IllegalStateException("connection refused")));
+
+        assertThatThrownBy(() -> service.addToCase(addRequest))
+                .isInstanceOf(SearchException.class);
+
+        verify(publisher).publishAddToCaseFailed(eq("case-1"), eq(1), eq(0), anyString());
+        verify(publisher, never()).publishAddToCase(anyString(), anyList(), anyInt(), anyInt());
+    }
+
+    @Test
+    void addToCaseAuditsThePartialCountWhenAChunkedWriteFailsHalfway() {
+        // A case left holding some of the set is the state an investigator most needs the trail to
+        // describe, because the UI will show an incomplete matter with no explanation.
+        SearchRequest search = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", true, search);
+        when(repository.searchMessageIds(any(Query.class), anyInt()))
+                .thenReturn(List.of("msg-1", "msg-2", "msg-3"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenThrow(new CaseEvidenceWriter.CaseEvidenceException(
+                        "case-1", new BulkEvidenceResult(2, 2, 0), new IllegalStateException("timeout")));
+
+        assertThatThrownBy(() -> service.addToCase(addRequest)).isInstanceOf(SearchException.class);
+
+        verify(publisher).publishAddToCaseFailed(eq("case-1"), eq(3), eq(2), anyString());
     }
 
     @Test
@@ -265,6 +333,8 @@ class SearchServiceTest {
         BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", true, search);
         when(repository.searchMessageIds(any(Query.class), anyInt()))
                 .thenReturn(List.of("msg-1", "msg-2"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 2, 0));
 
         BulkAddToCaseResponse response = service.addToCase(addRequest);
 
@@ -272,7 +342,8 @@ class SearchServiceTest {
         assertThat(response.messageIds()).containsExactly("msg-1", "msg-2");
         assertThat(response.truncated()).isFalse();
         verify(repository).searchMessageIds(any(Query.class), eq(10000));
-        verify(publisher).publishAddToCase("case-1", List.of("msg-1", "msg-2"));
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-1", "msg-2")), anyString());
+        verify(publisher).publishAddToCase("case-1", List.of("msg-1", "msg-2"), 2, 0);
     }
 
     @Test
@@ -285,22 +356,26 @@ class SearchServiceTest {
                 .isInstanceOf(SearchException.class)
                 .hasMessageContaining("at least one");
 
-        verify(publisher, never()).publishAddToCase(any(), any());
+        // Nothing reached P4, and nothing was audited as though it had.
+        verify(caseEvidence, never()).fileEvidence(anyString(), anyList(), anyString());
+        verify(publisher, never()).publishAddToCase(anyString(), anyList(), anyInt(), anyInt());
     }
 
     @Test
     void addToCaseWithAllResultsAndEmptyMatchReturnsZeroAdded() {
         SearchRequest search = request("nonexistent", SearchRequest.SortBy.RELEVANCE, null);
         BulkAddToCaseRequest addRequest = new BulkAddToCaseRequest("case-1", true, search);
-        when(repository.searchMessageIds(any(Query.class), anyInt()))
-                .thenReturn(List.of());
+        when(repository.searchMessageIds(any(Query.class), anyInt())).thenReturn(List.of());
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(BulkEvidenceResult.empty());
 
         BulkAddToCaseResponse response = service.addToCase(addRequest);
 
+        assertThat(response.matched()).isZero();
         assertThat(response.added()).isZero();
         assertThat(response.messageIds()).isEmpty();
         assertThat(response.truncated()).isFalse();
-        verify(publisher).publishAddToCase("case-1", List.of());
+        verify(publisher).publishAddToCase("case-1", List.of(), 0, 0);
     }
 
     @Test
@@ -378,6 +453,109 @@ class SearchServiceTest {
         service.search(request);
 
         verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
+    @Test
+    void aFirstPageSearchIsRecordedInHistoryWithItsAnswer() {
+        SearchRequest request = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 42, 0, 20, 7L));
+
+        service.search(request);
+
+        ArgumentCaptor<SearchHistoryEntry> captor = ArgumentCaptor.forClass(SearchHistoryEntry.class);
+        verify(repository).saveHistoryEntry(captor.capture());
+        SearchHistoryEntry entry = captor.getValue();
+        assertThat(entry.getId()).isNotNull();
+        assertThat(entry.getQuery()).isEqualTo("fraud");
+        assertThat(entry.getRequestJson()).contains("fraud");
+        assertThat(entry.getTotalHits()).isEqualTo(42);
+        assertThat(entry.getTookMs()).isEqualTo(7);
+        assertThat(entry.getExecutedAt()).isNotNull();
+    }
+
+    @Test
+    void pagingThroughAResultSetIsNotRecordedAgain() {
+        SearchRequest pageTwo = new SearchRequest(
+                "fraud", List.of(), null, null, null, null, List.of(), null, null, 2, 20,
+                SearchRequest.SortBy.RELEVANCE, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 42, 2, 20, 3L));
+
+        service.search(pageTwo);
+
+        verify(repository, never()).saveHistoryEntry(any(SearchHistoryEntry.class));
+    }
+
+    @Test
+    void aRejectedRequestLeavesNoHistoryEntry() {
+        SearchRequest empty = new SearchRequest(
+                null, List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null);
+
+        assertThatThrownBy(() -> service.search(empty)).isInstanceOf(SearchException.class);
+
+        verify(repository, never()).saveHistoryEntry(any(SearchHistoryEntry.class));
+    }
+
+    @Test
+    void aFailedHistoryWriteDoesNotFailTheSearchThatAlreadyAnswered() {
+        SearchRequest request = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        SearchResponse expected = new SearchResponse(List.of(), 5, 0, 20, 1L);
+        when(repository.search(any(Query.class), any(SearchRequest.class))).thenReturn(expected);
+        when(repository.saveHistoryEntry(any(SearchHistoryEntry.class)))
+                .thenThrow(new RuntimeException("history index unreachable"));
+
+        SearchResponse result = service.search(request);
+
+        assertThat(result).isEqualTo(expected);
+    }
+
+    @Test
+    void listHistoryDefaultsTheLimitWhenNoneIsGiven() {
+        when(repository.listHistory(anyInt())).thenReturn(List.of());
+
+        service.listHistory(null);
+
+        verify(repository).listHistory(20);
+    }
+
+    @Test
+    void listHistoryClampsAnOversizedLimit() {
+        when(repository.listHistory(anyInt())).thenReturn(List.of());
+
+        service.listHistory(500);
+
+        verify(repository).listHistory(100);
+    }
+
+    @Test
+    void listHistoryReturnsWhatTheRepositoryHolds() {
+        SearchHistoryEntry entry = new SearchHistoryEntry(
+                "h-1", "fraud", "{}", 42, 7, Instant.parse("2024-05-11T21:37:00Z"));
+        when(repository.listHistory(20)).thenReturn(List.of(entry));
+
+        List<SearchHistoryEntry> result = service.listHistory(20);
+
+        assertThat(result).containsExactly(entry);
+    }
+
+    @Test
+    void clearHistoryDelegatesToRepository() {
+        service.clearHistory();
+        verify(repository).clearHistory();
+    }
+
+    @Test
+    void reRunningASavedSearchLeavesAHistoryEntryLikeAnyOtherExecution() {
+        SavedSearch stored = new SavedSearch("id-1", "Q1", "case-1",
+                "{\"query\":\"fraud\",\"page\":0,\"size\":20}", "alice", Instant.now());
+        when(repository.getSavedSearch("id-1")).thenReturn(Optional.of(stored));
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 7, 0, 20, 1L));
+
+        service.runSavedSearch("id-1");
+
+        verify(repository).saveHistoryEntry(any(SearchHistoryEntry.class));
     }
 
     private SearchRequest request(String query, SearchRequest.SortBy sortBy, SearchRequest.SortDirection direction) {

@@ -11,13 +11,15 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 
 /**
- * Publishes a delete command to {@code disposition.commands} and lets P2 own the write. Active
- * when {@code discoveryhub.disposition.delete-mode} is {@code KAFKA}.
+ * Publishes a delete command to {@code disposition.commands} and lets P2 own the write. The
+ * default mode: P2 now has the consumer ({@code archive.ingest.DispositionCommandListener}), so
+ * this is where the service actually lives, not just where it was meant to end up.
  *
- * <p>This is where this service is meant to end up. It restores the property NFR-1 actually cares
- * about — only P2 writes to P2's tables — and it makes the delete path resilient in the way NFR-2
- * asks for: with P2 down, commands queue on the topic and are applied when it returns, instead of
- * the sweep failing.
+ * <p>This restores the property NFR-1 actually cares about — only P2 writes to P2's tables (both
+ * of them, now that P2 splits message content into MongoDB and hold/retention bookkeeping into
+ * its own slim Postgres) — and it makes the delete path resilient in the way NFR-2 asks for: with
+ * P2 down, commands queue on the topic and are applied when it returns, instead of the sweep
+ * failing.
  *
  * <p>A published command is still not a completed delete, so the ledger records
  * {@link DeleteResult#REQUESTED} here rather than claiming the message is gone. It does not stay

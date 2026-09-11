@@ -109,3 +109,146 @@ export const EMPTY_AUDIT_FILTER: AuditFilter = {
   outcome: '',
   subjectId: '',
 };
+
+/**
+ * The filterable values, enumerated because the service matches them exactly.
+ *
+ * `AuditLogRepository.search` compares with `=`, not `like`, so a typed "p5" or "export.complete"
+ * returns an empty page rather than an error — indistinguishable, in the UI, from a trail that
+ * genuinely holds no such event. These are closed sets in the emitters, so they are offered as
+ * choices instead. `subjectId` stays free text: it is a message, case, hold or job id.
+ *
+ * Each value is the literal a service writes, so it must stay in step with the `SERVICE` constant
+ * and action strings in the emitters — `CaseAuditEvents`, `HoldAuditEvents`, `ExportEvents`,
+ * `AuditEvents` (P2 and P2.2), `IngestService` and `SearchKafkaPublisher`.
+ */
+export interface AuditOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Seven emitters, and the values are not uniform: P1 writes `ingestion` and P4's two services
+ * write `CASE` and `HOLD` to tell themselves apart, while the rest use their `Pn` label. The
+ * labels here are what that means to a reader; the values are what is stored.
+ */
+export const AUDIT_SERVICES: AuditOption[] = [
+  { value: 'ingestion', label: 'P1 · Ingestion' },
+  { value: 'P2', label: 'P2 · Storage & archive' },
+  { value: 'P2.2', label: 'P2.2 · Disposition' },
+  { value: 'P3', label: 'P3 · Search' },
+  { value: 'CASE', label: 'P4 · Cases' },
+  { value: 'HOLD', label: 'P4 · Legal hold' },
+  { value: 'P5', label: 'P5 · Export & audit' },
+];
+
+/** `AuditEvent.Outcome`. A refusal is not a failure: the system declined on purpose. */
+export const AUDIT_OUTCOMES: AuditOption[] = [
+  { value: 'SUCCESS', label: 'SUCCESS' },
+  { value: 'REFUSED', label: 'REFUSED — declined on purpose' },
+  { value: 'FAILURE', label: 'FAILURE' },
+];
+
+/**
+ * Grouped so a single dropdown of twenty-eight verbs stays readable.
+ *
+ * This is the full set, offered when no service is chosen. Narrowing it to one service is
+ * {@link AUDIT_ACTIONS_BY_SERVICE}.
+ */
+export interface AuditActionGroup {
+  label: string;
+  actions: string[];
+}
+
+export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
+  {
+    label: 'Messages',
+    actions: [
+      'message.ingested',
+      'message.deduped',
+      'message.rejected',
+      'message.archived',
+      'message.hold-updated',
+    ],
+  },
+  {
+    label: 'Cases & evidence',
+    actions: [
+      'case.created',
+      'case.updated',
+      'case.transitioned',
+      'case.closed',
+      'case.mutation-refused',
+      'case.messages-added',
+      'custodian.added',
+      'evidence.added',
+      'evidence.removed',
+    ],
+  },
+  {
+    label: 'Legal hold',
+    actions: ['hold.placed', 'hold.released', 'hold.check', 'hold.failed'],
+  },
+  {
+    label: 'Retention & disposition',
+    actions: [
+      'disposition.run-started',
+      'disposition.run-completed',
+      'disposition.run-failed',
+      'disposition.deleted',
+      'disposition.refused',
+      'retention.policy-updated',
+    ],
+  },
+  {
+    label: 'Export',
+    actions: ['export.requested', 'export.completed', 'export.downloaded', 'export.failed'],
+  },
+];
+
+/**
+ * What each service can write, so choosing one narrows the action list to verbs that service
+ * actually emits and a combination that cannot match is not offered in the first place.
+ *
+ * Taken from the emitters rather than from the rows on hand: P2.2 declares `disposition.deleted`
+ * and `disposition.refused` even though, with deletes currently routed through Kafka, P2 is what
+ * records them. They are real code paths under another `delete-mode`, so they stay listed — a
+ * dropdown built from `select distinct` would drop them the moment the table happened not to hold
+ * one.
+ *
+ * Several verbs belong to two services: `message.deduped` to P1 and P2 (a duplicate caught at the
+ * door, and one caught at the archive), and the disposition pair above. Leaving the service blank
+ * searches across all of them.
+ */
+export const AUDIT_ACTIONS_BY_SERVICE: Record<string, string[]> = {
+  ingestion: ['message.ingested', 'message.deduped', 'message.rejected'],
+  P2: [
+    'message.archived',
+    'message.deduped',
+    'message.hold-updated',
+    'disposition.deleted',
+    'disposition.refused',
+    'disposition.run-failed',
+  ],
+  'P2.2': [
+    'disposition.run-started',
+    'disposition.run-completed',
+    'disposition.run-failed',
+    'disposition.deleted',
+    'disposition.refused',
+    'retention.policy-updated',
+  ],
+  P3: ['case.messages-added'],
+  CASE: [
+    'case.created',
+    'case.updated',
+    'case.transitioned',
+    'case.closed',
+    'case.mutation-refused',
+    'custodian.added',
+    'evidence.added',
+    'evidence.removed',
+  ],
+  HOLD: ['hold.placed', 'hold.released', 'hold.check', 'hold.failed'],
+  P5: ['export.requested', 'export.completed', 'export.downloaded', 'export.failed'],
+};

@@ -21,6 +21,10 @@ COPY contracts/pom.xml contracts/
 COPY services/ingestion-service/pom.xml services/ingestion-service/
 COPY services/storage-service/pom.xml services/storage-service/
 COPY services/disposition-service/pom.xml services/disposition-service/
+COPY services/search-service/pom.xml services/search-service/
+COPY services/case-service/pom.xml services/case-service/
+COPY services/hold-service/pom.xml services/hold-service/
+COPY services/export-service/pom.xml services/export-service/
 COPY tools/corpus-generator/pom.xml tools/corpus-generator/
 RUN mvn -B -q dependency:go-offline -pl contracts,services/disposition-service -am || true
 
@@ -36,16 +40,21 @@ USER appuser
 
 COPY --from=build --chown=appuser /build/services/disposition-service/target/disposition-service-*.jar app.jar
 
-EXPOSE 8086
+EXPOSE 8087
 
+# 8087 because hold-service holds 8086, postgres-archive-meta is the archive's metadata database,
+# and the hold guard lives on hold-service rather than case-service. docker-compose.yml overrides
+# all of these, which is exactly why they were wrong for so long — the only one it does not
+# override is the healthcheck below, so that probed a port nothing listened on and the container
+# was permanently unhealthy while the service itself was fine.
 ENV KAFKA_BOOTSTRAP=kafka:19092 \
     DB_URL=jdbc:postgresql://postgres-disposition:5432/disposition \
-    ARCHIVE_DB_URL=jdbc:postgresql://postgres-archive:5432/archive \
-    CASES_BASE_URL=http://cases-service:8084 \
-    SERVER_PORT=8086 \
+    ARCHIVE_DB_URL=jdbc:postgresql://postgres-archive-meta:5432/archive \
+    HOLDS_BASE_URL=http://hold-service:8086 \
+    SERVER_PORT=8087 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75"
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-  CMD ["sh", "-c", "curl -sf http://localhost:8086/actuator/health | grep -q '\"status\":\"UP\"'"]
+  CMD ["sh", "-c", "curl -sf http://localhost:8087/actuator/health | grep -q '\"status\":\"UP\"'"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

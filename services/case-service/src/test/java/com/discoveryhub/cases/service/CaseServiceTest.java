@@ -218,6 +218,29 @@ class CaseServiceTest {
         verify(evidence, never()).save(any());
     }
 
+    // ---------------------------------------------------------- P4's held-case evidence guard
+
+    @Test
+    void lookupEvidenceMapsRowsAcrossAnyCase() {
+        when(evidence.findByMessageIdIn(List.of("msg-1", "msg-2"))).thenReturn(List.of(
+                new EvidenceEntity("case-1", "msg-1", EvidenceSource.MANUAL, null, null, Instant.now()),
+                new EvidenceEntity("case-2", "msg-2", EvidenceSource.SEARCH, "search-1", null, Instant.now())));
+
+        List<com.discoveryhub.cases.api.EvidenceLookupItem> result =
+                service.lookupEvidence(List.of("msg-1", "msg-2"));
+
+        assertThat(result).containsExactlyInAnyOrder(
+                new com.discoveryhub.cases.api.EvidenceLookupItem("case-1", "msg-1"),
+                new com.discoveryhub.cases.api.EvidenceLookupItem("case-2", "msg-2"));
+    }
+
+    @Test
+    void lookupEvidenceWithNoMessageIdsSkipsTheQuery() {
+        assertThat(service.lookupEvidence(List.of())).isEmpty();
+        assertThat(service.lookupEvidence(null)).isEmpty();
+        verify(evidence, never()).findByMessageIdIn(any());
+    }
+
     @Test
     void addEvidenceBatchSkipsAlreadyPresentAndCounts() {
         CaseEntity entity = draft();
@@ -321,6 +344,28 @@ class CaseServiceTest {
                     assertThat(rse.getStatusCode().value()).isEqualTo(400);
                 });
         verify(cases, never()).findById(any());
+    }
+
+    @Test
+    void addCustodianRejectsACommaSeparatedIdInsteadOfSavingGarbage() {
+        // A comma here is someone's attempt at a bulk add landing on the single-custodian
+        // endpoint — reject it rather than silently save an id that will never match a real
+        // custodian and will make any hold scoped to it resolve to zero messages.
+        assertThatThrownBy(() -> service.addCustodian("case-1", new AddCustodianRequest("cust-001,cust-002")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .satisfies(ex -> {
+                    org.springframework.web.server.ResponseStatusException rse =
+                            (org.springframework.web.server.ResponseStatusException) ex;
+                    assertThat(rse.getStatusCode().value()).isEqualTo(400);
+                });
+        verify(custodians, never()).save(any());
+    }
+
+    @Test
+    void addCustodianRejectsWhitespaceInsideTheId() {
+        assertThatThrownBy(() -> service.addCustodian("case-1", new AddCustodianRequest("cust 001")))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        verify(custodians, never()).save(any());
     }
 
     @Test

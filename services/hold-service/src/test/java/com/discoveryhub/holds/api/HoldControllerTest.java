@@ -4,6 +4,7 @@ import com.discoveryhub.contracts.HoldCheckResponse;
 import com.discoveryhub.holds.domain.HoldEntity;
 import com.discoveryhub.holds.domain.HoldScope;
 import com.discoveryhub.holds.domain.HoldStatus;
+import com.discoveryhub.holds.service.HoldCaseGuardService;
 import com.discoveryhub.holds.service.HoldCheckService;
 import com.discoveryhub.holds.service.HoldService;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,12 +38,13 @@ class HoldControllerTest {
 
     @Mock HoldService holdService;
     @Mock HoldCheckService checkService;
+    @Mock HoldCaseGuardService caseGuard;
 
     private HoldController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new HoldController(holdService, checkService);
+        controller = new HoldController(holdService, checkService, caseGuard);
     }
 
     private HoldEntity hold(String id, HoldStatus status) {
@@ -205,6 +207,49 @@ class HoldControllerTest {
         HoldCheckResponse result = controller.check("msg-2");
 
         assertThat(result.held()).isFalse();
+    }
+
+    // ---------------------------------------------------------- covering (overlapping holds)
+
+    @Test
+    void coveringListsEveryActiveHoldOnTheMessage() {
+        when(holdService.activeHoldsCoveringMessage("msg-1")).thenReturn(
+                List.of(hold("hold-a", HoldStatus.ACTIVE), hold("hold-b", HoldStatus.ACTIVE)));
+
+        List<HoldEntity> result = controller.covering("msg-1");
+
+        assertThat(result).extracting(HoldEntity::getHoldId).containsExactly("hold-a", "hold-b");
+    }
+
+    @Test
+    void coveringIsEmptyForAnUnheldMessage() {
+        when(holdService.activeHoldsCoveringMessage("msg-2")).thenReturn(List.of());
+
+        assertThat(controller.covering("msg-2")).isEmpty();
+    }
+
+    // ---------------------------------------------------------- P2.2's case-level guards
+
+    @Test
+    void activeDelegatesToCaseGuardService() {
+        ActiveHoldResponse hold = new ActiveHoldResponse(
+                "hold-1", "case-1", "SEC Inquiry", List.of("cust-1"), null, null, List.of());
+        when(caseGuard.activeHolds()).thenReturn(List.of(hold));
+
+        List<ActiveHoldResponse> result = controller.active();
+
+        assertThat(result).containsExactly(hold);
+    }
+
+    @Test
+    void evidenceCheckDelegatesToCaseGuardService() {
+        EvidenceCheckResponse item = new EvidenceCheckResponse("msg-1", "hold-1", "case-1", "SEC Inquiry");
+        when(caseGuard.evidenceCheck(List.of("msg-1", "msg-2"))).thenReturn(List.of(item));
+
+        List<EvidenceCheckResponse> result = controller.evidenceCheck(
+                new EvidenceCheckRequest(List.of("msg-1", "msg-2")));
+
+        assertThat(result).containsExactly(item);
     }
 
     // ---------------------------------------------------------- held count per case

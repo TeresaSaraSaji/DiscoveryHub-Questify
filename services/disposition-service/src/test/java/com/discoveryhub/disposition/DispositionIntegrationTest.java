@@ -1,6 +1,9 @@
 package com.discoveryhub.disposition;
 
+import com.discoveryhub.contracts.DeleteCommand;
+import com.discoveryhub.contracts.DeleteReceipt;
 import com.discoveryhub.contracts.MessageType;
+import com.discoveryhub.contracts.Topics;
 import com.discoveryhub.disposition.domain.DispositionItemEntity;
 import com.discoveryhub.disposition.domain.DispositionOutcome;
 import com.discoveryhub.disposition.domain.DispositionRunEntity;
@@ -13,6 +16,12 @@ import com.discoveryhub.disposition.run.RetentionPolicyService;
 import com.discoveryhub.disposition.support.ArchiveSchema;
 import com.discoveryhub.disposition.support.Containers;
 import com.discoveryhub.disposition.support.HoldServiceStub;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,15 +31,22 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.postgresql.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The disposition sweep against real PostgreSQL — both databases, real Flyway migrations, real
@@ -55,16 +71,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       a table write and the next sweep's cutoff arithmetic.</li>
  * </ul>
  *
- * <p>Runs in {@code ARCHIVE_DB} delete mode so the assertions can be about rows rather than about
- * published commands; the Kafka path has its own round-trip test.
+ * <p>Runs in {@code KAFKA} delete mode — the only mode this service ships with, now that P2 splits
+ * message content into MongoDB and hold/retention bookkeeping into its own slim Postgres, so a
+ * direct {@code ARCHIVE_DB} write has no single table left to target. P2 is not running here, so
+ * this test plays P2 with a background consumer that deletes the row and answers on
+ * {@code disposition.results}, the same stand-in {@link DeleteLoopKafkaIntegrationTest} uses —
+ * which means every assertion about whether a row actually left the archive has to {@code await()}
+ * that round trip rather than read it back the instant {@code disposition.run} returns.
  */
 @SpringBootTest
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DispositionIntegrationTest {
-
-    private static final PostgreSQLContainer DISPOSITION_DB = Containers.DISPOSITION_DB;
-
-    private static final PostgreSQLContainer ARCHIVE_DB = Containers.ARCHIVE_DB;
 
     private static final HoldServiceStub P4 = new HoldServiceStub();
 
@@ -76,45 +93,63 @@ class DispositionIntegrationTest {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", DISPOSITION_DB::getJdbcUrl);
-        registry.add("spring.datasource.username", DISPOSITION_DB::getUsername);
-        registry.add("spring.datasource.password", DISPOSITION_DB::getPassword);
+        registry.add("spring.datasource.url", Containers.DISPOSITION_DB::getJdbcUrl);
+        registry.add("spring.datasource.username", Containers.DISPOSITION_DB::getUsername);
+        registry.add("spring.datasource.password", Containers.DISPOSITION_DB::getPassword);
 
-        registry.add("discoveryhub.disposition.archive.datasource.url", ARCHIVE_DB::getJdbcUrl);
-        registry.add("discoveryhub.disposition.archive.datasource.username", ARCHIVE_DB::getUsername);
-        registry.add("discoveryhub.disposition.archive.datasource.password", ARCHIVE_DB::getPassword);
+        registry.add("discoveryhub.disposition.archive.datasource.url", Containers.ARCHIVE_DB::getJdbcUrl);
+        registry.add("discoveryhub.disposition.archive.datasource.username", Containers.ARCHIVE_DB::getUsername);
+        registry.add("discoveryhub.disposition.archive.datasource.password", Containers.ARCHIVE_DB::getPassword);
 
-        // Assertions here are about rows in a database, so delete for real rather than publish.
-        registry.add("discoveryhub.disposition.delete-mode", () -> "ARCHIVE_DB");
+        registry.add("spring.kafka.bootstrap-servers", Containers.KAFKA::getBootstrapServers);
+        registry.add("discoveryhub.disposition.delete-mode", () -> "KAFKA");
         registry.add("discoveryhub.disposition.archive.hold-check-base-url", P4::baseUrl);
         // Every sweep in this class is triggered explicitly. A cron firing mid-test would delete
         // another test's fixtures and the failure would look like a logic bug.
         registry.add("discoveryhub.disposition.schedule.enabled", () -> "false");
         // Small enough that the bounding is observable with a handful of fixtures rather than 500.
         registry.add("discoveryhub.disposition.batch-size", () -> "5");
-        // No broker in this test. Audit sends are fire-and-forget and merely log, but the receipt
-        // listener would otherwise spend the run retrying a connection to localhost:9092 and
-        // filling the output with noise that looks like a failure. The Kafka path is covered by
-        // DeleteLoopKafkaIntegrationTest, against a real broker.
-        registry.add("spring.kafka.listener.auto-startup", () -> "false");
+        // A group of its own per run, so a rerun does not start from another run's committed
+        // offsets and quietly skip a command the background P2 stand-in is supposed to answer.
+        registry.add("spring.kafka.consumer.group-id", () -> "test-" + UUID.randomUUID());
     }
 
     @Autowired DispositionService disposition;
     @Autowired RetentionPolicyService retention;
     @Autowired DispositionRunRepository runs;
     @Autowired DispositionItemRepository items;
+    @Autowired KafkaTemplate<String, String> kafka;
+    @Autowired ObjectMapper json;
 
     @Autowired
     @Qualifier("archiveJdbcTemplate")
     JdbcTemplate archive;
 
+    private ExecutorService p2StandIn;
+    private KafkaConsumer<String, String> commandConsumer;
+    private volatile boolean running;
+
     @BeforeAll
-    void createArchiveSchema() {
+    void createArchiveSchemaAndStartP2StandIn() {
         ArchiveSchema.create(archive);
+
+        commandConsumer = new KafkaConsumer<>(consumerProps());
+        commandConsumer.subscribe(List.of(Topics.DISPOSITION_COMMANDS));
+        running = true;
+        p2StandIn = Executors.newSingleThreadExecutor();
+        p2StandIn.submit(this::runP2StandIn);
     }
 
     @AfterAll
-    static void stopStub() {
+    void tearDown() {
+        running = false;
+        commandConsumer.wakeup();
+        p2StandIn.shutdown();
+        try {
+            p2StandIn.awaitTermination(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
         P4.stop();
     }
 
@@ -128,6 +163,46 @@ class DispositionIntegrationTest {
         // that care about the boundary set their own.
         retention.updatePeriod(MessageType.EMAIL, Duration.ofDays(2555), "test");
         retention.updatePeriod(MessageType.CHAT, Duration.ofDays(1095), "test");
+    }
+
+    /**
+     * Stands in for P2 for the whole class: every candidate this service's own guards let through
+     * to a publish has already been decided not-held (see {@code DispositionService.decide}), so
+     * unlike {@link DeleteLoopKafkaIntegrationTest} this does not need to re-run the hold guard —
+     * it only has to prove the row actually leaves {@code message_hold_status} and that a receipt
+     * comes back, which is what "deletions actually happening" means for the KAFKA path.
+     */
+    private void runP2StandIn() {
+        try {
+            while (running) {
+                ConsumerRecords<String, String> records = commandConsumer.poll(Duration.ofMillis(500));
+                for (ConsumerRecord<String, String> record : records) {
+                    DeleteCommand command = json.readValue(record.value(), DeleteCommand.class);
+                    int deletedRows = archive.update(
+                            "DELETE FROM message_hold_status WHERE message_id = ?", command.messageId());
+                    DeleteReceipt.Outcome outcome = deletedRows > 0
+                            ? DeleteReceipt.Outcome.DELETED : DeleteReceipt.Outcome.NOT_FOUND;
+                    DeleteReceipt receipt = new DeleteReceipt(command.runId(), command.messageId(),
+                            command.externalId(), outcome, "past retention", Instant.now());
+                    kafka.send(Topics.DISPOSITION_RESULTS, receipt.messageId(),
+                            json.writeValueAsString(receipt)).join();
+                }
+            }
+        } catch (WakeupException ex) {
+            // Expected: tearDown's wakeup() breaks the poll loop.
+        } finally {
+            commandConsumer.close();
+        }
+    }
+
+    private static Properties consumerProps() {
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, Containers.KAFKA.getBootstrapServers());
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "test-p2-stand-in-" + UUID.randomUUID());
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        return props;
     }
 
     /**
@@ -154,14 +229,16 @@ class DispositionIntegrationTest {
         DispositionRunEntity run = disposition.run(TriggerSource.MANUAL, false, "test");
 
         assertThat(run.getStatus()).isEqualTo(DispositionStatus.COMPLETED);
+        // Counted the moment the command is published; the P2 stand-in's receipt settles the row.
         assertThat(run.getDeletedCount()).isEqualTo(1);
-        assertThat(ArchiveSchema.exists(archive, "msg-old")).isFalse();
-        // Not yet past retention, so not even a candidate.
+        // Not yet past retention, so not even a candidate — this one never left, no need to await.
         assertThat(ArchiveSchema.exists(archive, "msg-new")).isTrue();
 
-        List<DispositionItemEntity> ledger = items.findByMessageIdOrderByOccurredAtAsc("msg-old");
-        assertThat(ledger).singleElement()
-                .satisfies(item -> assertThat(item.getOutcome()).isEqualTo(DispositionOutcome.DELETED));
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(ArchiveSchema.exists(archive, "msg-old")).isFalse();
+            assertThat(items.findByMessageIdOrderByOccurredAtAsc("msg-old")).singleElement()
+                    .satisfies(item -> assertThat(item.getOutcome()).isEqualTo(DispositionOutcome.DELETED));
+        });
     }
 
     /**
@@ -178,7 +255,8 @@ class DispositionIntegrationTest {
         disposition.run(TriggerSource.MANUAL, false, "test");
 
         assertThat(ArchiveSchema.exists(archive, "msg-email")).isTrue();
-        assertThat(ArchiveSchema.exists(archive, "msg-chat")).isFalse();
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-chat")).isFalse());
     }
 
     /** FR-4.6: the demonstrable proof that deletion of a held message is blocked. */
@@ -278,7 +356,8 @@ class DispositionIntegrationTest {
         retention.updatePeriod(MessageType.EMAIL, Duration.ofMinutes(2), "investigator");
 
         assertThat(disposition.run(TriggerSource.MANUAL, false, "test").getDeletedCount()).isEqualTo(1);
-        assertThat(ArchiveSchema.exists(archive, "msg-recent")).isFalse();
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-recent")).isFalse());
     }
 
     /** A shortened period must survive a restart, or a demo silently reverts to seven years. */
@@ -298,6 +377,11 @@ class DispositionIntegrationTest {
         ArchiveSchema.insertMessage(archive, "msg-old", "EXCH-1", "cust-1", "EMAIL", LONG_AGO, false);
 
         assertThat(disposition.run(TriggerSource.MANUAL, false, "test").getDeletedCount()).isEqualTo(1);
+        // The row has to actually be gone before the second sweep runs, or the P2 stand-in simply
+        // has not caught up yet and this would test a race instead of idempotency.
+        await().atMost(Duration.ofSeconds(20))
+                .untilAsserted(() -> assertThat(ArchiveSchema.exists(archive, "msg-old")).isFalse());
+
         DispositionRunEntity second = disposition.run(TriggerSource.MANUAL, false, "test");
 
         assertThat(second.getCandidateCount()).isZero();
@@ -317,9 +401,11 @@ class DispositionIntegrationTest {
         DispositionRunEntity first = disposition.run(TriggerSource.MANUAL, false, "test");
 
         assertThat(first.getCandidateCount()).isEqualTo(5);
-        assertThat(ArchiveSchema.countMessages(archive)).isEqualTo(7);
         // The five oldest went, so the survivors are the five most recent of the twelve.
-        assertThat(ArchiveSchema.exists(archive, "msg-0")).isFalse();
         assertThat(ArchiveSchema.exists(archive, "msg-11")).isTrue();
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            assertThat(ArchiveSchema.countMessages(archive)).isEqualTo(7);
+            assertThat(ArchiveSchema.exists(archive, "msg-0")).isFalse();
+        });
     }
 }

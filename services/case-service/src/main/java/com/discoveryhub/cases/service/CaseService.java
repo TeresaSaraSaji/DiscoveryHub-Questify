@@ -5,6 +5,7 @@ import com.discoveryhub.cases.api.AddEvidenceBatchRequest;
 import com.discoveryhub.cases.api.AddEvidenceRequest;
 import com.discoveryhub.cases.api.BulkEvidenceResult;
 import com.discoveryhub.cases.api.CaseRequest;
+import com.discoveryhub.cases.api.EvidenceLookupItem;
 import com.discoveryhub.cases.domain.CaseCustodianEntity;
 import com.discoveryhub.cases.domain.CaseEntity;
 import com.discoveryhub.cases.domain.CaseStatus;
@@ -174,6 +175,16 @@ public class CaseService {
         if (request.custodianId() == null || request.custodianId().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "custodianId is required");
         }
+        // This endpoint takes exactly one custodian per call, unlike a hold's custodian list —
+        // a comma or space here is someone's attempt at a bulk add (a reasonable thing to try,
+        // since the hold-placement field does accept a delimited list) landing on the wrong
+        // endpoint. Rejecting it beats silently saving a custodian id that will never match a
+        // real custodian and will make every hold scoped to it resolve to zero messages.
+        if (request.custodianId().matches(".*[,\\s].*")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "custodianId must be a single id with no commas or whitespace: \""
+                            + request.custodianId() + "\"");
+        }
         CaseEntity entity = requireCase(caseId);
         requireMutable(entity);
         Optional<CaseCustodianEntity> existing = custodians.findByCaseIdAndCustodianId(caseId, request.custodianId());
@@ -201,6 +212,22 @@ public class CaseService {
     }
 
     // ------------------------------------------------------------------- evidence
+
+    /**
+     * Every evidence row for any of these messages, across every case (P4's held-case evidence
+     * guard, DISPOSITION.md). Deliberately not scoped to a single case and not filtered by hold
+     * status: this service does not know which cases are under an active hold, hold-service does
+     * — it calls this to get the raw membership, then filters with its own data.
+     */
+    @Transactional(readOnly = true)
+    public List<EvidenceLookupItem> lookupEvidence(List<String> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        return evidence.findByMessageIdIn(messageIds).stream()
+                .map(e -> new EvidenceLookupItem(e.getCaseId(), e.getMessageId()))
+                .toList();
+    }
 
     @Transactional
     public EvidenceEntity addEvidence(String caseId, AddEvidenceRequest request) {
