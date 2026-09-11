@@ -20,8 +20,19 @@ import org.springframework.transaction.annotation.Transactional;
  * flag here would destroy evidence (architecture decision 4).
  *
  * <p>A hold event is scoped by {@code messageId} (one row) or {@code custodianId} (every row in a
- * mailbox). {@code holdCount} supports overlapping holds (FR-4.5): placing a hold increments it,
- * releasing one decrements it, and {@code onHold} is true while the count is above zero.
+ * mailbox). {@code holdCount} tracks overlapping holds (FR-4.5) for the UI, but it is not what
+ * decides {@code onHold}, because P4 does not send deltas: a {@code held=false} event means "no
+ * hold protects this message any more", not "one fewer hold protects it". P4 owns the coverage
+ * table and is the only party that can tell the difference — it withholds the release event for
+ * as long as any other hold still covers the message — so this listener applies the event as
+ * state, not as an increment.
+ *
+ * <p>Treating it as state is also what makes the mirror self-healing. A decrementing counter
+ * drifts permanently on a duplicated or dropped event, and it drifts in both directions: too high
+ * and a released message is never disposed of, too low and a held one loses its flag. Applied as
+ * state, a redelivered {@code held=true} is a no-op on {@code onHold} and a redelivered
+ * {@code held=false} is a no-op too, and any drift is corrected by the next event for that
+ * message.
  *
  * <p>The event is parsed from a plain string because its shape is not yet frozen in
  * {@code contracts} — a malformed record is logged and skipped rather than wedging the consumer.
@@ -65,9 +76,16 @@ public class HoldsEventListener {
     }
 
     private void apply(MessageHoldStatus m, HoldEvent event) {
-        int next = m.getHoldCount() + (event.held() ? 1 : -1);
-        m.setHoldCount(Math.max(0, next));
-        m.setOnHold(m.getHoldCount() > 0);
+        if (event.held()) {
+            m.setHoldCount(m.getHoldCount() + 1);
+            m.setOnHold(true);
+        } else {
+            // P4 sends this only once nothing else covers the message, so it is a reset rather
+            // than a decrement. Erring the other way — leaving a residual count — would pin the
+            // row on_hold for good and quietly exempt it from retention forever.
+            m.setHoldCount(0);
+            m.setOnHold(false);
+        }
         messages.save(m);
         publisher.publishAudit(audit.holdUpdated(m.getMessageId(), m.isOnHold(), event.caseId()));
     }
