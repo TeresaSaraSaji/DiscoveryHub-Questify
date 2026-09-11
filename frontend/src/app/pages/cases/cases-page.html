@@ -65,6 +65,7 @@
           <th>Case</th>
           <th>Matter</th>
           <th>Owner</th>
+          <th>Created on</th>
           <th>Status</th>
         </tr>
       </thead>
@@ -81,6 +82,7 @@
             </td>
             <td class="dim">{{ item.matterType }}</td>
             <td class="dim">{{ item.owner }}</td>
+            <td class="dim">{{ item.createdAt | since: 'clock' }}</td>
             <td>
               <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
             </td>

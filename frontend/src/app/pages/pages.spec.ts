@@ -635,6 +635,50 @@ describe('a page whose services answer', () => {
     expect(holdsPanel!.querySelector('.failure')).toBeNull();
   });
 
+  /**
+   * FR-2.1: a matter has an opening date, and the list is where someone looks for it. Wall clock
+   * only — the relative form ("3d ago") already sits in the detail panel below, and a column that
+   * re-renders differently every minute is no use for reconciling a list against a log.
+   */
+  it('dates every case in the list, to the second and without a relative suffix', async () => {
+    const fixture = mount(CasesPage);
+    const http = TestBed.inject(HttpTestingController);
+
+    http.expectOne((request) => request.url === 'http://localhost:8084/cases').flush({
+      content: [
+        {
+          caseId: '9c1fb101-1b94-4321-813f-329f8b71c03f',
+          name: 'Q3 Broker Investigation',
+          description: 'Insider trading probe',
+          matterType: 'INVESTIGATION',
+          owner: 'teresa',
+          status: 'CLOSED',
+          createdAt: '2026-09-08T22:09:12Z',
+          updatedAt: null,
+          closedAt: null,
+        },
+      ],
+      number: 0,
+      size: 20,
+      totalElements: 1,
+      totalPages: 1,
+      first: true,
+      last: true,
+    });
+    await failEverything(fixture);
+
+    const host = fixture.nativeElement as HTMLElement;
+    const headers = [...host.querySelectorAll('th')].map((th) => th.textContent?.trim());
+    expect(headers).toContain('Created on');
+
+    const created = [...host.querySelectorAll('tbody tr')][0].children[
+      headers.indexOf('Created on')
+    ];
+    // Date and time in one cell, as one field.
+    expect(created.textContent).toMatch(/\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}.*\d{1,2}:\d{2}:\d{2}/);
+    expect(created.textContent).not.toContain('ago');
+  });
+
   it('counts the corpus on the dashboard', async () => {
     const fixture = mount(Dashboard);
     const http = TestBed.inject(HttpTestingController);
