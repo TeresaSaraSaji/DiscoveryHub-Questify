@@ -35,7 +35,7 @@ public class ObjectStorageClient {
 
     /** Stage the built package. Not yet visible under its final key in the packages bucket. */
     public void stage(String key, byte[] bytes) {
-        put(props.stagingBucket(), key, bytes);
+        put(props.stagingBucket(), props.stagingKey(key), bytes);
     }
 
     /**
@@ -47,11 +47,12 @@ public class ObjectStorageClient {
         try {
             client.copyObject(CopyObjectArgs.builder()
                     .bucket(props.packagesBucket())
-                    .object(key)
-                    .source(CopySource.builder().bucket(props.stagingBucket()).object(key).build())
+                    .object(props.packagesKey(key))
+                    .source(CopySource.builder()
+                            .bucket(props.stagingBucket()).object(props.stagingKey(key)).build())
                     .build());
             client.removeObject(RemoveObjectArgs.builder()
-                    .bucket(props.stagingBucket()).object(key).build());
+                    .bucket(props.stagingBucket()).object(props.stagingKey(key)).build());
         } catch (Exception e) {
             throw new IllegalStateException("failed to promote export package " + key + " to packages bucket", e);
         }
@@ -60,7 +61,8 @@ public class ObjectStorageClient {
     /** Best-effort cleanup of a staged object that never got promoted (a build that failed). */
     public void discardStaged(String key) {
         try {
-            client.removeObject(RemoveObjectArgs.builder().bucket(props.stagingBucket()).object(key).build());
+            client.removeObject(RemoveObjectArgs.builder()
+                    .bucket(props.stagingBucket()).object(props.stagingKey(key)).build());
         } catch (Exception ignored) {
             // Nothing downstream depends on staging being tidy; the object is unreachable either way.
         }
@@ -76,7 +78,8 @@ public class ObjectStorageClient {
      */
     public void discardPackage(String key) {
         try {
-            client.removeObject(RemoveObjectArgs.builder().bucket(props.packagesBucket()).object(key).build());
+            client.removeObject(RemoveObjectArgs.builder()
+                    .bucket(props.packagesBucket()).object(props.packagesKey(key)).build());
         } catch (Exception ignored) {
             // Best-effort, same as discardStaged: nothing downstream depends on this succeeding,
             // and an object that was never promoted has nothing to remove anyway.
@@ -85,7 +88,7 @@ public class ObjectStorageClient {
 
     public byte[] fetchPackage(String key) {
         try (InputStream in = client.getObject(GetObjectArgs.builder()
-                .bucket(props.packagesBucket()).object(key).build())) {
+                .bucket(props.packagesBucket()).object(props.packagesKey(key)).build())) {
             return in.readAllBytes();
         } catch (Exception e) {
             throw new IllegalStateException("failed to fetch export package " + key, e);
@@ -98,7 +101,7 @@ public class ObjectStorageClient {
             return client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(props.packagesBucket())
-                    .object(key)
+                    .object(props.packagesKey(key))
                     .expiry((int) props.downloadLinkTtl().toSeconds())
                     .build());
         } catch (Exception e) {

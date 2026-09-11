@@ -38,11 +38,21 @@ discoveryhub:
       base-url: ${ARCHIVE_BASE_URL:http://localhost:8082}
       timeout: 10s
     storage:
-      endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-      access-key: ${MINIO_ACCESS_KEY:minioadmin}
-      secret-key: ${MINIO_SECRET_KEY:minioadmin}
-      staging-bucket: export-staging
-      packages-bucket: export-packages
+      # S3_* are the current names; the MINIO_* fallbacks are what compose and the Dockerfile have
+      # always set, kept so an existing environment keeps working untouched.
+      endpoint: ${S3_ENDPOINT:${MINIO_ENDPOINT:http://localhost:9000}}
+      access-key: ${S3_ACCESS_KEY:${MINIO_ACCESS_KEY:minioadmin}}
+      secret-key: ${S3_SECRET_KEY:${MINIO_SECRET_KEY:minioadmin}}
+      # Required by AWS, ignored by MinIO — hence blank by default. See MinioConfig.
+      region: ${S3_REGION:}
+      # Against real S3 the usual shape is one bucket: set both of these to it and let the two
+      # prefixes below separate staging from packages. They must not resolve to the same
+      # bucket+prefix, and ObjectStorageProperties refuses to start if they do.
+      staging-bucket: ${S3_STAGING_BUCKET:export-staging}
+      packages-bucket: ${S3_PACKAGES_BUCKET:export-packages}
+      # Empty for the two-bucket local layout, which is why the local keys are unchanged.
+      staging-prefix: ${S3_STAGING_PREFIX:}
+      packages-prefix: ${S3_PACKAGES_PREFIX:}
       # How long a download link is valid for once issued (FR-6.4: expiring link).
       download-link-ttl: 15m
 
