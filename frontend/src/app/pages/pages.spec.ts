@@ -6,6 +6,7 @@ import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
+import { CaseDetail } from './cases/case-detail';
 import { CasesPage } from './cases/cases-page';
 import { Dashboard } from './dashboard/dashboard';
 import { ExportAudit } from './export-audit/export-audit';
@@ -47,7 +48,11 @@ async function settleAsync(fixture: ComponentFixture<unknown>): Promise<void> {
 async function failEverything(fixture: ComponentFixture<unknown>): Promise<void> {
   const http = TestBed.inject(HttpTestingController);
   for (const request of http.match(() => true)) {
-    request.error(new ProgressEvent('error'), { status: 0 });
+    // A resource whose key changed aborts the request it had in flight, and the testing backend
+    // throws rather than ignore an attempt to fail one of those.
+    if (!request.cancelled) {
+      request.error(new ProgressEvent('error'), { status: 0 });
+    }
   }
   await settleAsync(fixture);
 }
@@ -87,6 +92,21 @@ describe('every page survives every service being down', () => {
     const rendered = text(fixture);
     expect(rendered).toContain('Cases & Legal Hold');
     expect(rendered).toContain('Open a case');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders a case detail page', async () => {
+    // Its own entry because it is its own route. It is also the page with the most lists on it,
+    // and every one of them reads a resource that is in its error state here.
+    const fixture = mount(CaseDetail);
+    // Every resource is keyed on the id and issues nothing while it is blank, so the input has to
+    // be set and settled before there is anything to fail.
+    fixture.componentRef.setInput('caseId', 'c0ffee00-0000-4000-8000-000000000000');
+    await settleAsync(fixture);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('All cases');
     expect(rendered).toContain('is not reachable');
   });
 

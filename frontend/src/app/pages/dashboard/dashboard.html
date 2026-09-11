@@ -251,7 +251,7 @@
         @for (item of caseRows().content; track item.caseId) {
           <tr>
             <td>
-              <a class="link" routerLink="/cases" [queryParams]="{ caseId: item.caseId }">
+              <a class="link" [routerLink]="['/cases', item.caseId]">
                 {{ item.name }}
               </a>
               <div class="dim">{{ item.createdAt | since: 'relative' }}</div>
@@ -292,7 +292,7 @@
           <tr>
             <td class="mono">{{ hold.holdId.slice(0, 8) }}…</td>
             <td class="mono">
-              <a class="link" routerLink="/cases" [queryParams]="{ caseId: hold.caseId }">
+              <a class="link" [routerLink]="['/cases', hold.caseId]">
                 {{ hold.caseId.slice(0, 8) }}…
               </a>
             </td>
