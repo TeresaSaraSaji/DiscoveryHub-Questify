@@ -158,8 +158,7 @@ export class CasesPage {
   protected readonly custodianFailure = signal<Failure | null>(null);
   protected readonly custodianOk = signal<string | null>(null);
 
-  protected readonly evidenceId = signal('');
-  protected readonly addingEvidence = signal(false);
+  // Still needed by Remove, which is the only write this panel makes now.
   protected readonly evidenceFailure = signal<Failure | null>(null);
   protected readonly evidenceOk = signal<string | null>(null);
 
@@ -259,32 +258,6 @@ export class CasesPage {
           // Any custodian before the failing one in the list is already saved server-side;
           // reload so the form does not look like nothing happened.
           this.custodians.reload();
-        },
-      });
-  }
-
-  protected addEvidence(): void {
-    const messageId = this.evidenceId().trim();
-    if (!messageId || !this.selected()) {
-      return;
-    }
-    this.evidenceFailure.set(null);
-    this.evidenceOk.set(null);
-    this.addingEvidence.set(true);
-
-    this.api
-      .addEvidence(this.selected(), messageId, 'MANUAL')
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: () => {
-          this.addingEvidence.set(false);
-          this.evidenceOk.set(`${messageId} filed as evidence.`);
-          this.evidenceId.set('');
-          this.evidence.reload();
-        },
-        error: (error: unknown) => {
-          this.addingEvidence.set(false);
-          this.evidenceFailure.set(classify(error, describe('p4case')));
         },
       });
   }

@@ -203,7 +203,7 @@
     >
       @if (evidenceRows().length === 0 && !evidence.isLoading()) {
         <p class="empty">
-          No evidence yet. Search for messages and file them from the Search page, or add one by id.
+          No evidence yet. Search for messages and file them from the Search page.
         </p>
       }
       <table class="table table--tight">
@@ -249,26 +249,6 @@
         </div>
       }
 
-      <div class="controls controls--tight">
-        <input
-          class="input--wide mono"
-          type="text"
-          [ngModel]="evidenceId()"
-          (ngModelChange)="evidenceId.set($event)"
-          name="evidenceId"
-          placeholder="messageId"
-          autocomplete="off"
-          [disabled]="readOnly()"
-        />
-        <button
-          type="button"
-          class="btn btn--small"
-          (click)="addEvidence()"
-          [disabled]="readOnly() || addingEvidence() || !evidenceId().trim()"
-        >
-          File
-        </button>
-      </div>
       <app-alert [failure]="evidenceFailure()" [success]="evidenceOk()" />
       <p class="note">
         Filing a message protects it from disposition even where a hold's own custodian and date
