@@ -80,12 +80,15 @@ discoveryhub:
     per-type:
       EMAIL: P2555D
       CHAT: P1095D
-    # How long a message P1 tagged with RetentionLabels.DEMO_RETENTION (the "DEMO" option on
-    # POST /messages/upload) stays before {@code retentionOverrideAt} makes it eligible — stamped
-    # by MessageMapper at upload time. P2.2's own eligibility query does not read this column yet,
-    # so the override currently only documents intent rather than shortening a real sweep; kept
-    # here so that gap is visible rather than silently dropped.
-    demo-period: ${RETENTION_DEMO_PERIOD:PT2M}
+    # How long a message P1 tagged with RetentionLabels.DEMO_RETENTION (the "Demo" retention option
+    # on POST /messages/upload) stays before retentionOverrideAt makes it eligible — stamped by
+    # MessageMapper at upload time and read by P2.2's eligibility query, so a batch uploaded this
+    # way is disposed of by the next sweep after this period while the corpus keeps its years.
+    #
+    # One minute, so the wait is short enough to hold an audience: upload, let the next sweep run,
+    # and the deletion is on screen. Do not raise it far without checking the demo script, and do
+    # not pick this option for a real upload — it is an instruction to destroy that data shortly.
+    demo-period: ${RETENTION_DEMO_PERIOD:PT1M}
 
 server:
   port: ${SERVER_PORT:8082}
