@@ -131,9 +131,7 @@
     [source]="evidence"
   >
     @if (evidenceRows().length === 0 && !evidence.isLoading()) {
-      <p class="empty">
-        No evidence yet. Search for messages and file them from the Search page, or add one by id.
-      </p>
+      <p class="empty">No evidence yet. Search for messages and file them from the Search page.</p>
     }
     <table class="table table--tight">
       <thead>
@@ -178,26 +176,6 @@
       </div>
     }
 
-    <div class="controls controls--tight">
-      <input
-        class="input--wide mono"
-        type="text"
-        [ngModel]="evidenceId()"
-        (ngModelChange)="evidenceId.set($event)"
-        name="evidenceId"
-        placeholder="messageId"
-        autocomplete="off"
-        [disabled]="readOnly()"
-      />
-      <button
-        type="button"
-        class="btn btn--small"
-        (click)="addEvidence()"
-        [disabled]="readOnly() || addingEvidence() || !evidenceId().trim()"
-      >
-        File
-      </button>
-    </div>
     <app-alert [failure]="evidenceFailure()" [success]="evidenceOk()" />
     @if (readOnly()) {
       <p class="note">This case is closed, so nothing further can be filed as evidence on it.</p>

@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
-import { Component, inject, signal } from '@angular/core';
+import { Component, DestroyRef, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { CaseBroadcast } from '../../core/case-broadcast';
 import { CasesApi } from '../../core/cases.api';
 import { CASE_STATUSES, CaseEntity, CaseStatus, EMPTY_PAGE, Page } from '../../core/models';
 import { valueOr } from '../../core/resource-utils';
@@ -31,6 +32,8 @@ import { Since } from '../../shared/since.pipe';
 export class CasesPage {
   private readonly api = inject(CasesApi);
   private readonly router = inject(Router);
+  private readonly broadcast = inject(CaseBroadcast);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly statuses = CASE_STATUSES;
 
@@ -42,6 +45,16 @@ export class CasesPage {
 
   protected readonly caseStats = this.api.caseStatsResource();
   protected readonly holdStats = this.api.holdStatsResource();
+
+  constructor() {
+    // `/cases/new` opens the case it creates in a second tab, which leaves this list a row
+    // behind with no way to know it. Only the list and the counts — nothing else on this page
+    // changes when a different matter is opened.
+    this.broadcast.listen(this.destroyRef, () => {
+      this.cases.reload();
+      this.caseStats.reload();
+    });
+  }
 
   protected open(caseId: string): void {
     void this.router.navigate(['/cases', caseId]);
