@@ -19,7 +19,7 @@
   <!-- FR-5.1 -->
   <app-panel
     heading="Retention policy"
-    hint="Set how long each communication type is kept. Takes effect on the next sweep, with no backfill."
+    hint="Set how long each communication type is kept. Number and unit: Y years, M months, w weeks, d days, h hours, m minutes, s seconds — lower-case m is minutes, capital M is months. Takes effect on the next sweep, with no backfill."
     service="p22"
     [source]="policies"
   >
@@ -53,7 +53,7 @@
                 [ngModel]="draftFor(policy)"
                 (ngModelChange)="onDraft(policy.messageType, $event)"
                 [name]="'period-' + policy.messageType"
-                placeholder="P2555D"
+                placeholder="7Y"
                 autocomplete="off"
               />
             </td>
