@@ -115,6 +115,13 @@
       </button>
     </div>
     <app-alert [failure]="custodianFailure()" [success]="custodianOk()" />
+
+    @if (readOnly()) {
+      <p class="note">
+        This case is closed, so no custodian can be added to it. Reopening is not a transition
+        case-service offers — open a new matter instead.
+      </p>
+    }
   </app-panel>
 
   <app-panel
@@ -181,10 +188,14 @@
       </button>
     </div>
     <app-alert [failure]="evidenceFailure()" [success]="evidenceOk()" />
-    <p class="note">
-      Filing a message protects it from disposition even where a hold's own custodian and date
-      scope would not cover it.
-    </p>
+    @if (readOnly()) {
+      <p class="note">This case is closed, so nothing further can be filed as evidence on it.</p>
+    } @else {
+      <p class="note">
+        Filing a message protects it from disposition even where a hold's own custodian and date
+        scope would not cover it.
+      </p>
+    }
   </app-panel>
 </div>
 
