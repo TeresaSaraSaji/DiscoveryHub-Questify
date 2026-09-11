@@ -35,6 +35,22 @@ check "elasticsearch  localhost:9200    P3 index" \
 check "minio          localhost:9000    P2/P5 blobs" \
   curl -sf http://localhost:9000/minio/health/live
 
+# The checks above run `docker exec`, so they prove the datastore is alive inside its container and
+# nothing more. The services run as jars on the host and reach these over published ports, and the
+# two can disagree: a bind that loses a port race leaves the container healthy, `docker port`
+# empty, and every check above green while storage-service dies on "Connection to localhost:5433
+# refused". Test the path the services actually take.
+echo
+echo "host ports"
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+for entry in "6379 redis" "5433 postgres P2 archive meta" "5434 postgres P4 cases" \
+             "5435 postgres P5 audit" "5436 postgres P4 holds" "5437 postgres P1 ingestion" \
+             "5438 postgres P2.2 disposition" "27017 mongodb P2 archive" \
+             "9092 kafka" "9200 elasticsearch" "9000 minio"; do
+  set -- $entry
+  check "$(printf '%-6s %s' "$1" "${*:2}")" port_open "$1"
+done
+
 echo
 echo "topics"
 docker exec discoveryhub-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
