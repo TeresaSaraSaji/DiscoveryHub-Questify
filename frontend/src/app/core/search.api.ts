@@ -113,6 +113,18 @@ export class SearchApi {
       request,
     });
   }
+
+  /**
+   * File exactly these hand-picked ids as evidence. No search is re-run server-side — the ids the
+   * reviewer ticked are the decision, verbatim — and the same write-then-answer guarantee holds:
+   * `added` is what case-service created, and a down case-service is a 502, not a claim.
+   */
+  addSelectedToCase(caseId: string, messageIds: string[]): Observable<BulkAddToCaseResponse> {
+    return this.http.post<BulkAddToCaseResponse>(this.url('/search/add-selected-to-case'), {
+      caseId,
+      messageIds,
+    });
+  }
 }
 
 /** True when a request carries at least one criterion — the same rule P3 enforces with a 400. */

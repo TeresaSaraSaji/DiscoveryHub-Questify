@@ -5,6 +5,7 @@ import com.discoveryhub.search.client.CaseEvidenceWriter;
 import com.discoveryhub.search.config.SearchProperties;
 import com.discoveryhub.search.exception.SearchException;
 import com.discoveryhub.search.kafka.SearchKafkaPublisher;
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
@@ -453,6 +454,52 @@ class SearchServiceTest {
         service.search(request);
 
         verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
+    @Test
+    void addSelectedFilesExactlyTheGivenIdsWithoutRunningASearch() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest(
+                "case-1", List.of("msg-2", "msg-7"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 2, 0));
+
+        BulkAddToCaseResponse response = service.addSelectedToCase(request);
+
+        // The ids are the decision, verbatim — no query is assembled, no index is consulted.
+        verify(repository, never()).search(any(Query.class), any(SearchRequest.class));
+        verify(repository, never()).searchMessageIds(any(Query.class), anyInt());
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-2", "msg-7")), eq("selected"));
+        assertThat(response.matched()).isEqualTo(2);
+        assertThat(response.added()).isEqualTo(2);
+        assertThat(response.messageIds()).containsExactly("msg-2", "msg-7");
+        verify(publisher).publishAddToCase("case-1", List.of("msg-2", "msg-7"), 2, 0);
+    }
+
+    @Test
+    void addSelectedDeduplicatesTheIdsBeforeFiling() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest(
+                "case-1", List.of("msg-1", "msg-1", "msg-2"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 2, 0));
+
+        service.addSelectedToCase(request);
+
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-1", "msg-2")), anyString());
+    }
+
+    @Test
+    void addSelectedFailsLoudlyAndAuditsWhenTheCaseServiceIsDown() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest("case-1", List.of("msg-1"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenThrow(new CaseEvidenceWriter.CaseEvidenceException(
+                        "case-1", BulkEvidenceResult.empty(), new IllegalStateException("connection refused")));
+
+        assertThatThrownBy(() -> service.addSelectedToCase(request))
+                .isInstanceOf(SearchException.class)
+                .satisfies(ex -> assertThat(((SearchException) ex).status()).isEqualTo(502));
+
+        verify(publisher).publishAddToCaseFailed(eq("case-1"), eq(1), eq(0), anyString());
+        verify(publisher, never()).publishAddToCase(anyString(), anyList(), anyInt(), anyInt());
     }
 
     @Test

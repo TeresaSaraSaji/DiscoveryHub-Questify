@@ -273,7 +273,7 @@
           </tr>
         </thead>
         <tbody>
-          @for (item of evidenceRows(); track item.id) {
+          @for (item of visibleEvidence(); track item.id) {
             <tr>
               <td class="mono">{{ item.messageId }}</td>
               <td>
@@ -294,6 +294,17 @@
           }
         </tbody>
       </table>
+
+      @if (evidenceRemaining() > 0) {
+        <div class="paginator">
+          <span class="paginator__label">
+            Showing {{ visibleEvidence().length }} of {{ evidenceRows().length }}
+          </span>
+          <button type="button" class="btn btn--ghost btn--small" (click)="showMoreEvidence()">
+            Show more
+          </button>
+        </div>
+      }
 
       <div class="controls controls--tight">
         <input

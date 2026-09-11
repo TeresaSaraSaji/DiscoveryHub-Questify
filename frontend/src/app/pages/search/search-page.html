@@ -227,6 +227,7 @@
                indexed fields it maps. The type filter still works; the answer just cannot be
                echoed back per row. -->
           <tr>
+            <th aria-label="Select"></th>
             <th>Subject</th>
             <th>From</th>
             <th>Custodian</th>
@@ -237,6 +238,14 @@
         <tbody>
           @for (result of rows; track result.messageId) {
             <tr>
+              <td>
+                <input
+                  type="checkbox"
+                  [checked]="isSelected(result.messageId)"
+                  (change)="toggleSelected(result.messageId)"
+                  [attr.aria-label]="'Select ' + (result.subject || result.messageId)"
+                />
+              </td>
               <td class="cell--subject">
                 <strong>{{ result.subject || '(no subject)' }}</strong>
                 @if (result.snippet) {
@@ -273,23 +282,17 @@
       </table>
 
       <div class="paginator">
-        <button
-          type="button"
-          class="btn btn--ghost btn--small"
-          [disabled]="shownPage() === 0 || searching()"
-          (click)="goToPage(shownPage() - 1)"
-        >
-          Previous
-        </button>
-        <span class="paginator__label">{{ from() }}–{{ to() }} of {{ total() }}</span>
-        <button
-          type="button"
-          class="btn btn--ghost btn--small"
-          [disabled]="shownPage() >= lastPage() || searching()"
-          (click)="goToPage(shownPage() + 1)"
-        >
-          Next
-        </button>
+        <span class="paginator__label">Showing {{ rows.length }} of {{ total() }}</span>
+        @if (hasMore()) {
+          <button
+            type="button"
+            class="btn btn--ghost btn--small"
+            [disabled]="searching()"
+            (click)="showMore()"
+          >
+            {{ searching() ? 'Loading…' : 'Show more' }}
+          </button>
+        }
       </div>
     }
   </app-panel>
@@ -328,6 +331,15 @@
           [disabled]="!fileCaseId() || filing()"
         >
           {{ filing() ? 'Filing…' : 'Add as evidence' }}
+        </button>
+
+        <button
+          type="button"
+          class="btn"
+          (click)="fileSelected()"
+          [disabled]="!fileCaseId() || filing() || selected().size === 0"
+        >
+          Add selected ({{ selected().size }})
         </button>
       </div>
 
