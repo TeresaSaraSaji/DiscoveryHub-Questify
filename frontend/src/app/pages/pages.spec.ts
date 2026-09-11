@@ -106,7 +106,7 @@ describe('every page survives every service being down', () => {
 
     const rendered = text(fixture);
     expect(rendered).toContain('Retention & Disposition');
-    expect(rendered).toContain('Run a sweep');
+    expect(rendered).toContain('Disposition run');
     expect(rendered).toContain('is not reachable');
   });
 });
