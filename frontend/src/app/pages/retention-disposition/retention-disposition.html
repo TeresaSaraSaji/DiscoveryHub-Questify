@@ -19,7 +19,7 @@
   <!-- FR-5.1 -->
   <app-panel
     heading="Retention policy"
-    hint="Set how long each communication type is kept. Takes effect on the next sweep, with no backfill."
+    hint="Set how long each communication type is kept. Number and unit: Y years, M months, w weeks, d days, h hours, m minutes, s seconds — lower-case m is minutes, capital M is months. Takes effect on the next sweep, with no backfill."
     service="p22"
     [source]="policies"
   >
@@ -53,7 +53,7 @@
                 [ngModel]="draftFor(policy)"
                 (ngModelChange)="onDraft(policy.messageType, $event)"
                 [name]="'period-' + policy.messageType"
-                placeholder="P2555D"
+                placeholder="7Y"
                 autocomplete="off"
               />
             </td>
@@ -79,9 +79,11 @@
       </tbody>
     </table>
     <p class="note">
-      ISO-8601, or shorthand: <code>P2555D</code> (seven years), <code>PT2M</code>,
-      <code>90d</code>. A non-positive period is refused with a 400 — it would make the whole corpus
-      eligible at once.
+      A number and a unit: <code>7Y</code> (seven years), <code>3M</code>, <code>2w</code>,
+      <code>90d</code>, <code>12h</code>, <code>30m</code>, <code>45s</code>. Lower-case
+      <code>m</code> is minutes and capital <code>M</code> is months. ISO-8601 such as
+      <code>P2555D</code> is still accepted. A non-positive period is refused with a 400 — it would
+      make the whole corpus eligible at once.
     </p>
   </app-panel>
 
@@ -150,7 +152,7 @@
 </div>
 
 <!-- FR-5.2 + FR-8.1 -->
-<app-panel heading="Run a sweep" hint="Trigger a disposition run and watch it live." service="p22">
+<app-panel heading="Disposition run" hint="Trigger a disposition run and watch it live." service="p22">
   @if (holdCheckWarning(); as warning) {
     <div class="alert alert--warn" role="alert">{{ warning }}</div>
   }
@@ -166,7 +168,7 @@
       <span> <strong>Dry run</strong> — decide everything, delete nothing </span>
     </label>
     <button type="button" class="btn btn--primary" (click)="trigger()" [disabled]="triggering()">
-      {{ triggering() ? 'Queuing…' : dryRun() ? 'Preview a sweep' : 'Run the sweep' }}
+      {{ triggering() ? 'Queuing…' : dryRun() ? 'Preview a sweep' : 'Disposition' }}
     </button>
     <button
       type="button"

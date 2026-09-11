@@ -34,6 +34,12 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/cases/cases-page').then((m) => m.CasesPage),
   },
   {
+    // Before nothing, but after 'cases': one case on its own page, and a URL worth sending.
+    path: 'cases/:caseId',
+    title: 'Case · DiscoveryHub',
+    loadComponent: () => import('./pages/cases/case-detail').then((m) => m.CaseDetail),
+  },
+  {
     path: 'retention',
     title: 'Retention & Disposition · DiscoveryHub',
     loadComponent: () =>
