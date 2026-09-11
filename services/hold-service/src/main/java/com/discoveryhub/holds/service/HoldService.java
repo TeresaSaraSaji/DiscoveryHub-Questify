@@ -109,7 +109,14 @@ public class HoldService {
         });
     }
 
-    /** Manually release a hold. Synchronous: coverage is local, so this is a status flip + events. */
+    /**
+     * Manually release a hold. Synchronous: coverage is local, so this is a status flip + events.
+     *
+     * <p>Overlapping holds (FR-4.5): the {@code held=false} events go out only for the messages
+     * that no other ACTIVE hold covers. A message held by both "Rahul's mailbox" and "the Phoenix
+     * investigation" stays protected when the first of the two is released, and is announced as
+     * unprotected only by whichever release is the last one standing. See {@link HoldReleasePlan}.
+     */
     @Transactional
     public HoldEntity releaseHold(String holdId, String reason) {
         HoldEntity hold = requireHold(holdId);
@@ -124,18 +131,24 @@ public class HoldService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "hold failed to place and was never active, cannot release: " + holdId);
         }
-        List<String> messageIds = coverage.findMessageIdsByHoldId(holdId);
+        HoldReleasePlan plan = HoldReleasePlan.forRelease(coverage, holdId);
         hold.setStatus(HoldStatus.RELEASED);
         hold.setReleasedAt(Instant.now());
         hold.setReleasedReason(reason != null ? reason : "manual release");
         holds.save(hold);
 
         String correlationId = UUID.randomUUID().toString();
-        for (String messageId : messageIds) {
+        for (String messageId : plan.unprotected()) {
             eventPublisher.publishHoldEvent(eventFactory.released(messageId, hold.getCaseId(), correlationId));
         }
-        eventPublisher.publishAudit(audit.holdReleased(holdId, hold.getCaseId(), hold.getReleasedReason()));
-        log.info("released hold {} ({} messages)", holdId, messageIds.size());
+        eventPublisher.publishAudit(audit.holdReleased(holdId, hold.getCaseId(), hold.getReleasedReason(),
+                plan.unprotected().size(), plan.stillHeld().size()));
+        if (plan.hasOverlap()) {
+            log.info("released hold {} ({} of {} messages unprotected; {} still covered by another active hold)",
+                    holdId, plan.unprotected().size(), plan.covered().size(), plan.stillHeld().size());
+        } else {
+            log.info("released hold {} ({} messages)", holdId, plan.unprotected().size());
+        }
         return hold;
     }
 
