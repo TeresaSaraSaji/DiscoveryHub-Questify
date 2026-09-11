@@ -21,6 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -165,6 +166,27 @@ public class HoldService {
     @Transactional(readOnly = true)
     public List<HoldEntity> listHoldsByStatus(HoldStatus status) {
         return holds.findByStatus(status);
+    }
+
+    /**
+     * Every ACTIVE hold covering a message, newest first (FR-4.5) — the answer to "I released the
+     * hold on message 123, why is it still held?". {@code GET /holds/check} answers that it is,
+     * but a boolean cannot name the hold that is doing it, and with overlapping holds the hold the
+     * investigator just released is precisely the one they will not find by looking.
+     *
+     * <p>Empty when nothing covers the message, which is not distinguishable from "no such
+     * message" — this service does not own the message corpus and will not pretend to know
+     * whether an id exists.
+     */
+    @Transactional(readOnly = true)
+    public List<HoldEntity> activeHoldsCoveringMessage(String messageId) {
+        List<String> holdIds = coverage.findActiveHoldIdsByMessageId(messageId);
+        if (holdIds.isEmpty()) {
+            return List.of();
+        }
+        return holds.findAllById(holdIds).stream()
+                .sorted(Comparator.comparing(HoldEntity::getPlacedAt).reversed())
+                .toList();
     }
 
     /**
