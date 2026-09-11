@@ -5,10 +5,12 @@ import com.discoveryhub.search.client.CaseEvidenceWriter;
 import com.discoveryhub.search.config.SearchProperties;
 import com.discoveryhub.search.exception.SearchException;
 import com.discoveryhub.search.kafka.SearchKafkaPublisher;
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.model.SearchResult;
@@ -452,6 +454,155 @@ class SearchServiceTest {
         service.search(request);
 
         verify(repository).search(any(Query.class), any(SearchRequest.class));
+    }
+
+    @Test
+    void addSelectedFilesExactlyTheGivenIdsWithoutRunningASearch() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest(
+                "case-1", List.of("msg-2", "msg-7"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 2, 0));
+
+        BulkAddToCaseResponse response = service.addSelectedToCase(request);
+
+        // The ids are the decision, verbatim — no query is assembled, no index is consulted.
+        verify(repository, never()).search(any(Query.class), any(SearchRequest.class));
+        verify(repository, never()).searchMessageIds(any(Query.class), anyInt());
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-2", "msg-7")), eq("selected"));
+        assertThat(response.matched()).isEqualTo(2);
+        assertThat(response.added()).isEqualTo(2);
+        assertThat(response.messageIds()).containsExactly("msg-2", "msg-7");
+        verify(publisher).publishAddToCase("case-1", List.of("msg-2", "msg-7"), 2, 0);
+    }
+
+    @Test
+    void addSelectedDeduplicatesTheIdsBeforeFiling() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest(
+                "case-1", List.of("msg-1", "msg-1", "msg-2"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenReturn(new BulkEvidenceResult(2, 2, 0));
+
+        service.addSelectedToCase(request);
+
+        verify(caseEvidence).fileEvidence(eq("case-1"), eq(List.of("msg-1", "msg-2")), anyString());
+    }
+
+    @Test
+    void addSelectedFailsLoudlyAndAuditsWhenTheCaseServiceIsDown() {
+        AddSelectedToCaseRequest request = new AddSelectedToCaseRequest("case-1", List.of("msg-1"));
+        when(caseEvidence.fileEvidence(eq("case-1"), anyList(), anyString()))
+                .thenThrow(new CaseEvidenceWriter.CaseEvidenceException(
+                        "case-1", BulkEvidenceResult.empty(), new IllegalStateException("connection refused")));
+
+        assertThatThrownBy(() -> service.addSelectedToCase(request))
+                .isInstanceOf(SearchException.class)
+                .satisfies(ex -> assertThat(((SearchException) ex).status()).isEqualTo(502));
+
+        verify(publisher).publishAddToCaseFailed(eq("case-1"), eq(1), eq(0), anyString());
+        verify(publisher, never()).publishAddToCase(anyString(), anyList(), anyInt(), anyInt());
+    }
+
+    @Test
+    void aFirstPageSearchIsRecordedInHistoryWithItsAnswer() {
+        SearchRequest request = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 42, 0, 20, 7L));
+
+        service.search(request);
+
+        ArgumentCaptor<SearchHistoryEntry> captor = ArgumentCaptor.forClass(SearchHistoryEntry.class);
+        verify(repository).saveHistoryEntry(captor.capture());
+        SearchHistoryEntry entry = captor.getValue();
+        assertThat(entry.getId()).isNotNull();
+        assertThat(entry.getQuery()).isEqualTo("fraud");
+        assertThat(entry.getRequestJson()).contains("fraud");
+        assertThat(entry.getTotalHits()).isEqualTo(42);
+        assertThat(entry.getTookMs()).isEqualTo(7);
+        assertThat(entry.getExecutedAt()).isNotNull();
+    }
+
+    @Test
+    void pagingThroughAResultSetIsNotRecordedAgain() {
+        SearchRequest pageTwo = new SearchRequest(
+                "fraud", List.of(), null, null, null, null, List.of(), null, null, 2, 20,
+                SearchRequest.SortBy.RELEVANCE, null);
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 42, 2, 20, 3L));
+
+        service.search(pageTwo);
+
+        verify(repository, never()).saveHistoryEntry(any(SearchHistoryEntry.class));
+    }
+
+    @Test
+    void aRejectedRequestLeavesNoHistoryEntry() {
+        SearchRequest empty = new SearchRequest(
+                null, List.of(), null, null, null, null, List.of(), null, null, 0, 20, null, null);
+
+        assertThatThrownBy(() -> service.search(empty)).isInstanceOf(SearchException.class);
+
+        verify(repository, never()).saveHistoryEntry(any(SearchHistoryEntry.class));
+    }
+
+    @Test
+    void aFailedHistoryWriteDoesNotFailTheSearchThatAlreadyAnswered() {
+        SearchRequest request = request("fraud", SearchRequest.SortBy.RELEVANCE, null);
+        SearchResponse expected = new SearchResponse(List.of(), 5, 0, 20, 1L);
+        when(repository.search(any(Query.class), any(SearchRequest.class))).thenReturn(expected);
+        when(repository.saveHistoryEntry(any(SearchHistoryEntry.class)))
+                .thenThrow(new RuntimeException("history index unreachable"));
+
+        SearchResponse result = service.search(request);
+
+        assertThat(result).isEqualTo(expected);
+    }
+
+    @Test
+    void listHistoryDefaultsTheLimitWhenNoneIsGiven() {
+        when(repository.listHistory(anyInt())).thenReturn(List.of());
+
+        service.listHistory(null);
+
+        verify(repository).listHistory(20);
+    }
+
+    @Test
+    void listHistoryClampsAnOversizedLimit() {
+        when(repository.listHistory(anyInt())).thenReturn(List.of());
+
+        service.listHistory(500);
+
+        verify(repository).listHistory(100);
+    }
+
+    @Test
+    void listHistoryReturnsWhatTheRepositoryHolds() {
+        SearchHistoryEntry entry = new SearchHistoryEntry(
+                "h-1", "fraud", "{}", 42, 7, Instant.parse("2024-05-11T21:37:00Z"));
+        when(repository.listHistory(20)).thenReturn(List.of(entry));
+
+        List<SearchHistoryEntry> result = service.listHistory(20);
+
+        assertThat(result).containsExactly(entry);
+    }
+
+    @Test
+    void clearHistoryDelegatesToRepository() {
+        service.clearHistory();
+        verify(repository).clearHistory();
+    }
+
+    @Test
+    void reRunningASavedSearchLeavesAHistoryEntryLikeAnyOtherExecution() {
+        SavedSearch stored = new SavedSearch("id-1", "Q1", "case-1",
+                "{\"query\":\"fraud\",\"page\":0,\"size\":20}", "alice", Instant.now());
+        when(repository.getSavedSearch("id-1")).thenReturn(Optional.of(stored));
+        when(repository.search(any(Query.class), any(SearchRequest.class)))
+                .thenReturn(new SearchResponse(List.of(), 7, 0, 20, 1L));
+
+        service.runSavedSearch("id-1");
+
+        verify(repository).saveHistoryEntry(any(SearchHistoryEntry.class));
     }
 
     private SearchRequest request(String query, SearchRequest.SortBy sortBy, SearchRequest.SortDirection direction) {
