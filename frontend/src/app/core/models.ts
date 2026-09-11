@@ -43,6 +43,66 @@ export const EMPTY_PAGE: Page<never> = {
   last: true,
 };
 
+// ---------------------------------------------------------------- P1 ingestion
+
+/**
+ * Which retention rule the messages in one upload are kept under.
+ *
+ * `NORMAL` is the type-based period P2.2 holds (seven years for email, three for chat). `DEMO`
+ * tags every message in the upload with `RetentionLabels.DEMO_RETENTION`, and P2 stamps a short
+ * absolute deadline on those rows alone — so one batch can be shown going through disposition
+ * without shortening retention for anything else of its type.
+ *
+ * Not a cosmetic choice: picking `DEMO` for real data is an instruction to destroy it within
+ * minutes.
+ */
+export type RetentionMode = 'NORMAL' | 'DEMO';
+
+export type IngestOutcome = 'ACCEPTED' | 'DUPLICATE' | 'REJECTED' | 'FAILED';
+
+/** `IngestResult`. Serialised without nulls, hence the optional fields. */
+export interface IngestResult {
+  externalId?: string;
+  messageId?: string;
+  outcome: IngestOutcome;
+  /** For a duplicate, which dedupe key matched; for a rejection, what was wrong with it. */
+  reason?: string;
+}
+
+/**
+ * `UploadResponse` — the outcome of one file. Counts are exact; `problems` carries only failures
+ * and only the first few, with `problemsTruncated` saying so plainly.
+ */
+export interface UploadResponse {
+  filename: string;
+  totalMessages: number;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  failed: number;
+  problems?: IngestResult[];
+  problemsTruncated: boolean;
+}
+
+/**
+ * `UploadJob` — the state of one asynchronous upload.
+ *
+ * `processed` is a count, not a percentage: the total is unknown until the file has been read to
+ * the end. Job state is held in memory by the instance that issued it and does not survive a
+ * restart; re-running a lost upload is safe, because the second run reports duplicates and
+ * ingests nothing.
+ */
+export interface UploadJob {
+  jobId: string;
+  filename: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  processed: number;
+  startedAt: string;
+  finishedAt?: string;
+  result?: UploadResponse;
+  error?: string;
+}
+
 // ---------------------------------------------------------------- P2.2 disposition
 
 /**
