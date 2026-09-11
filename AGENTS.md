@@ -75,6 +75,12 @@ whoever can reach the port can delete a case — keep this on a network you trus
 
 ## Traps that have cost real time
 
+**The `discoveryhub-frontend` container squats on 4200.** Docker Desktop restarts it with the rest
+of the project, where it serves a *prebuilt, stale* `dist/` over nginx. It binds `[::]:4200` while
+`ng serve` binds `127.0.0.1:4200`, so both start happily and `http://localhost:4200` returns
+whichever of `::1`/`127.0.0.1` resolves first — you edit a component and nothing changes. Run
+`docker stop discoveryhub-frontend` before `ng serve`.
+
 **A stale process on a port.** A service whose port is taken logs `APPLICATION FAILED TO START` and
 exits, but something else is still answering that port, so health checks pass and you debug the
 wrong process. Check `lsof -nP -iTCP:8086 -sTCP:LISTEN` and compare the PID's start time.
