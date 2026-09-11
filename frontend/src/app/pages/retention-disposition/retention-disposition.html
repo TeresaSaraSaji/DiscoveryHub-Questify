@@ -79,9 +79,11 @@
       </tbody>
     </table>
     <p class="note">
-      ISO-8601, or shorthand: <code>P2555D</code> (seven years), <code>PT2M</code>,
-      <code>90d</code>. A non-positive period is refused with a 400 — it would make the whole corpus
-      eligible at once.
+      A number and a unit: <code>7Y</code> (seven years), <code>3M</code>, <code>2w</code>,
+      <code>90d</code>, <code>12h</code>, <code>30m</code>, <code>45s</code>. Lower-case
+      <code>m</code> is minutes and capital <code>M</code> is months. ISO-8601 such as
+      <code>P2555D</code> is still accepted. A non-positive period is refused with a 400 — it would
+      make the whole corpus eligible at once.
     </p>
   </app-panel>
 
