@@ -19,15 +19,23 @@ import java.util.Map;
 public interface ArchiveGateway {
 
     /**
-     * Messages whose {@code sent_at} is at or before the cutoff for their type — the disposition
-     * candidate set. Eligibility is computed per run from the current policy, never stored per
-     * message, so a policy change (FR-5.1) takes effect on the next sweep with no backfill.
+     * Messages past retention — the disposition candidate set.
+     *
+     * <p>Ordinary messages qualify when {@code sent_at} is at or before the cutoff for their type.
+     * Eligibility is computed per run from the current policy, never stored per message, so a
+     * policy change (FR-5.1) takes effect on the next sweep with no backfill.
+     *
+     * <p>A message carrying a per-message override ({@code retention_override_at}, set when P1
+     * tagged it {@code RetentionLabels.DEMO_RETENTION} at upload) qualifies once that instant has
+     * passed and is not subject to its type's cutoff at all. That is what lets one uploaded batch
+     * be disposed of within the length of a demo while the corpus keeps its seven years.
      *
      * <p>Held rows are returned, not filtered out, because a skipped-because-held message is a
      * ledger entry that FR-5.3 requires and the most valuable line in the whole audit trail.
      *
-     * @param cutoffs one cutoff per communication type; a type absent from the map is not swept
-     * @param limit   maximum rows to return, oldest first
+     * @param cutoffs one cutoff per communication type; a type absent from the map is not swept,
+     *                though overridden messages are still returned
+     * @param limit   maximum rows to return: overridden messages first, then oldest
      */
     List<ArchiveCandidate> findCandidates(Map<MessageType, Instant> cutoffs, int limit);
 
