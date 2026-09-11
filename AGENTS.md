@@ -27,12 +27,13 @@ for the absence of errors.
 
 ## Running the stack locally
 
-Datastores in Docker, services from jars. **Skip `mongodb`** — no service claims it, and a stale
-container of that name tends to block `docker compose up`:
+Datastores in Docker, services from jars. **`mongodb` is required** — P2 keeps messages there and
+Postgres holds only its metadata, so storage-service will not start without it:
 
 ```bash
-docker compose up -d kafka kafka-init redis postgres-archive postgres-cases \
-  postgres-holds postgres-audit postgres-disposition elasticsearch minio minio-init
+docker compose up -d kafka kafka-init redis postgres-ingestion postgres-archive-meta \
+  postgres-cases postgres-holds postgres-audit postgres-disposition mongodb \
+  elasticsearch minio minio-init
 
 for s in ingestion storage search case hold export disposition; do
   java -jar services/$s-service/target/$s-service-0.1.0-SNAPSHOT.jar &
@@ -40,6 +41,11 @@ done
 ```
 
 Ports: 8081 P1, 8082 P2, 8083 P3, 8084 P4 case, 8085 P5, 8086 P4 hold, **8087 P2.2**, 4200 UI.
+
+Datastore ports: 5433 P2 archive metadata (`postgres-archive-meta`, *not* `postgres-archive`),
+5434 P4 cases, 5435 P5 audit, 5436 P4 holds, **5437 P1 ingestion**, **5438 P2.2 disposition**,
+27017 Mongo. The last two are the ones that catch people out: 5437 belonged to disposition before
+P1 got a database, and a branch that predates the move will quietly point P2.2 at P1's Postgres.
 
 Load the corpus once P1 is up (12,000 messages, about 90 seconds through Kafka into P2 and P3):
 
@@ -57,8 +63,9 @@ shared only because everybody is pointed at the one machine that owns it.
 One machine runs the stack and everyone else opens the URL it prints:
 
 ```bash
-docker compose up -d kafka kafka-init redis postgres-archive postgres-cases \
-  postgres-holds postgres-audit postgres-disposition elasticsearch minio minio-init
+docker compose up -d kafka kafka-init redis postgres-ingestion postgres-archive-meta \
+  postgres-cases postgres-holds postgres-audit postgres-disposition mongodb \
+  elasticsearch minio minio-init
 ./infra/serve-lan.sh
 ```
 

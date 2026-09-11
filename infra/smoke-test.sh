@@ -43,8 +43,9 @@ check "minio          localhost:9000    P2/P5 blobs" \
 echo
 echo "host ports"
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-for entry in "6379 redis" "5433 postgres P2 archive" "5434 postgres P4 cases" \
-             "5435 postgres P5 audit" "5436 postgres P4 holds" "5437 postgres P2.2 disposition" \
+for entry in "6379 redis" "5433 postgres P2 archive meta" "5434 postgres P4 cases" \
+             "5435 postgres P5 audit" "5436 postgres P4 holds" "5437 postgres P1 ingestion" \
+             "5438 postgres P2.2 disposition" "27017 mongodb P2 archive" \
              "9092 kafka" "9200 elasticsearch" "9000 minio"; do
   set -- $entry
   check "$(printf '%-6s %s' "$1" "${*:2}")" port_open "$1"
