@@ -40,6 +40,10 @@ for s in ingestion storage search case hold export disposition; do
 done
 ```
 
+The archive Postgres container is `postgres-archive-meta`, not `postgres-archive` — the name
+changed with the MongoDB split, and `docker compose up postgres-archive` simply errors out on an
+undefined service.
+
 Ports: 8081 P1, 8082 P2, 8083 P3, 8084 P4 case, 8085 P5, 8086 P4 hold, **8087 P2.2**, 4200 UI.
 
 Datastore ports: 5433 P2 archive metadata (`postgres-archive-meta`, *not* `postgres-archive`),
@@ -134,3 +138,25 @@ three served by hold-service now) — so an unreachable or misconfigured P4 prod
 result as holds doing their job: every candidate skipped, refusals throughout the audit trail, no
 errors anywhere. Before believing a quiet sweep, check `holdScopeAvailable` in the candidates
 preview and P2's logs for `hold check failed`.
+
+**A stale jar looks like a broken environment.** `git pull` does not rebuild, so a service keeps
+running last week's `application.yml` from inside its jar while the compose file and the source
+tree have moved on. This is what "it works for everyone but me" almost always is. The two ways it
+showed up: disposition-service defaulting to 8086/5436 instead of 8087/5438 — which authenticates
+against postgres-holds and reports `password authentication failed for user "disposition"`, a
+credentials error that is really a wrong-datastore error — and Flyway refusing to start P2 because
+the jar's migrations disagree with what is already stamped in `flyway_schema_history`. Run
+`mvn -q package -DskipTests` after every pull, and compare `ls -lT services/*/target/*.jar`
+against `git log -1 --format=%cd <the yml you are debugging>` before believing any config.
+
+**Flyway checksum mismatches on `archive` are not repairable.** The MongoDB split rewrote P2's
+lineage (V4 is now `retention_override`, V5 is gone, V6 is `drop_disposition`), so a database
+stamped by a pre-split jar has tables the current migrations never create and lacks the ones they
+expect. `flyway repair` only rewrites checksums and leaves that drift for `ddl-auto: validate` to
+reject. Reset the schema instead — the message content lives in MongoDB, so the Postgres side is
+cheap to rebuild:
+
+```bash
+docker exec discoveryhub-postgres-archive-meta psql -U archive -d archive \
+  -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO archive;"
+```
