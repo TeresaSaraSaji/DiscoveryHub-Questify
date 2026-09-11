@@ -4,7 +4,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ArchiveApi } from '../../core/archive.api';
 import { DispositionApi } from '../../core/disposition.api';
-import { humanize, parseToIso, toIso } from '../../core/duration';
+import { humanize, parseToIso, toCompact } from '../../core/duration';
 import { Failure, classify } from '../../core/failure';
 import { describe } from '../../core/api-config';
 import {
@@ -130,7 +130,7 @@ export class RetentionDisposition {
   // ------------------------------------------------------------ retention policy (FR-5.1)
 
   protected draftFor(policy: RetentionPolicy): string {
-    return this.drafts()[policy.messageType] ?? toIso(policy.periodSeconds);
+    return this.drafts()[policy.messageType] ?? toCompact(policy.periodSeconds);
   }
 
   protected onDraft(type: MessageType, value: string): void {
@@ -138,7 +138,7 @@ export class RetentionDisposition {
   }
 
   protected periodLabel(seconds: number): string {
-    return `${humanize(seconds)} · ${toIso(seconds)}`;
+    return `${humanize(seconds)} · ${toCompact(seconds)}`;
   }
 
   /**
@@ -154,7 +154,9 @@ export class RetentionDisposition {
       this.policyFailure.set({
         kind: 'rejected',
         status: 0,
-        message: `"${typed}" is not a duration. Use ISO-8601 (P2555D, PT2M) or shorthand (90d, 2m).`,
+        message:
+          `"${typed}" is not a duration. Use a number and a unit: 7Y, 3M, 2w, 90d, 12h, 30m, 45s. ` +
+          `Lower-case m is minutes, capital M is months.`,
       });
       return;
     }
@@ -169,7 +171,7 @@ export class RetentionDisposition {
           this.savingType.set(null);
           this.drafts.update((current) => ({ ...current, [saved.messageType]: undefined }));
           this.policyOk.set(
-            `${saved.messageType} retention is now ${humanize(saved.periodSeconds)} (${toIso(saved.periodSeconds)}).`,
+            `${saved.messageType} retention is now ${humanize(saved.periodSeconds)} (${toCompact(saved.periodSeconds)}).`,
           );
           this.policies.reload();
           this.candidates.reload();

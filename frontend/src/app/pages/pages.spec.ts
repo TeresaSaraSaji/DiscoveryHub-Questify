@@ -9,6 +9,7 @@ import { CaseBroadcast } from '../core/case-broadcast';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
 import { AuditPage } from './audit/audit-page';
+import { CaseDetail } from './cases/case-detail';
 import { CasesPage } from './cases/cases-page';
 import { NewCasePage } from './cases/new-case-page';
 import { Dashboard } from './dashboard/dashboard';
@@ -51,7 +52,11 @@ async function settleAsync(fixture: ComponentFixture<unknown>): Promise<void> {
 async function failEverything(fixture: ComponentFixture<unknown>): Promise<void> {
   const http = TestBed.inject(HttpTestingController);
   for (const request of http.match(() => true)) {
-    request.error(new ProgressEvent('error'), { status: 0 });
+    // A resource whose key changed aborts the request it had in flight, and the testing backend
+    // throws rather than ignore an attempt to fail one of those.
+    if (!request.cancelled) {
+      request.error(new ProgressEvent('error'), { status: 0 });
+    }
   }
   await settleAsync(fixture);
 }
@@ -91,6 +96,21 @@ describe('every page survives every service being down', () => {
     const rendered = text(fixture);
     expect(rendered).toContain('Cases & Legal Hold');
     expect(rendered).toContain('Open a case');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders a case detail page', async () => {
+    // Its own entry because it is its own route. It is also the page with the most lists on it,
+    // and every one of them reads a resource that is in its error state here.
+    const fixture = mount(CaseDetail);
+    // Every resource is keyed on the id and issues nothing while it is blank, so the input has to
+    // be set and settled before there is anything to fail.
+    fixture.componentRef.setInput('caseId', 'c0ffee00-0000-4000-8000-000000000000');
+    await settleAsync(fixture);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('All cases');
     expect(rendered).toContain('is not reachable');
   });
 
@@ -135,7 +155,7 @@ describe('every page survives every service being down', () => {
 
     const rendered = text(fixture);
     expect(rendered).toContain('Retention & Disposition');
-    expect(rendered).toContain('Run a sweep');
+    expect(rendered).toContain('Disposition run');
     expect(rendered).toContain('is not reachable');
   });
 });
@@ -825,12 +845,12 @@ describe('opening a case on /cases/new', () => {
     await settleAsync(fixture);
 
     expect(tab.location.replace).toHaveBeenCalledWith(
-      '/cases?caseId=e3a1c0de-0000-4000-8000-000000000001',
+      '/cases/e3a1c0de-0000-4000-8000-000000000001',
     );
     // The new tab must not be able to script the one that opened it.
     expect(tab.opener).toBeNull();
     // This tab stays on the form, cleared and ready for the next matter.
-    expect(TestBed.inject(Router).url).not.toContain('caseId');
+    expect(TestBed.inject(Router).url).not.toContain(CREATED.caseId);
     const host = fixture.nativeElement as HTMLElement;
     expect(host.textContent).toContain('is open in a new tab');
     expect(host.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('');
@@ -881,7 +901,7 @@ describe('opening a case on /cases/new', () => {
     // The case was created regardless, so saying nothing would lose it entirely.
     expect(host.textContent).toContain('the tab was blocked');
     const link = [...host.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]')].find(
-      (anchor) => anchor.getAttribute('href')?.includes('caseId='),
+      (anchor) => anchor.getAttribute('href')?.includes(CREATED.caseId),
     );
     expect(link).toBeTruthy();
   });
@@ -951,14 +971,15 @@ describe('case evidence show more', () => {
   beforeEach(() => TestBed.resetTestingModule());
 
   it('shows ten rows and grows on Show more', async () => {
-    const fixture = mount(CasesPage);
-    const page = fixture.componentInstance as unknown as { selected: { set(v: string): void } };
+    // The evidence list moved to the case's own page, so the case is a route input now rather
+    // than a signal set from the outside.
+    const fixture = mount(CaseDetail);
     const http = TestBed.inject(HttpTestingController);
     http
       .match(() => true)
       .forEach((request) => request.error(new ProgressEvent('error'), { status: 0 }));
 
-    page.selected.set('case-1');
+    fixture.componentRef.setInput('caseId', 'case-1');
     settle(fixture);
 
     const evidence = Array.from({ length: 12 }, (_, i) => ({

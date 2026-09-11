@@ -81,9 +81,7 @@ export class NewCasePage {
         next: (created) => {
           this.creating.set(false);
           const url = this.location.prepareExternalUrl(
-            this.router.serializeUrl(
-              this.router.createUrlTree(['/cases'], { queryParams: { caseId: created.caseId } }),
-            ),
+            this.router.serializeUrl(this.router.createUrlTree(['/cases', created.caseId])),
           );
           this.opened.set({ name: created.name, url });
 

@@ -1,0 +1,431 @@
+<header class="page__head">
+  <div>
+    <a class="back-link" routerLink="/cases">&larr; All cases</a>
+    <h1>{{ current() ? current()!.name : 'Case' }}</h1>
+    <p class="page__lede">
+      Lifecycle, custodians, evidence and the holds that stop retention touching any of it.
+    </p>
+  </div>
+</header>
+
+<div class="grid grid--2">
+  <app-panel heading="This case" hint="Messages held" service="p4hold" [source]="holdCount">
+    @if (holdCount.hasValue()) {
+      <p class="figure">{{ holdCount.value().heldMessages | number }}</p>
+      <p class="figure__note">protected by this case's active holds</p>
+    }
+  </app-panel>
+
+  <app-panel heading="Evidence" hint="Filed on this case" service="p4case" [source]="evidence">
+    <p class="figure">{{ evidenceRows().length | number }}</p>
+    <p class="figure__note">{{ custodianRows().length | number }} custodians</p>
+  </app-panel>
+</div>
+
+<app-panel
+  [heading]="current() ? current()!.name : 'Case detail'"
+  hint="Lifecycle, custodians and evidence"
+  service="p4case"
+  [source]="detail"
+>
+  @if (current(); as item) {
+    <dl class="pairs">
+      <dt>case id</dt>
+      <dd class="mono">{{ item.caseId }}</dd>
+      <dt>status</dt>
+      <dd>
+        <span [class]="caseStatusClass(item.status)">{{ item.status }}</span>
+        @if (readOnly()) {
+          <span class="tag">read-only</span>
+        }
+      </dd>
+      <dt>matter</dt>
+      <dd>{{ item.matterType }}</dd>
+      <dt>owner</dt>
+      <dd>{{ item.owner }}</dd>
+      @if (item.description) {
+        <dt>description</dt>
+        <dd>{{ item.description }}</dd>
+      }
+      <dt>opened</dt>
+      <dd class="dim">{{ item.createdAt | since }}</dd>
+      @if (item.closedAt) {
+        <dt>closed</dt>
+        <dd class="dim">{{ item.closedAt | since }}</dd>
+      }
+    </dl>
+
+    <div class="controls controls--tight">
+      @if (nextStatus(); as next) {
+        <button
+          type="button"
+          class="btn btn--primary btn--small"
+          (click)="advance()"
+          [disabled]="transitioning()"
+        >
+          {{ transitioning() ? 'Moving…' : 'Move to ' + next }}
+        </button>
+      } @else {
+        <span class="dim">This case is closed. Nothing further can be changed on it.</span>
+      }
+    </div>
+    <app-alert [failure]="transitionFailure()" />
+  }
+</app-panel>
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Custodians"
+    hint="Whose communications this matter covers"
+    service="p4case"
+    [source]="custodians"
+  >
+    @if (custodianRows().length === 0 && !custodians.isLoading()) {
+      <p class="empty">No custodians on this case yet.</p>
+    }
+    <table class="table table--tight">
+      <tbody>
+        @for (custodian of custodianRows(); track custodian.id) {
+          <tr>
+            <td class="mono">{{ custodian.custodianId }}</td>
+            <td class="dim">added {{ custodian.addedAt | since: 'relative' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="controls controls--tight">
+      <input
+        class="input--wide mono"
+        type="text"
+        [ngModel]="custodianId()"
+        (ngModelChange)="custodianId.set($event)"
+        name="custodianId"
+        placeholder="cust-004, cust-017"
+        autocomplete="off"
+        [disabled]="readOnly()"
+      />
+      <button
+        type="button"
+        class="btn btn--small"
+        (click)="addCustodian()"
+        [disabled]="readOnly() || addingCustodian() || !custodianId().trim()"
+      >
+        Add
+      </button>
+    </div>
+    <app-alert [failure]="custodianFailure()" [success]="custodianOk()" />
+
+    @if (readOnly()) {
+      <p class="note">
+        This case is closed, so no custodian can be added to it. Reopening is not a transition
+        case-service offers — open a new matter instead.
+      </p>
+    }
+  </app-panel>
+
+  <app-panel
+    heading="Evidence"
+    hint="Messages filed on this matter"
+    service="p4case"
+    [source]="evidence"
+  >
+    @if (evidenceRows().length === 0 && !evidence.isLoading()) {
+      <p class="empty">No evidence yet. Search for messages and file them from the Search page.</p>
+    }
+    <table class="table table--tight">
+      <thead>
+        <tr>
+          <th>Message</th>
+          <th>Source</th>
+          <th>Added</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of visibleEvidence(); track item.id) {
+          <tr>
+            <td class="mono">{{ item.messageId }}</td>
+            <td>
+              <span class="tag">{{ item.source }}</span>
+            </td>
+            <td class="dim">{{ item.addedAt | since: 'relative' }}</td>
+            <td class="cell--actions">
+              <button
+                type="button"
+                class="btn btn--ghost btn--small"
+                (click)="removeEvidence(item.messageId)"
+                [disabled]="readOnly()"
+              >
+                Remove
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    @if (evidenceRemaining() > 0) {
+      <div class="paginator">
+        <span class="paginator__label">
+          Showing {{ visibleEvidence().length }} of {{ evidenceRows().length }}
+        </span>
+        <button type="button" class="btn btn--ghost btn--small" (click)="showMoreEvidence()">
+          Show more
+        </button>
+      </div>
+    }
+
+    <app-alert [failure]="evidenceFailure()" [success]="evidenceOk()" />
+    @if (readOnly()) {
+      <p class="note">This case is closed, so nothing further can be filed as evidence on it.</p>
+    } @else {
+      <p class="note">
+        Filing a message protects it from disposition even where a hold's own custodian and date
+        scope would not cover it.
+      </p>
+    }
+  </app-panel>
+</div>
+
+<app-panel
+  heading="Legal holds on this case"
+  hint="A hold protects nothing until it reaches ACTIVE"
+  service="p4hold"
+  [source]="holds"
+>
+  @if (holdRows().length === 0 && !holds.isLoading()) {
+    <p class="empty">
+      No hold on this case. Nothing here is protected from the next retention sweep.
+    </p>
+  }
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Hold</th>
+        <th>Status</th>
+        <th class="num">Messages</th>
+        <th>Scope</th>
+        <th>Placed</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (hold of holdRows(); track hold.holdId) {
+        <tr>
+          <td class="mono">{{ hold.holdId.slice(0, 8) }}…</td>
+          <td>
+            <span [class]="holdStatusClass(hold.status)">{{ hold.status }}</span>
+            @if (hold.error) {
+              <div class="dim">{{ hold.error }}</div>
+            }
+          </td>
+          <td class="num">
+            @if (hold.status === 'RESOLVING') {
+              <span class="dim">—</span>
+            } @else {
+              {{ hold.messageCount | number }}
+            }
+          </td>
+          <td class="dim">
+            @if (hold.dateFrom || hold.dateTo) {
+              {{ hold.dateFrom ? (hold.dateFrom | since: 'clock') : 'the beginning' }} →
+              {{ hold.dateTo ? (hold.dateTo | since: 'clock') : 'now' }}
+            } @else {
+              unbounded dates
+            }
+            @if (hold.searchTerms) {
+              <span class="tag mono">{{ hold.searchTerms }}</span>
+            }
+          </td>
+          <td class="dim">{{ hold.placedAt | since: 'relative' }}</td>
+          <td class="cell--actions">
+            @if (hold.status === 'ACTIVE') {
+              <button type="button" class="btn btn--ghost btn--small" (click)="release(hold)">
+                Release
+              </button>
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  @if (resolving()) {
+    <p class="note">
+      <span class="tag tag--busy">resolving</span>
+      A hold is still being expanded to messages. Until it is ACTIVE it stops nothing, and the
+      message count is unknown rather than zero.
+    </p>
+  }
+
+  <p class="note">
+    A hold's custodian list is not returned by the API — the entity exposes it through a method
+    rather than a getter, so it never reaches the wire. Only the dates and terms are shown.
+  </p>
+</app-panel>
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Place a hold"
+    hint="Accepted immediately, resolved in the background"
+    service="p4hold"
+  >
+    <div class="form">
+      <label class="field field--span2">
+        <span>Custodians</span>
+        <input
+          type="text"
+          class="mono"
+          [ngModel]="holdCustodians()"
+          (ngModelChange)="holdCustodians.set($event)"
+          name="holdCustodians"
+          placeholder="cust-004, cust-017"
+          autocomplete="off"
+        />
+      </label>
+      <label class="field">
+        <span>From</span>
+        <input
+          type="date"
+          [ngModel]="holdFrom()"
+          (ngModelChange)="holdFrom.set($event)"
+          name="holdFrom"
+        />
+      </label>
+      <label class="field">
+        <span>To</span>
+        <input
+          type="date"
+          [ngModel]="holdTo()"
+          (ngModelChange)="holdTo.set($event)"
+          name="holdTo"
+        />
+      </label>
+      <label class="field field--span2">
+        <span>Search terms</span>
+        <input
+          type="text"
+          [ngModel]="holdTerms()"
+          (ngModelChange)="holdTerms.set($event)"
+          name="holdTerms"
+          placeholder="Optional — widens the scope"
+          autocomplete="off"
+        />
+      </label>
+    </div>
+
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="placeHold()"
+        [disabled]="placing() || !holdCustodians().trim() || readOnly()"
+      >
+        {{ placing() ? 'Placing…' : 'Place hold' }}
+      </button>
+    </div>
+
+    <app-alert [failure]="holdFailure()" [success]="holdOk()" />
+
+    @if (readOnly()) {
+      <p class="note">This case is closed, so no new hold can be placed on it.</p>
+    } @else {
+      <p class="note">Leave the dates empty for an unbounded range.</p>
+    }
+  </app-panel>
+
+  <app-panel
+    heading="Is a message held?"
+    hint="The guard P2 and P2.2 call before deleting anything"
+    service="p4hold"
+  >
+    <div class="controls">
+      <input
+        class="input--wide mono"
+        type="text"
+        [ngModel]="checkId()"
+        (ngModelChange)="checkId.set($event)"
+        name="checkId"
+        placeholder="messageId"
+        autocomplete="off"
+      />
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="checkHold()"
+        [disabled]="checking() || !checkId().trim()"
+      >
+        {{ checking() ? 'Asking…' : 'Check' }}
+      </button>
+    </div>
+
+    <app-alert [failure]="checkFailure()" />
+
+    @if (checkResult() !== null) {
+      <div class="verdict" [class.verdict--held]="checkResult()">
+        @if (checkResult()) {
+          <strong>Held.</strong> A retention sweep must not delete this message.
+        } @else {
+          <strong>Not held.</strong> Retention alone decides whether it survives.
+        }
+      </div>
+    }
+
+    <p class="note">
+      Upstream this call fails closed: a timeout or an error is treated as <em>held</em>. That is
+      why an unreachable hold-service makes a sweep delete nothing.
+    </p>
+  </app-panel>
+</div>
+
+<app-panel
+  heading="What this case's holds have saved"
+  hint="Recorded at sweep time by P2.2, and outlives both the hold and the case"
+  service="p22"
+  [source]="protectedItems"
+>
+  @if (protectedRows().content.length === 0 && !protectedItems.isLoading()) {
+    <p class="empty">
+      No sweep has ever been stopped by a hold on this case. Either nothing here has reached its
+      retention cutoff, or no sweep has run.
+    </p>
+  }
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Decided</th>
+        <th>Message</th>
+        <th>Custodian</th>
+        <th>Sent</th>
+        <th>Outcome</th>
+        <th>Blocked by</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (item of protectedRows().content; track item.id) {
+        <tr>
+          <td class="dim">{{ item.occurredAt | since }}</td>
+          <td class="mono" [title]="item.messageId">{{ item.externalId }}</td>
+          <td class="mono">{{ item.custodianId }}</td>
+          <td class="dim">{{ item.sentAt | since: 'clock' }}</td>
+          <td>
+            <span class="tag tag--ok">{{ item.outcome }}</span>
+          </td>
+          <td class="dim">
+            @if (item.blockingHoldId) {
+              <span class="tag mono">hold {{ item.blockingHoldId.slice(0, 8) }}…</span>
+            }
+            {{ item.reason }}
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+  <app-paginator
+    [page]="protectedRows()"
+    [busy]="protectedItems.isLoading()"
+    (go)="protectedPage.set($event)"
+  />
+</app-panel>
