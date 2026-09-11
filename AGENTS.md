@@ -54,6 +54,14 @@ curl -F "file=@tools/corpus-generator/fixtures/messages.ndjson" \
 exits, but something else is still answering that port, so health checks pass and you debug the
 wrong process. Check `lsof -nP -iTCP:8086 -sTCP:LISTEN` and compare the PID's start time.
 
+**A container can be healthy with its port unpublished.** If a bind loses a race — an orphan from
+a renamed service still holding 5433, say — the container starts anyway, reports healthy, and
+`docker port` prints nothing, while every service dies on `Connection to localhost:5433 refused`.
+`docker restart` does not repair it; `docker compose up -d --force-recreate <svc>` does, and the
+named volume means no data is lost. `smoke-test.sh` used to miss this entirely because its
+datastore checks run through `docker exec` and never leave the container — it now checks the host
+ports separately, and those are the ones the jars actually use.
+
 **CORS is two settings, not one.** `CorsConfig` does not cover actuator — its endpoints use a
 separate handler mapping — so `management.endpoints.web.cors` is set in every service's
 `application.yml` as well. Miss it and the UI's status strip shows every service DOWN while every
