@@ -21,7 +21,7 @@ describe('the shell', () => {
 
     expect(
       [...shell.querySelectorAll('.nav__link')].map((link) => link.textContent?.trim()),
-    ).toEqual(['Home', 'Search', 'Cases & Holds', 'Retention', 'Exports & Audit']);
+    ).toEqual(['Home', 'Search', 'Cases & Holds', 'Retention & Disposition', 'Exports & Audit']);
 
     // Seven pills for six deployables: P4 is case-service and hold-service, listed separately
     // because a case list that loads while every hold check fails is a real state, and one "P4"

@@ -38,7 +38,7 @@ export class App {
     },
     {
       path: '/retention',
-      label: 'Retention',
+      label: 'Retention & Disposition',
       hint: 'Retention policy, sweeps and the ledger — P2.2',
       icon: 'M2 4h12M2 8h12M2 12h7',
     },
