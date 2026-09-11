@@ -30,6 +30,7 @@ import java.util.Map;
  * GET    /holds?caseId=&status=        list/filter holds
  * POST   /holds/{id}/release          release a hold (synchronous)
  * GET    /holds/check?messageId=...    is this message held? (FR-4.2 — the disposition guard)
+ * GET    /holds/covering?messageId=   which active holds cover it (FR-4.5 — overlapping holds)
  * GET    /holds/active                 every ACTIVE hold's scope — P2.2's case-level guard
  * POST   /holds/evidence-check         held-case evidence membership — P2.2's other case-level guard
  * GET    /holds/case/{caseId}/count   total held messages for a case (FR-4.4)
@@ -88,6 +89,16 @@ public class HoldController {
     @GetMapping("/check")
     public HoldCheckResponse check(@RequestParam("messageId") String messageId) {
         return checkService.check(messageId);
+    }
+
+    /**
+     * Which ACTIVE holds cover this message (FR-4.5) — the "why is it still held?" endpoint.
+     * Separate from {@code /check} on purpose: {@code /check} is P2's hot-path guard and stays a
+     * one-field answer, so nothing about this diagnostic can slow it down or change its contract.
+     */
+    @GetMapping("/covering")
+    public List<HoldEntity> covering(@RequestParam("messageId") String messageId) {
+        return holdService.activeHoldsCoveringMessage(messageId);
     }
 
     /**
