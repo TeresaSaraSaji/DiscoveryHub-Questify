@@ -2,6 +2,7 @@ package com.discoveryhub.search.repository;
 
 import com.discoveryhub.search.model.CommunicationDocument;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import org.springframework.data.elasticsearch.core.query.Query;
@@ -60,6 +61,15 @@ public interface SearchRepository {
 
     /** Delete a saved search. No-op if it does not exist. */
     void deleteSavedSearch(String id);
+
+    /** Record one executed search in the history index. */
+    SearchHistoryEntry saveHistoryEntry(SearchHistoryEntry entry);
+
+    /** The most recent history entries, newest first, capped at {@code limit}. */
+    List<SearchHistoryEntry> listHistory(int limit);
+
+    /** Remove every history entry. */
+    void clearHistory();
 
     /**
      * Scan every match for a query and collect their message ids, up to {@code max}. Used by the

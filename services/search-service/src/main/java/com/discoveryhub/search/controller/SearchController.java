@@ -1,10 +1,12 @@
 package com.discoveryhub.search.controller;
 
 import com.discoveryhub.contracts.MessageType;
+import com.discoveryhub.search.model.AddSelectedToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseRequest;
 import com.discoveryhub.search.model.BulkAddToCaseResponse;
 import com.discoveryhub.search.model.SaveSearchRequest;
 import com.discoveryhub.search.model.SavedSearch;
+import com.discoveryhub.search.model.SearchHistoryEntry;
 import com.discoveryhub.search.model.SearchRequest;
 import com.discoveryhub.search.model.SearchResponse;
 import com.discoveryhub.search.service.SearchService;
@@ -121,6 +123,21 @@ public class SearchController {
         return searchService.runSavedSearch(id);
     }
 
+    @Operation(summary = "List recent searches",
+            description = "The most recently executed searches, newest first. Every first-page " +
+                    "search execution is recorded automatically; paging through a result set is not.")
+    @GetMapping("/history")
+    public List<SearchHistoryEntry> listHistory(@RequestParam(required = false) Integer limit) {
+        return searchService.listHistory(limit);
+    }
+
+    @Operation(summary = "Clear the search history")
+    @DeleteMapping("/history")
+    public ResponseEntity<Void> clearHistory() {
+        searchService.clearHistory();
+        return ResponseEntity.noContent().build();
+    }
+
     @Operation(summary = "Add matched messages to a case",
             description = """
                     Bulk action. Runs the given search and adds the matched message ids to a case. By
@@ -129,5 +146,13 @@ public class SearchController {
     @PostMapping("/add-to-case")
     public BulkAddToCaseResponse addToCase(@Valid @RequestBody BulkAddToCaseRequest request) {
         return searchService.addToCase(request);
+    }
+
+    @Operation(summary = "Add hand-picked messages to a case",
+            description = "Files exactly the given message ids as evidence. Unlike /add-to-case, no " +
+                    "search is re-run: the ids the reviewer ticked are the decision, verbatim.")
+    @PostMapping("/add-selected-to-case")
+    public BulkAddToCaseResponse addSelectedToCase(@Valid @RequestBody AddSelectedToCaseRequest request) {
+        return searchService.addSelectedToCase(request);
     }
 }
