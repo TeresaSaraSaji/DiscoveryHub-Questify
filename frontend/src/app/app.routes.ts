@@ -1,7 +1,7 @@
 import { Routes } from '@angular/router';
 
 /**
- * Five pages, lazily loaded, and **no resolvers**.
+ * Six pages, lazily loaded, and **no resolvers**.
  *
  * A resolver would fetch before activating the route, which is the one thing this UI must not do:
  * six services on six ports, and a route that waited on any of them would refuse to open a page
@@ -33,10 +33,18 @@ export const routes: Routes = [
       ),
   },
   {
-    path: 'export-audit',
-    title: 'Exports & Audit · DiscoveryHub',
-    loadComponent: () => import('./pages/export-audit/export-audit').then((m) => m.ExportAudit),
+    path: 'exports',
+    title: 'Evidence Exports · DiscoveryHub',
+    loadComponent: () => import('./pages/exports/exports-page').then((m) => m.ExportsPage),
   },
+  {
+    path: 'audit',
+    title: 'Audit Trail · DiscoveryHub',
+    loadComponent: () => import('./pages/audit/audit-page').then((m) => m.AuditPage),
+  },
+  // Exports and the trail shared one page until they were split. Kept so a bookmark, or a link
+  // in someone's notes, still lands somewhere sensible rather than on the catch-all.
+  { path: 'export-audit', pathMatch: 'full', redirectTo: 'exports' },
   { path: '', pathMatch: 'full', redirectTo: 'home' },
   { path: '**', redirectTo: 'home' },
 ];

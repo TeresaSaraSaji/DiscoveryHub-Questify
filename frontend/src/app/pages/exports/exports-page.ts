@@ -2,22 +2,14 @@ import { DecimalPipe } from '@angular/common';
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { timer } from 'rxjs';
 import { switchMap, takeWhile } from 'rxjs/operators';
 import { describe } from '../../core/api-config';
-import {
-  AUDIT_ACTION_GROUPS,
-  AUDIT_ACTIONS_BY_SERVICE,
-  AUDIT_OUTCOMES,
-  AUDIT_SERVICES,
-  AuditApi,
-  AuditFilter,
-  EMPTY_AUDIT_FILTER,
-} from '../../core/audit.api';
+import { AuditApi } from '../../core/audit.api';
 import { CasesApi } from '../../core/cases.api';
 import { Failure, classify } from '../../core/failure';
 import {
-  AuditEntry,
   CaseEntity,
   CaseStatus,
   EMPTY_PAGE,
@@ -27,15 +19,19 @@ import {
 } from '../../core/models';
 import { valueOr } from '../../core/resource-utils';
 import { Alert } from '../../shared/alert';
-import { Paginator } from '../../shared/paginator';
 import { Panel } from '../../shared/panel';
 import { Since } from '../../shared/since.pipe';
 
 /**
- * Export and audit, which are one obligation seen twice.
+ * Evidence packages: requesting one, watching it build, and getting it out.
  *
- * A package is only defensible if the trail says who asked for it, when, and what went into it, so
- * P5 owns both and they share a page. Three properties of that service the UI is built around:
+ * P5 owns this and the audit trail, and the two used to share a page on the grounds that a package
+ * is only defensible if the trail says who asked for it. That is still true, and it is an argument
+ * for them being one service rather than one screen — in practice the page was two unrelated jobs
+ * of work stacked vertically, and doing either meant scrolling past the other. The trail has its
+ * own page now and this links to it.
+ *
+ * Three properties of the service this is built around:
  *
  * - **Export is asynchronous.** The request returns a QUEUED job; this polls it to a terminal
  *   state. Packaging a case out of a corpus is not request-sized work.
@@ -46,16 +42,14 @@ import { Since } from '../../shared/since.pipe';
  *   rather than metadata. It is a separate button because it is a separate claim.
  */
 @Component({
-  selector: 'app-export-audit',
-  imports: [Alert, DecimalPipe, FormsModule, Paginator, Panel, Since],
-  templateUrl: './export-audit.html',
+  selector: 'app-exports-page',
+  imports: [Alert, DecimalPipe, FormsModule, Panel, RouterLink, Since],
+  templateUrl: './exports-page.html',
 })
-export class ExportAudit {
+export class ExportsPage {
   private readonly api = inject(AuditApi);
   private readonly casesApi = inject(CasesApi);
   private readonly destroyRef = inject(DestroyRef);
-
-  // ------------------------------------------------------------ requesting an export
 
   /** Exactly one scope. The service returns a 400 if neither is given. */
   protected readonly scope = signal<'case' | 'custodian' | 'messages'>('case');
@@ -104,60 +98,6 @@ export class ExportAudit {
     // caseId alone is a label on the job, not a selection.
     return Boolean(this.caseId() && this.custodianId().trim());
   });
-
-  // ------------------------------------------------------------ audit
-
-  protected readonly serviceOptions = AUDIT_SERVICES;
-  protected readonly outcomeOptions = AUDIT_OUTCOMES;
-
-  /**
-   * The filter is staged, then applied.
-   *
-   * `draft` is what the controls are bound to; `applied` is what the request is built from. Only
-   * {@link search} copies one to the other, so choosing a service, an action and an outcome is one
-   * query rather than three, and the trail on screen keeps matching the last thing asked for while
-   * the next question is still being composed. Paging reads `applied`, so it cannot pick up a
-   * half-built filter either.
-   */
-  protected readonly draft = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
-  private readonly applied = signal<AuditFilter>(EMPTY_AUDIT_FILTER);
-  protected readonly auditPage = signal(0);
-  protected readonly audit = this.api.auditResource(this.applied, this.auditPage);
-  protected readonly auditRows = valueOr(this.audit, EMPTY_PAGE as Page<AuditEntry>);
-
-  /** The controls have moved on from the results below, so the table is answering an older question. */
-  protected readonly filterDirty = computed(() => {
-    const draft = this.draft();
-    const applied = this.applied();
-    return (['service', 'action', 'outcome', 'subjectId'] as const).some(
-      (key) => draft[key].trim() !== applied[key].trim(),
-    );
-  });
-
-  protected readonly filterActive = computed(() =>
-    (['service', 'action', 'outcome', 'subjectId'] as const).some((key) =>
-      Boolean(this.applied()[key].trim()),
-    ),
-  );
-
-  /**
-   * The actions on offer, narrowed to the chosen service.
-   *
-   * Empty groups are dropped rather than shown empty, so picking P3 leaves one entry rather than
-   * five headings with nothing under them.
-   */
-  protected readonly actionGroups = computed(() => {
-    const allowed = AUDIT_ACTIONS_BY_SERVICE[this.draft().service];
-    if (!allowed) {
-      return AUDIT_ACTION_GROUPS;
-    }
-    return AUDIT_ACTION_GROUPS.map((group) => ({
-      label: group.label,
-      actions: group.actions.filter((action) => allowed.includes(action)),
-    })).filter((group) => group.actions.length > 0);
-  });
-
-  // ------------------------------------------------------------ actions
 
   protected request(): void {
     if (!this.canRequest()) {
@@ -209,25 +149,23 @@ export class ExportAudit {
       .subscribe({
         next: (job) => this.tracked.set(job),
         error: () => undefined,
-        complete: () => {
-          this.exports.reload();
-          this.audit.reload();
-        },
+        complete: () => this.exports.reload(),
       });
   }
 
-  /** Fetch the presigned link, then hand it to the browser. */
+  /**
+   * Fetch the presigned link, then hand it to the browser.
+   *
+   * Requesting, completing and downloading are all audited by P5 as they happen. Nothing is
+   * refreshed here for that: the trail is its own page and reads current data when opened.
+   */
   protected download(job: ExportJob): void {
     this.downloadFailure.set(null);
     this.api
       .download(job.jobId)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
-        next: (link) => {
-          window.open(link.url, '_blank', 'noopener');
-          // Downloading is itself an audited act, so the trail below is now out of date.
-          this.audit.reload();
-        },
+        next: (link) => window.open(link.url, '_blank', 'noopener'),
         error: (error: unknown) => this.downloadFailure.set(classify(error, describe('p5'))),
       });
   }
@@ -266,49 +204,6 @@ export class ExportAudit {
       });
   }
 
-  /** Stages a change. Deliberately does not search: {@link search} is the only thing that does. */
-  protected patchFilter(patch: Partial<AuditFilter>): void {
-    this.draft.update((current) => ({ ...current, ...patch }));
-  }
-
-  /**
-   * Stages a service, dropping an action that service cannot emit.
-   *
-   * Without this, narrowing the list would leave the old action staged but no longer visible in
-   * it — a filter the user can neither see nor have meant, guaranteeing an empty page. Moving to
-   * "All services" keeps whatever action is staged, since every action is on offer again.
-   */
-  protected selectService(service: string): void {
-    this.draft.update((current) => {
-      const allowed = AUDIT_ACTIONS_BY_SERVICE[service];
-      const keepAction = !allowed || !current.action || allowed.includes(current.action);
-      return { ...current, service, action: keepAction ? current.action : '' };
-    });
-  }
-
-  /**
-   * Applies every staged filter at once, back at page one.
-   *
-   * Whatever is blank stays out of the query — the resource only sends the keys that have a value
-   * — so any subset of the four works, and none of them is required.
-   */
-  protected search(): void {
-    this.auditPage.set(0);
-    this.applied.set(this.draft());
-  }
-
-  protected clearFilter(): void {
-    this.auditPage.set(0);
-    this.draft.set(EMPTY_AUDIT_FILTER);
-    this.applied.set(EMPTY_AUDIT_FILTER);
-  }
-
-  /** A shortcut, so it stages and applies in one go rather than waiting for Search. */
-  protected showRefusalsOnly(): void {
-    this.patchFilter({ outcome: 'REFUSED' });
-    this.search();
-  }
-
   protected statusClass(status: ExportJob['status']): string {
     if (status === 'COMPLETED') {
       return 'tag tag--ok';
@@ -317,19 +212,6 @@ export class ExportAudit {
       return 'tag tag--danger';
     }
     return 'tag tag--busy';
-  }
-
-  protected outcomeClass(outcome: string): string {
-    const value = outcome.toUpperCase();
-    if (value === 'SUCCESS') {
-      return 'tag tag--ok';
-    }
-    // A refusal is deliberate, and usually the most important row on the page.
-    return value === 'REFUSED' ? 'tag tag--warn' : 'tag tag--danger';
-  }
-
-  protected detailPairs(detail: Record<string, string>): { key: string; value: string }[] {
-    return Object.entries(detail ?? {}).map(([key, value]) => ({ key, value }));
   }
 
   protected sizeLabel(bytes: number | null): string {

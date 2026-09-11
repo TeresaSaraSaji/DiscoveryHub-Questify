@@ -6,9 +6,10 @@ import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { SEARCH_TIMEOUT_MS } from '../core/search.api';
 import { routes } from '../app.routes';
+import { AuditPage } from './audit/audit-page';
 import { CasesPage } from './cases/cases-page';
 import { Dashboard } from './dashboard/dashboard';
-import { ExportAudit } from './export-audit/export-audit';
+import { ExportsPage } from './exports/exports-page';
 import { RetentionDisposition } from './retention-disposition/retention-disposition';
 import { SearchPage } from './search/search-page';
 
@@ -90,13 +91,22 @@ describe('every page survives every service being down', () => {
     expect(rendered).toContain('is not reachable');
   });
 
-  it('renders Exports & Audit', async () => {
-    const fixture = mount(ExportAudit);
+  it('renders Evidence Exports', async () => {
+    const fixture = mount(ExportsPage);
     await failEverything(fixture);
 
     const rendered = text(fixture);
-    expect(rendered).toContain('Exports & Audit Trail');
-    expect(rendered).toContain('Audit trail');
+    expect(rendered).toContain('Evidence Exports');
+    expect(rendered).toContain('Request an export');
+    expect(rendered).toContain('is not reachable');
+  });
+
+  it('renders the Audit Trail', async () => {
+    const fixture = mount(AuditPage);
+    await failEverything(fixture);
+
+    const rendered = text(fixture);
+    expect(rendered).toContain('Audit Trail');
     expect(rendered).toContain('is not reachable');
   });
 
