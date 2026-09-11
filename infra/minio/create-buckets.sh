@@ -3,7 +3,7 @@
 # Nothing writes to both.
 set -eu
 
-mc alias set local http://minio:9000 minioadmin minioadmin
+mc alias set local http://minio:9000 "${MINIO_ROOT_USER:-minioadmin}" "${MINIO_ROOT_PASSWORD:-minioadmin}"
 
 # P2 Archive: message bodies and attachment bytes. Versioning on — this is the system of record
 # and an accidental overwrite should be recoverable.

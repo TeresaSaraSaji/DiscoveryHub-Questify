@@ -295,8 +295,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     command: ["server", "/data", "--console-address", ":9001"]
     volumes:
       - minio-data:/data
@@ -314,6 +314,12 @@ services:
       minio:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/scripts/create-buckets.sh"]
+    # The script used to hardcode minioadmin/minioadmin in its `mc alias set`. Once the root
+    # credential became overridable, a custom one made bucket creation fail while MinIO itself
+    # came up healthy — buckets silently absent, and the first export failing instead.
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - ./infra/minio/create-buckets.sh:/scripts/create-buckets.sh:ro
     restart: "no"
@@ -466,7 +472,12 @@ services:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-audit:5432/audit
       ARCHIVE_BASE_URL: http://storage-service:8082
-      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      # Previously unset here, so these fell through to the Dockerfile's minioadmin defaults and
+      # only worked because MinIO's root credential happened to match. Set them from the same
+      # variables the minio service uses, so the two cannot drift.
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       SERVER_PORT: 8085
     depends_on:
       kafka:
