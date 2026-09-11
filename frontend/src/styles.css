@@ -438,6 +438,47 @@ select:focus,
   width: 8.5rem;
 }
 
+/* A field that can drop a suggestion list under its input (the search bar's recent searches). */
+.suggest {
+  position: relative;
+}
+
+.suggest__list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 0.2rem;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.suggest__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  font-size: 0.83rem;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.suggest__item:hover,
+.suggest__item:focus {
+  background: var(--accent-soft);
+}
+
 .input--narrow {
   width: 5.5rem;
 }

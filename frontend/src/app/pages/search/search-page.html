@@ -11,16 +11,37 @@
   service="p3"
 >
   <form class="form" (ngSubmit)="submit()">
-    <label class="field field--span2">
+    <label class="field field--span2 suggest">
       <span>Keyword</span>
       <input
         type="text"
         [ngModel]="query()"
         (ngModelChange)="query.set($event)"
+        (focus)="historyOpen.set(true)"
+        (blur)="historyOpen.set(false)"
         name="query"
         placeholder="Search by keyword, sender, subject…"
         autocomplete="off"
       />
+      @if (historyOpen() && suggestions().length > 0) {
+        <!-- mousedown is swallowed so a pick lands before the input's blur closes the list. -->
+        <ul class="suggest__list" (mousedown)="$event.preventDefault()">
+          @for (entry of suggestions(); track entry.id) {
+            <li>
+              <button type="button" class="suggest__item" (click)="pick(entry)">
+                <span>
+                  @if (entry.query) {
+                    {{ entry.query }}
+                  } @else {
+                    <span class="dim">(filters only)</span>
+                  }
+                </span>
+                <span class="dim">{{ entry.totalHits }} hits · {{ entry.executedAt | since: 'relative' }}</span>
+              </button>
+            </li>
+          }
+        </ul>
+      }
     </label>
 
     <label class="field">
@@ -127,6 +148,67 @@
   }
 </app-panel>
 
+<app-panel
+  heading="Recent searches"
+  hint="The last five, recorded by the search service as it answers; re-run one to ask again"
+  service="p3"
+>
+  <app-alert [failure]="historyFailure()" />
+
+  @if (history().length === 0) {
+    <p class="empty">Nothing has been searched yet. Executed searches appear here.</p>
+  } @else {
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Query</th>
+          <th>Hits</th>
+          <th>Took</th>
+          <th>When</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (entry of history(); track entry.id) {
+          <tr>
+            <td>
+              @if (entry.query) {
+                <strong>{{ entry.query }}</strong>
+              } @else {
+                <span class="dim">(filters only)</span>
+              }
+            </td>
+            <td class="dim">{{ entry.totalHits }}</td>
+            <td class="dim">{{ entry.tookMs }} ms</td>
+            <td class="dim">{{ entry.executedAt | since }}</td>
+            <td>
+              <button
+                type="button"
+                class="btn btn--ghost btn--small"
+                (click)="rerun(entry)"
+                [disabled]="searching()"
+              >
+                Run again
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--ghost btn--small"
+        (click)="clearHistory()"
+        [disabled]="clearingHistory()"
+      >
+        {{ clearingHistory() ? 'Clearing…' : 'Clear history' }}
+      </button>
+    </div>
+  }
+</app-panel>
+
 @if (results(); as rows) {
   <app-panel
     [heading]="'Search results (' + total() + ')'"
@@ -145,6 +227,7 @@
                indexed fields it maps. The type filter still works; the answer just cannot be
                echoed back per row. -->
           <tr>
+            <th aria-label="Select"></th>
             <th>Subject</th>
             <th>From</th>
             <th>Custodian</th>
@@ -155,6 +238,14 @@
         <tbody>
           @for (result of rows; track result.messageId) {
             <tr>
+              <td>
+                <input
+                  type="checkbox"
+                  [checked]="isSelected(result.messageId)"
+                  (change)="toggleSelected(result.messageId)"
+                  [attr.aria-label]="'Select ' + (result.subject || result.messageId)"
+                />
+              </td>
               <td class="cell--subject">
                 <strong>{{ result.subject || '(no subject)' }}</strong>
                 @if (result.snippet) {
@@ -191,23 +282,17 @@
       </table>
 
       <div class="paginator">
-        <button
-          type="button"
-          class="btn btn--ghost btn--small"
-          [disabled]="shownPage() === 0 || searching()"
-          (click)="goToPage(shownPage() - 1)"
-        >
-          Previous
-        </button>
-        <span class="paginator__label">{{ from() }}–{{ to() }} of {{ total() }}</span>
-        <button
-          type="button"
-          class="btn btn--ghost btn--small"
-          [disabled]="shownPage() >= lastPage() || searching()"
-          (click)="goToPage(shownPage() + 1)"
-        >
-          Next
-        </button>
+        <span class="paginator__label">Showing {{ rows.length }} of {{ total() }}</span>
+        @if (hasMore()) {
+          <button
+            type="button"
+            class="btn btn--ghost btn--small"
+            [disabled]="searching()"
+            (click)="showMore()"
+          >
+            {{ searching() ? 'Loading…' : 'Show more' }}
+          </button>
+        }
       </div>
     }
   </app-panel>
@@ -246,6 +331,15 @@
           [disabled]="!fileCaseId() || filing()"
         >
           {{ filing() ? 'Filing…' : 'Add as evidence' }}
+        </button>
+
+        <button
+          type="button"
+          class="btn"
+          (click)="fileSelected()"
+          [disabled]="!fileCaseId() || filing() || selected().size === 0"
+        >
+          Add selected ({{ selected().size }})
         </button>
       </div>
 

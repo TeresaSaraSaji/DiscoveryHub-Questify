@@ -10,6 +10,7 @@ import {
   EMPTY_PAGE,
   MessageType,
   Page,
+  SearchHistoryEntry,
   SearchRequest,
   SearchResult,
 } from '../../core/models';
@@ -56,7 +57,8 @@ export class SearchPage {
   /** Tri-state, as three strings, because a checkbox cannot express "no filter". */
   protected readonly attachments = signal<'' | 'yes' | 'no'>('');
   protected readonly heldOnly = signal<'' | 'yes' | 'no'>('');
-  protected readonly size = signal(20);
+  /** Ten per fetch: the first screenful. "Show more" appends the next ten under them. */
+  protected readonly size = signal(10);
 
   /**
    * FR-3.4 asks for sortable results. Empty means "let the query decide": relevance when there is
@@ -97,15 +99,29 @@ export class SearchPage {
   protected readonly shownPage = signal(0);
   protected readonly shownSize = signal(20);
 
-  protected readonly lastPage = computed(() => {
-    const size = this.shownSize();
-    return size > 0 ? Math.max(0, Math.ceil(this.total() / size) - 1) : 0;
-  });
+  /** Whether the index holds matches beyond what is on screen — what "Show more" reveals. */
+  protected readonly hasMore = computed(() => (this.results()?.length ?? 0) < this.total());
 
-  protected readonly from = computed(() => this.shownPage() * this.shownSize() + 1);
-  protected readonly to = computed(() =>
-    Math.min(this.total(), (this.shownPage() + 1) * this.shownSize()),
-  );
+  // ------------------------------------------------------------ selection
+
+  /**
+   * The message ids the reviewer has ticked. A set, not a flag on the result rows: rows are
+   * replaced wholesale when a search re-runs or "Show more" appends, and the selection must
+   * survive being re-rendered without being re-consulted.
+   */
+  protected readonly selected = signal<ReadonlySet<string>>(new Set<string>());
+
+  protected isSelected(messageId: string): boolean {
+    return this.selected().has(messageId);
+  }
+
+  protected toggleSelected(messageId: string): void {
+    const next = new Set(this.selected());
+    if (!next.delete(messageId)) {
+      next.add(messageId);
+    }
+    this.selected.set(next);
+  }
 
   // ------------------------------------------------------------ filing results to a case
 
@@ -130,6 +146,43 @@ export class SearchPage {
   protected readonly fileFailure = signal<Failure | null>(null);
   protected readonly fileOk = signal<string | null>(null);
 
+  // ------------------------------------------------------------ history
+
+  /**
+   * Recent searches, loaded on sight like the case list: a short, bounded list that the re-run
+   * control cannot be used without. This does not violate the "no search until asked" rule — it
+   * reads what has already been asked, it does not query the corpus.
+   */
+  protected readonly history = signal<SearchHistoryEntry[]>([]);
+  protected readonly historyFailure = signal<Failure | null>(null);
+  protected readonly clearingHistory = signal(false);
+
+  /** Whether the keyword input's recent-searches dropdown is on screen. */
+  protected readonly historyOpen = signal(false);
+
+  /**
+   * What the dropdown offers: the recent searches, narrowed to what has been typed so far. An
+   * empty keyword offers everything — focusing the empty bar and seeing your last five questions
+   * is the whole point of a search-bar history.
+   */
+  protected readonly suggestions = computed(() => {
+    const typed = this.query().trim().toLowerCase();
+    const entries = this.history();
+    return typed
+      ? entries.filter((entry) => entry.query?.toLowerCase().includes(typed))
+      : entries;
+  });
+
+  /** A dropdown pick is a re-run: fill the form from the entry and ask again. */
+  protected pick(entry: SearchHistoryEntry): void {
+    this.historyOpen.set(false);
+    this.rerun(entry);
+  }
+
+  constructor() {
+    this.loadHistory();
+  }
+
   // ------------------------------------------------------------ actions
 
   protected submit(): void {
@@ -137,7 +190,15 @@ export class SearchPage {
       return;
     }
     this.page.set(0);
+    // A new question invalidates the picks made against the old answer.
+    this.selected.set(new Set<string>());
     this.run();
+  }
+
+  /** Fetch the next batch and append it under what is already on screen. */
+  protected showMore(): void {
+    this.page.set(this.shownPage() + 1);
+    this.run(true);
   }
 
   protected changeSort(value: string): void {
@@ -150,12 +211,7 @@ export class SearchPage {
     }
   }
 
-  protected goToPage(next: number): void {
-    this.page.set(Math.max(0, next));
-    this.run();
-  }
-
-  private run(): void {
+  private run(append = false): void {
     const request = this.request();
     this.failure.set(null);
     this.fileOk.set(null);
@@ -167,17 +223,27 @@ export class SearchPage {
       .subscribe({
         next: (response) => {
           this.searching.set(false);
-          this.results.set(response.results);
+          this.results.set(
+            append ? [...(this.results() ?? []), ...response.results] : response.results,
+          );
           this.total.set(response.total);
           this.tookMs.set(response.tookMs);
           this.shownPage.set(response.page);
           // Echoed back rather than assumed: asking for more than 100 is clamped server-side, and
           // paging arithmetic against the number we asked for would then be wrong.
           this.shownSize.set(response.size);
+          // P3 recorded this execution (first pages only), so the list on screen is stale now.
+          if (request.page === 0) {
+            this.loadHistory();
+          }
         },
         error: (error: unknown) => {
           this.searching.set(false);
-          this.results.set(null);
+          // A failed "Show more" keeps what is already on screen; only a fresh search that fails
+          // has nothing truthful to show.
+          if (!append) {
+            this.results.set(null);
+          }
           this.failure.set(classify(error, describe('p3')));
         },
       });
@@ -195,9 +261,44 @@ export class SearchPage {
     this.sort.set('');
     this.page.set(0);
     this.results.set(null);
+    this.selected.set(new Set<string>());
     this.failure.set(null);
     this.fileOk.set(null);
     this.fileFailure.set(null);
+  }
+
+  /**
+   * File only the ticked messages as evidence. Goes through P3's add-selected endpoint rather
+   * than straight to case-service, so the action lands in the audit trail like every other
+   * search-driven filing.
+   */
+  protected fileSelected(): void {
+    const caseId = this.fileCaseId().trim();
+    const messageIds = [...this.selected()];
+    if (!caseId || messageIds.length === 0) {
+      return;
+    }
+    this.fileFailure.set(null);
+    this.fileOk.set(null);
+    this.filing.set(true);
+
+    this.api
+      .addSelectedToCase(caseId, messageIds)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (result) => {
+          this.filing.set(false);
+          this.selected.set(new Set<string>());
+          const filed = `${result.added} selected message${result.added === 1 ? '' : 's'} filed on ${result.caseId}`;
+          const skipped =
+            result.alreadyPresent > 0 ? ` (${result.alreadyPresent} already on the case)` : '';
+          this.fileOk.set(`${filed}${skipped}.`);
+        },
+        error: (error: unknown) => {
+          this.filing.set(false);
+          this.fileFailure.set(classify(error, describe('p3')));
+        },
+      });
   }
 
   /**
@@ -250,6 +351,71 @@ export class SearchPage {
    * applied by an element the template owns. Same result on screen; no markup from the corpus ever
    * reaches the DOM as markup.
    */
+  private loadHistory(): void {
+    this.api
+      .history(5)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: (entries) => {
+          this.historyFailure.set(null);
+          this.history.set(Array.isArray(entries) ? entries : []);
+        },
+        error: (error: unknown) => {
+          // History being down must not degrade search itself, so the failure is shown in its own
+          // panel and the list simply stays empty.
+          this.history.set([]);
+          this.historyFailure.set(classify(error, describe('p3')));
+        },
+      });
+  }
+
+  /**
+   * Put a recorded search back into the form and run it. The entry carries the full request as
+   * JSON, so every filter comes back, not just the keyword — and the form shows what is about to
+   * be asked rather than running something the user cannot see.
+   */
+  protected rerun(entry: SearchHistoryEntry): void {
+    let request: SearchRequest;
+    try {
+      request = JSON.parse(entry.requestJson) as SearchRequest;
+    } catch {
+      this.historyFailure.set({
+        kind: 'unknown',
+        status: 0,
+        message: 'This history entry could not be read.',
+      });
+      return;
+    }
+    this.query.set(request.query ?? '');
+    this.custodian.set(request.custodianIds?.[0] ?? '');
+    this.sender.set(request.from ?? '');
+    this.type.set((request.type as MessageType | undefined) ?? '');
+    this.sentAfter.set(toDateInput(request.sentAfter));
+    this.sentBefore.set(toDateInput(request.sentBefore));
+    this.attachments.set(fromTriState(request.hasAttachment));
+    this.heldOnly.set(fromTriState(request.onHold));
+    this.page.set(0);
+    this.run();
+  }
+
+  protected clearHistory(): void {
+    this.clearingHistory.set(true);
+    this.api
+      .clearHistory()
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: () => {
+          this.clearingHistory.set(false);
+          this.history.set([]);
+          this.historyFailure.set(null);
+        },
+        error: (error: unknown) => {
+          this.clearingHistory.set(false);
+          this.historyFailure.set(classify(error, describe('p3')));
+        },
+      });
+  }
+
   protected segments(snippet: string): { text: string; match: boolean }[] {
     const out: { text: string; match: boolean }[] = [];
     let rest = snippet;
@@ -285,4 +451,14 @@ function toInstant(value: string): string | null {
 
 function triState(value: '' | 'yes' | 'no'): boolean | null {
   return value === '' ? null : value === 'yes';
+}
+
+/** The reverse of {@link triState}, for putting a history entry back into the form. */
+function fromTriState(value: boolean | null | undefined): '' | 'yes' | 'no' {
+  return value == null ? '' : value ? 'yes' : 'no';
+}
+
+/** The reverse of {@link toInstant}: an ISO instant back into a date input's `YYYY-MM-DD`. */
+function toDateInput(value: string | null | undefined): string {
+  return value ? value.slice(0, 10) : '';
 }
