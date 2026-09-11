@@ -1,0 +1,226 @@
+<header class="page__head">
+  <div>
+    <h1>Evidence Exports</h1>
+    <p class="page__lede">
+      Request, verify and download evidence packages. Who asked for each one is recorded on the
+      <a class="link" routerLink="/audit">audit trail</a>.
+    </p>
+  </div>
+</header>
+
+<div class="grid grid--2">
+  <app-panel
+    heading="Request an export"
+    hint="Queued immediately and built in the background"
+    service="p5"
+  >
+    <div class="controls controls--wrap">
+      <label class="field field--inline">
+        <span>Scope by</span>
+        <select [value]="scope()" (change)="scope.set($any($event.target).value)">
+          <option value="case">Case + custodian</option>
+          <option value="custodian">Custodian</option>
+          <option value="messages">Specific messages</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="form">
+      @if (scope() === 'case') {
+        <label class="field field--span2">
+          <span>Case</span>
+          <select [value]="caseId()" (change)="caseId.set($any($event.target).value)">
+            <option value="">Choose a case…</option>
+            @for (item of caseOptions(); track item.caseId) {
+              <option [value]="item.caseId">{{ item.name }} · {{ item.status }}</option>
+            }
+          </select>
+        </label>
+      }
+
+      @if (scope() === 'case' || scope() === 'custodian') {
+        <label class="field">
+          <span>Custodian</span>
+          <input
+            type="text"
+            class="mono"
+            [ngModel]="custodianId()"
+            (ngModelChange)="custodianId.set($event)"
+            name="custodianId"
+            placeholder="cust-004"
+            autocomplete="off"
+          />
+        </label>
+        <label class="field">
+          <span>From</span>
+          <input type="date" [ngModel]="from()" (ngModelChange)="from.set($event)" name="from" />
+        </label>
+        <label class="field">
+          <span>To</span>
+          <input type="date" [ngModel]="to()" (ngModelChange)="to.set($event)" name="to" />
+        </label>
+      }
+
+      @if (scope() === 'messages') {
+        <label class="field field--span2">
+          <span>Message ids</span>
+          <input
+            type="text"
+            class="mono"
+            [ngModel]="messageIds()"
+            (ngModelChange)="messageIds.set($event)"
+            name="messageIds"
+            placeholder="one or more ids, comma or space separated"
+            autocomplete="off"
+          />
+        </label>
+      }
+    </div>
+
+    <div class="controls controls--tight">
+      <button
+        type="button"
+        class="btn btn--primary"
+        (click)="request()"
+        [disabled]="requesting() || !canRequest()"
+      >
+        {{ requesting() ? 'Queuing…' : 'Request export' }}
+      </button>
+      @if (!canRequest()) {
+        <span class="dim">
+          @if (scope() === 'messages') {
+            Add at least one message id.
+          } @else {
+            A custodian is required — a case id alone labels the job, it does not select anything.
+          }
+        </span>
+      }
+    </div>
+
+    <app-alert [failure]="requestFailure()" [success]="requestOk()" />
+
+    @if (tracked(); as job) {
+      <div class="progress">
+        <div class="progress__head">
+          <span class="mono">{{ job.jobId.slice(0, 8) }}…</span>
+          <span [class]="statusClass(job.status)">{{ job.status }}</span>
+          <span class="dim">{{ job.queuedAt | since: 'relative' }}</span>
+        </div>
+        <dl class="pairs">
+          <dt>items</dt>
+          <dd>{{ job.itemCount | number }}</dd>
+          <dt>size</dt>
+          <dd>{{ sizeLabel(job.packageSizeBytes) }}</dd>
+          @if (job.packageSha256) {
+            <dt>package sha256</dt>
+            <dd class="mono break">{{ job.packageSha256 }}</dd>
+          }
+          @if (job.error) {
+            <dt>error</dt>
+            <dd>{{ job.error }}</dd>
+          }
+        </dl>
+        <div class="controls controls--tight">
+          @if (job.status === 'COMPLETED') {
+            <button type="button" class="btn btn--small" (click)="download(job)">Download</button>
+            <button
+              type="button"
+              class="btn btn--ghost btn--small"
+              (click)="verify(job)"
+              [disabled]="verifying() === job.jobId"
+            >
+              {{ verifying() === job.jobId ? 'Verifying…' : 'Verify checksums' }}
+            </button>
+          }
+          @if (job.status === 'FAILED') {
+            <button type="button" class="btn btn--small" (click)="retry(job)">Retry</button>
+          }
+        </div>
+      </div>
+    }
+
+    <app-alert [failure]="downloadFailure()" />
+    <app-alert [failure]="verifyFailure()" />
+
+    @if (verification(); as result) {
+      <div class="verdict" [class.verdict--held]="!result.valid">
+        @if (result.valid) {
+          <strong>Verified.</strong>
+          {{ result.itemsChecked }} item{{ result.itemsChecked === 1 ? '' : 's' }} and the package
+          digest were re-derived from the package's own bytes and all matched.
+        } @else {
+          <strong>Verification failed.</strong>
+          @if (!result.packageChecksumMatches) {
+            The package digest does not match what the job recorded.
+          }
+          @if (result.itemMismatches.length > 0) {
+            {{ result.itemMismatches.length }} of {{ result.itemsChecked }} items disagree with the
+            manifest.
+          }
+        }
+      </div>
+    }
+
+    <p class="note">
+      The download is an expiring link to object storage, not a copy served through this app.
+    </p>
+  </app-panel>
+
+  <app-panel
+    heading="Export history"
+    hint="The 50 most recent jobs"
+    service="p5"
+    [source]="exports"
+  >
+    @if (exportRows().length === 0 && !exports.isLoading()) {
+      <p class="empty">No export has been requested.</p>
+    }
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Queued</th>
+          <th>Job</th>
+          <th class="num">Items</th>
+          <th>Status</th>
+          <th>Digest</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (job of exportRows(); track job.jobId) {
+          <tr>
+            <td class="dim">{{ job.queuedAt | since }}</td>
+            <td class="mono">
+              {{ job.jobId.slice(0, 8) }}…
+              @if (job.attempts > 1) {
+                <span class="tag">{{ job.attempts }} attempts</span>
+              }
+            </td>
+            <td class="num">{{ job.itemCount | number }}</td>
+            <td>
+              <span [class]="statusClass(job.status)">{{ job.status }}</span>
+            </td>
+            <td class="mono dim">
+              {{ job.packageSha256 ? job.packageSha256.slice(0, 10) + '…' : '—' }}
+            </td>
+            <td class="cell--actions">
+              @if (job.status === 'COMPLETED') {
+                <button type="button" class="btn btn--ghost btn--small" (click)="download(job)">
+                  Download
+                </button>
+              } @else if (job.status === 'FAILED') {
+                <button type="button" class="btn btn--ghost btn--small" (click)="retry(job)">
+                  Retry
+                </button>
+              } @else {
+                <button type="button" class="btn btn--ghost btn--small" (click)="follow(job.jobId)">
+                  Watch
+                </button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </app-panel>
+</div>
