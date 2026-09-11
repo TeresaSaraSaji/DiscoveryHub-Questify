@@ -231,6 +231,29 @@ class HoldServiceTest {
     }
 
     @Test
+    void activeHoldsCoveringAMessageListsBothOverlappingHoldsNewestFirst() {
+        HoldEntity older = new HoldEntity("hold-a", "case-1", HoldStatus.ACTIVE,
+                Instant.parse("2024-01-01T00:00:00Z"));
+        HoldEntity newer = new HoldEntity("hold-b", "case-2", HoldStatus.ACTIVE,
+                Instant.parse("2024-06-01T00:00:00Z"));
+        when(coverage.findActiveHoldIdsByMessageId("m123")).thenReturn(List.of("hold-a", "hold-b"));
+        when(holds.findAllById(List.of("hold-a", "hold-b"))).thenReturn(List.of(older, newer));
+
+        List<HoldEntity> covering = service.activeHoldsCoveringMessage("m123");
+
+        assertThat(covering).extracting(HoldEntity::getHoldId).containsExactly("hold-b", "hold-a");
+    }
+
+    @Test
+    void activeHoldsCoveringAnUnheldMessageIsEmptyAndSkipsTheHoldLookup() {
+        when(coverage.findActiveHoldIdsByMessageId("m999")).thenReturn(List.of());
+
+        assertThat(service.activeHoldsCoveringMessage("m999")).isEmpty();
+
+        verify(holds, never()).findAllById(any());
+    }
+
+    @Test
     void getHoldThrowsNotFoundWhenMissing() {
         when(holds.findById("missing")).thenReturn(Optional.empty());
 
