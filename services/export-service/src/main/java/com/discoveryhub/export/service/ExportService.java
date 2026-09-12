@@ -127,10 +127,12 @@ public class ExportService {
             job.setPackageSha256(result.packageSha256());
             job.setPackageSizeBytes((long) result.zipBytes().length);
             job.setItemCount(result.itemCount());
+            job.setMissingCount(result.missingCount());
             jobs.save(job);
             publisher.publishAudit(events.completed(jobId, result.itemCount(), result.packageSha256()));
-            log.info("export job {} completed: {} items, {} bytes, sha256={}",
-                    jobId, result.itemCount(), result.zipBytes().length, result.packageSha256());
+            log.info("export job {} completed: {} items, {} missing, {} bytes, sha256={}",
+                    jobId, result.itemCount(), result.missingCount(), result.zipBytes().length,
+                    result.packageSha256());
         } catch (Exception ex) {
             log.error("export job {} failed", jobId, ex);
             storage.discardStaged(key);

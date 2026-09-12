@@ -68,13 +68,41 @@ class PackageBuilderTest {
                 .hasMessageContaining("sha256 mismatch");
     }
 
+    /**
+     * A case can name evidence that retention has since destroyed on schedule. The package holds
+     * what survived and the manifest names what did not, because refusing outright would make a
+     * case permanently un-exportable over one lawfully disposed message, and omitting it silently
+     * would hand over a package claiming to be the case's evidence while being less than that.
+     */
     @Test
-    void aMessageNoLongerInTheArchiveFailsTheWholeBuild() {
-        when(archive.findMessage("gone")).thenReturn(Optional.empty());
+    void aMessageNoLongerInTheArchiveIsRecordedRatherThanPackagedOrRefused() throws IOException {
+        byte[] attachmentBytes = "ref,amount\nNG-1,100\n".getBytes();
+        when(archive.findMessage("m-1")).thenReturn(Optional.of(message("m-1", sha256(attachmentBytes))));
+        when(archive.fetchAttachmentBytes("m-1", "att-1")).thenReturn(attachmentBytes);
+        when(archive.findMessage("disposed")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> builder.build("job-3", "case-1", List.of("gone")))
+        PackageResult result = builder.build("job-3", "case-1", List.of("m-1", "disposed"));
+
+        assertThat(result.itemCount()).isEqualTo(2); // the surviving message and its attachment
+        assertThat(result.missingCount()).isEqualTo(1);
+
+        Manifest manifest = readManifest(result.zipBytes());
+        assertThat(manifest.missing()).singleElement()
+                .satisfies(m -> assertThat(m.messageId()).isEqualTo("disposed"));
+        // Named in the manifest, absent from the package itself — nothing was invented to stand
+        // in for it.
+        assertThat(manifest.items()).noneSatisfy(i -> assertThat(i.messageId()).isEqualTo("disposed"));
+    }
+
+    /** Every message gone is a different situation: there is no package worth shipping. */
+    @Test
+    void aScopeWhereNothingSurvivesFailsTheBuild() {
+        when(archive.findMessage("gone-1")).thenReturn(Optional.empty());
+        when(archive.findMessage("gone-2")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> builder.build("job-3b", "case-1", List.of("gone-1", "gone-2")))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("gone");
+                .hasMessageContaining("nothing to package");
     }
 
     @Test

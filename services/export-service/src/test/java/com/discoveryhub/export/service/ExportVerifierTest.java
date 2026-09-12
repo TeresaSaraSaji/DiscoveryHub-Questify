@@ -114,7 +114,7 @@ class ExportVerifierTest {
                 zip.write(contents.get(i));
                 zip.closeEntry();
             }
-            Manifest manifest = new Manifest("job-1", "case-1", Instant.parse("2024-01-01T00:00:00Z"), items);
+            Manifest manifest = new Manifest("job-1", "case-1", Instant.parse("2024-01-01T00:00:00Z"), items, List.of());
             zip.putNextEntry(new ZipEntry("manifest.json"));
             zip.write(json.writeValueAsBytes(manifest));
             zip.closeEntry();

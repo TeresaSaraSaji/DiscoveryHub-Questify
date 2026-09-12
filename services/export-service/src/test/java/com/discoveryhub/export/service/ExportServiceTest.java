@@ -68,7 +68,7 @@ class ExportServiceTest {
     void processBuildsAndPromotesOnSuccess() throws Exception {
         ExportJobEntity job = queuedJob("job-1", new ExportRequest(null, List.of("m-1"), null, null, null));
         when(jobs.findById("job-1")).thenReturn(Optional.of(job));
-        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 3);
+        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 3, 0);
         when(packageBuilder.build(eq("job-1"), any(), eq(List.of("m-1")))).thenReturn(result);
 
         service.process("job-1");
@@ -106,7 +106,7 @@ class ExportServiceTest {
         // to remove it there too, not just from staging.
         ExportJobEntity job = queuedJob("job-6", new ExportRequest(null, List.of("m-1"), null, null, null));
         when(jobs.findById("job-6")).thenReturn(Optional.of(job));
-        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1);
+        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1, 0);
         when(packageBuilder.build(eq("job-6"), any(), any())).thenReturn(result);
         org.mockito.Mockito.doThrow(new IllegalStateException("minio unreachable"))
                 .when(storage).promote("job-6.zip");
@@ -125,7 +125,7 @@ class ExportServiceTest {
         // in the packages bucket for a job that ends up FAILED.
         ExportJobEntity job = queuedJob("job-7", new ExportRequest(null, List.of("m-1"), null, null, null));
         when(jobs.findById("job-7")).thenReturn(Optional.of(job));
-        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1);
+        PackageResult result = new PackageResult("zip-bytes".getBytes(), "deadbeef", 1, 0);
         when(packageBuilder.build(eq("job-7"), any(), any())).thenReturn(result);
         // The first save persists RUNNING (must succeed so process() reaches promote); the second
         // save persists COMPLETED and is where the failure happens; the third save (in the catch
