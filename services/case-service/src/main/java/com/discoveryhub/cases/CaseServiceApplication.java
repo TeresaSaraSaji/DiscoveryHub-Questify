@@ -1,5 +1,6 @@
 package com.discoveryhub.cases;
 
+import com.discoveryhub.cases.config.ArchiveClientProperties;
 import com.discoveryhub.cases.config.CaseProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -17,7 +18,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * hold-service consumes the event.
  */
 @SpringBootApplication
-@EnableConfigurationProperties(CaseProperties.class)
+@EnableConfigurationProperties({ CaseProperties.class, ArchiveClientProperties.class })
 public class CaseServiceApplication {
 
     public static void main(String[] args) {

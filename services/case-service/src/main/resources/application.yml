@@ -37,6 +37,13 @@ discoveryhub:
     # cannot request thousands of rows in one shot.
     default-page-size: 50
     max-page-size: 200
+    archive:
+      # P2, asked whether a message exists before it is accepted as evidence. Evidence is filed
+      # from search results and the index is eventually consistent with the archive, so without
+      # this a message disposition destroyed can still be filed onto a case — an evidence row
+      # pointing at nothing, which surfaces later as an item an export cannot package.
+      base-url: ${ARCHIVE_BASE_URL:http://localhost:8082}
+      timeout: 5s
 
 server:
   port: ${SERVER_PORT:8084}

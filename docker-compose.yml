@@ -420,6 +420,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-cases:5432/cases
+      # P2, asked whether a message still exists before it is accepted as evidence.
+      # Evidence is filed from search results, and the index trails the archive by
+      # however much the last sweep destroyed.
+      ARCHIVE_BASE_URL: http://storage-service:8082
       SERVER_PORT: 8084
     depends_on:
       kafka:
