@@ -4,6 +4,7 @@ import com.discoveryhub.cases.api.AddCustodianRequest;
 import com.discoveryhub.cases.api.AddEvidenceBatchRequest;
 import com.discoveryhub.cases.api.AddEvidenceRequest;
 import com.discoveryhub.cases.api.BulkEvidenceResult;
+import com.discoveryhub.cases.client.ArchiveMessageClient;
 import com.discoveryhub.cases.api.CaseRequest;
 import com.discoveryhub.cases.domain.CaseCustodianEntity;
 import com.discoveryhub.cases.domain.CaseEntity;
@@ -30,6 +31,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
+import org.springframework.web.server.ResponseStatusException;
+
 import java.util.Map;
 import java.util.Optional;
 
@@ -52,13 +55,26 @@ class CaseServiceTest {
     @Mock CaseCustodianRepository custodians;
     @Mock EvidenceRepository evidence;
     @Mock CaseKafkaPublisher publisher;
+    @Mock ArchiveMessageClient archive;
 
     private CaseService service;
 
     @BeforeEach
     void setUp() {
         service = new CaseService(cases, custodians, evidence, publisher,
-                new CaseEventFactory(), new CaseAuditEvents());
+                new CaseEventFactory(), new CaseAuditEvents(), archive);
+    }
+
+    /**
+     * The archive holds everything, which is the uninteresting case and the one most tests want.
+     * Lenient because the tests that never reach the evidence paths do not call it.
+     */
+    @BeforeEach
+    void archiveHoldsEverything() {
+        org.mockito.Mockito.lenient().when(archive.exists(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(true);
+        org.mockito.Mockito.lenient().when(archive.existing(org.mockito.ArgumentMatchers.anyList()))
+                .thenAnswer(inv -> new java.util.LinkedHashSet<>(inv.getArgument(0, java.util.List.class)));
     }
 
     private CaseEntity draft() {
@@ -254,6 +270,44 @@ class CaseServiceTest {
         assertThat(result.requested()).isEqualTo(3);
         assertThat(result.added()).isEqualTo(2);
         assertThat(result.alreadyPresent()).isEqualTo(1);
+    }
+
+    /**
+     * A message the archive no longer holds cannot be evidence of anything. Evidence is filed from
+     * search results, and the index can still be serving a message disposition destroyed — this is
+     * where a stale result set stops being a dead evidence row on a case.
+     */
+    @Test
+    void addEvidenceRefusesAMessageTheArchiveNoLongerHolds() {
+        when(cases.findById("case-1")).thenReturn(Optional.of(draft()));
+        when(archive.exists("disposed")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.addEvidence("case-1",
+                new AddEvidenceRequest("disposed", EvidenceSource.SEARCH, null)))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("not in the archive");
+
+        verify(evidence, never()).save(any());
+    }
+
+    /** One destroyed message does not refuse the rest of the page — it is counted and reported. */
+    @Test
+    void addEvidenceBatchCountsWhatTheArchiveNoLongerHoldsAndFilesTheRest() {
+        when(cases.findById("case-1")).thenReturn(Optional.of(draft()));
+        when(evidence.findMessageIdsByCaseId("case-1")).thenReturn(List.of());
+        when(evidence.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(archive.existing(List.of("msg-1", "disposed", "msg-3")))
+                .thenReturn(new java.util.LinkedHashSet<>(List.of("msg-1", "msg-3")));
+
+        BulkEvidenceResult result = service.addEvidenceBatch("case-1",
+                new AddEvidenceBatchRequest(List.of("msg-1", "disposed", "msg-3"),
+                        EvidenceSource.SEARCH, "search-7"));
+
+        assertThat(result.requested()).isEqualTo(3);
+        assertThat(result.added()).isEqualTo(2);
+        assertThat(result.notInArchive()).isEqualTo(1);
+        verify(evidence, never()).save(org.mockito.ArgumentMatchers.argThat(
+                e -> "disposed".equals(e.getMessageId())));
     }
 
     @Test

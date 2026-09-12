@@ -6,6 +6,7 @@ import com.discoveryhub.cases.api.AddEvidenceRequest;
 import com.discoveryhub.cases.api.BulkEvidenceResult;
 import com.discoveryhub.cases.api.CaseRequest;
 import com.discoveryhub.cases.api.EvidenceLookupItem;
+import com.discoveryhub.cases.client.ArchiveMessageClient;
 import com.discoveryhub.cases.domain.CaseCustodianEntity;
 import com.discoveryhub.cases.domain.CaseEntity;
 import com.discoveryhub.cases.domain.CaseStatus;
@@ -63,15 +64,18 @@ public class CaseService {
     private final CaseKafkaPublisher publisher;
     private final CaseEventFactory caseEvents;
     private final CaseAuditEvents audit;
+    private final ArchiveMessageClient archive;
 
     public CaseService(CaseRepository cases, CaseCustodianRepository custodians, EvidenceRepository evidence,
-                       CaseKafkaPublisher publisher, CaseEventFactory caseEvents, CaseAuditEvents audit) {
+                       CaseKafkaPublisher publisher, CaseEventFactory caseEvents, CaseAuditEvents audit,
+                       ArchiveMessageClient archive) {
         this.cases = cases;
         this.custodians = custodians;
         this.evidence = evidence;
         this.publisher = publisher;
         this.caseEvents = caseEvents;
         this.audit = audit;
+        this.archive = archive;
     }
 
     // --------------------------------------------------------------------- cases
@@ -237,6 +241,14 @@ public class CaseService {
         }
         CaseEntity entity = requireCase(caseId);
         requireMutable(entity);
+        // The message has to exist to be evidence of anything. Checked here rather than trusted
+        // from the caller because the caller is usually a search result, and the index can still
+        // be serving a message disposition destroyed.
+        if (!archive.exists(request.messageId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "message " + request.messageId() + " is not in the archive; it may have been "
+                            + "destroyed by retention. Nothing was filed on the case.");
+        }
         Optional<EvidenceEntity> existing = evidence.findByCaseIdAndMessageId(caseId, request.messageId());
         if (existing.isPresent()) {
             return existing.get();
@@ -256,8 +268,12 @@ public class CaseService {
         requireMutable(entity);
         List<String> messageIds = request.messageIds();
         if (messageIds == null || messageIds.isEmpty()) {
-            return new BulkEvidenceResult(0, 0, 0);
+            return new BulkEvidenceResult(0, 0, 0, 0);
         }
+        // Which of these the archive still holds. A bulk add comes from a page of search results,
+        // and the index can be ahead of the archive by however many messages the last sweep
+        // destroyed — so this is where a stale result set stops being a dead evidence row.
+        Set<String> inArchive = archive.existing(messageIds);
         // preExisting is the immutable snapshot of what was on the case before this batch;
         // seenInThisBatch tracks ids handled so far within this loop, so an intra-batch duplicate
         // can be told apart from one that was genuinely already present beforehand (m1 fix).
@@ -265,10 +281,17 @@ public class CaseService {
         Set<String> seenInThisBatch = new HashSet<>();
         int added = 0;
         int alreadyPresent = 0;
+        int rejected = 0;
         Instant now = Instant.now();
         EvidenceSource source = request.source();
         for (String messageId : messageIds) {
             if (messageId == null || messageId.isBlank() || !seenInThisBatch.add(messageId)) {
+                continue;
+            }
+            // Counted, not thrown: one destroyed message in a page of results is not a reason to
+            // refuse the other hundreds, and the caller is told how many did not make it.
+            if (!inArchive.contains(messageId)) {
+                rejected++;
                 continue;
             }
             if (preExisting.contains(messageId)) {
@@ -286,9 +309,9 @@ public class CaseService {
             publishAfterCommit(() -> publisher.publishAudit(
                     audit.evidenceAdded(caseId, addedCount + " items", source.name(), correlationId)));
         }
-        log.info("bulk add to case {}: requested={}, added={}, alreadyPresent={}",
-                caseId, messageIds.size(), added, alreadyPresent);
-        return new BulkEvidenceResult(messageIds.size(), added, alreadyPresent);
+        log.info("bulk add to case {}: requested={}, added={}, alreadyPresent={}, notInArchive={}",
+                caseId, messageIds.size(), added, alreadyPresent, rejected);
+        return new BulkEvidenceResult(messageIds.size(), added, alreadyPresent, rejected);
     }
 
     @Transactional(readOnly = true)

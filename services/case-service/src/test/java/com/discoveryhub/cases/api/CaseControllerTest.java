@@ -215,7 +215,7 @@ class CaseControllerTest {
 
     @Test
     void addEvidenceBatchReturnsSummary() {
-        when(service.addEvidenceBatch(eq("case-1"), any())).thenReturn(new BulkEvidenceResult(3, 2, 1));
+        when(service.addEvidenceBatch(eq("case-1"), any())).thenReturn(new BulkEvidenceResult(3, 2, 1, 0));
 
         BulkEvidenceResult result = controller.addEvidenceBatch("case-1",
                 new AddEvidenceBatchRequest(List.of("m1", "m2", "m3"), EvidenceSource.SEARCH, "search-1"));

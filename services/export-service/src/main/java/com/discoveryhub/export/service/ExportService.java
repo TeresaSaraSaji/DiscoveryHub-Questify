@@ -12,8 +12,10 @@ import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -29,17 +31,19 @@ public class ExportService {
 
     private final ExportJobRepository jobs;
     private final ArchiveClient archive;
+    private final CaseClient cases;
     private final PackageBuilder packageBuilder;
     private final ObjectStorageClient storage;
     private final ExportKafkaPublisher publisher;
     private final ExportEvents events;
     private final ObjectMapper json;
 
-    public ExportService(ExportJobRepository jobs, ArchiveClient archive, PackageBuilder packageBuilder,
-                         ObjectStorageClient storage, ExportKafkaPublisher publisher,
-                         ExportEvents events, ObjectMapper json) {
+    public ExportService(ExportJobRepository jobs, ArchiveClient archive, CaseClient cases,
+                         PackageBuilder packageBuilder, ObjectStorageClient storage,
+                         ExportKafkaPublisher publisher, ExportEvents events, ObjectMapper json) {
         this.jobs = jobs;
         this.archive = archive;
+        this.cases = cases;
         this.packageBuilder = packageBuilder;
         this.storage = storage;
         this.publisher = publisher;
@@ -48,9 +52,9 @@ public class ExportService {
     }
 
     public ExportJobEntity submit(ExportRequest request) {
-        if (!request.isExplicit() && (request.custodianId() == null || request.custodianId().isBlank())) {
+        if (!request.isExplicit() && !request.hasCase() && !request.hasCustodian()) {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,
-                    "provide either messageIds or a custodianId to scope the export");
+                    "provide a caseId, messageIds or a custodianId to scope the export");
         }
         String jobId = UUID.randomUUID().toString();
         ExportJobEntity job = new ExportJobEntity(jobId, request.caseId(), writeScope(request), Instant.now());
@@ -109,9 +113,7 @@ public class ExportService {
         boolean promotionAttempted = false;
         try {
             ExportRequest request = readScope(job.getRequestedScope());
-            List<String> messageIds = request.isExplicit()
-                    ? request.messageIds()
-                    : archive.resolveCustodianScope(request.custodianId(), request.from(), request.to());
+            List<String> messageIds = resolve(request);
             if (messageIds.isEmpty()) {
                 throw new IllegalStateException("export scope resolved to zero messages");
             }
@@ -127,10 +129,12 @@ public class ExportService {
             job.setPackageSha256(result.packageSha256());
             job.setPackageSizeBytes((long) result.zipBytes().length);
             job.setItemCount(result.itemCount());
+            job.setMissingCount(result.missingCount());
             jobs.save(job);
             publisher.publishAudit(events.completed(jobId, result.itemCount(), result.packageSha256()));
-            log.info("export job {} completed: {} items, {} bytes, sha256={}",
-                    jobId, result.itemCount(), result.zipBytes().length, result.packageSha256());
+            log.info("export job {} completed: {} items, {} missing, {} bytes, sha256={}",
+                    jobId, result.itemCount(), result.missingCount(), result.zipBytes().length,
+                    result.packageSha256());
         } catch (Exception ex) {
             log.error("export job {} failed", jobId, ex);
             storage.discardStaged(key);
@@ -143,6 +147,82 @@ public class ExportService {
             jobs.save(job);
             publisher.publishAudit(events.failed(jobId, job.getError()));
         }
+    }
+
+    /**
+     * Turns a requested scope into the concrete message ids to package (FR-6.1).
+     *
+     * <p>Three shapes, in precedence order:
+     *
+     * <ul>
+     *   <li><b>Explicit ids</b> — exported as given, no resolution.</li>
+     *   <li><b>A case</b> — P4's evidence list for that case, optionally narrowed to one
+     *       custodian and/or a date range.</li>
+     *   <li><b>A custodian alone</b> — that custodian's archived messages in the date range,
+     *       which is what a hold's scope resolves to.</li>
+     * </ul>
+     */
+    private List<String> resolve(ExportRequest request) {
+        if (request.isExplicit()) {
+            return request.messageIds();
+        }
+        if (request.hasCase()) {
+            return resolveCaseScope(request);
+        }
+        return archive.resolveCustodianScope(request.custodianId(), request.from(), request.to());
+    }
+
+    /**
+     * A case's evidence, narrowed by whatever else was asked for.
+     *
+     * <p>P4's evidence rows carry only a message id, so any narrowing has to be answered by P2.
+     * Which way round depends on what was given, and the difference is not cosmetic on a case
+     * holding several hundred items:
+     *
+     * <ul>
+     *   <li><b>With a custodian</b>, P2 is asked once for that custodian's messages and the two
+     *       sets are intersected — two or three paged calls, and the date range comes free
+     *       because {@code resolveCustodianScope} already applies it.</li>
+     *   <li><b>With only dates</b>, there is nothing to intersect against, so each evidence
+     *       message is read to check its {@code sentAt}. One call per item, which is why it is
+     *       not the path taken whenever a custodian could do the work instead.</li>
+     * </ul>
+     *
+     * <p>An evidence item that is no longer in the archive is not this method's problem to report:
+     * on the filtered paths it simply does not match, and on the unfiltered path it reaches
+     * {@code PackageBuilder}, which records it in the manifest's {@code missing} list. Either way
+     * the export proceeds with what survives — see that class for why refusing outright was the
+     * wrong answer.
+     */
+    private List<String> resolveCaseScope(ExportRequest request) {
+        List<String> evidence = cases.evidenceMessageIds(request.caseId());
+        if (evidence.isEmpty()) {
+            // Said here rather than left to the generic "scope resolved to zero messages", because
+            // the two are different problems: an empty case needs evidence filing onto it, a
+            // filter that matched nothing needs widening.
+            throw new IllegalStateException(
+                    "case " + request.caseId() + " has no evidence items to export");
+        }
+        if (request.hasCustodian()) {
+            Set<String> custodianScope = new HashSet<>(
+                    archive.resolveCustodianScope(request.custodianId(), request.from(), request.to()));
+            return evidence.stream().filter(custodianScope::contains).toList();
+        }
+        if (request.from() == null && request.to() == null) {
+            return evidence;
+        }
+        return evidence.stream()
+                .filter(id -> archive.findMessage(id)
+                        .filter(m -> inRange(m.sentAt(), request.from(), request.to()))
+                        .isPresent())
+                .toList();
+    }
+
+    private static boolean inRange(Instant sentAt, Instant from, Instant to) {
+        if (from != null && sentAt.isBefore(from)) {
+            return false;
+        }
+        return to == null || !sentAt.isAfter(to);
     }
 
     public Optional<ExportJobEntity> find(String jobId) {

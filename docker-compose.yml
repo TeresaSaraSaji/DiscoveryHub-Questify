@@ -420,6 +420,10 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-cases:5432/cases
+      # P2, asked whether a message still exists before it is accepted as evidence.
+      # Evidence is filed from search results, and the index trails the archive by
+      # however much the last sweep destroyed.
+      ARCHIVE_BASE_URL: http://storage-service:8082
       SERVER_PORT: 8084
     depends_on:
       kafka:
@@ -466,6 +470,10 @@ services:
       KAFKA_BOOTSTRAP: kafka:19092
       DB_URL: jdbc:postgresql://postgres-audit:5432/audit
       ARCHIVE_BASE_URL: http://storage-service:8082
+      # case-service, for resolving a case's evidence items when an export is scoped by case
+      # (FR-6.1). Only read while a job runs, so P4 being down fails that job rather than the
+      # service — an export by explicit ids or by custodian does not touch P4 at all.
+      CASES_BASE_URL: http://case-service:8084
       MINIO_ENDPOINT: http://minio:9000
       SERVER_PORT: 8085
     depends_on:
@@ -475,6 +483,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      # Not service_healthy: P5 answers, lists jobs and serves downloads perfectly well with P4
+      # down, and only a case-scoped export fails. Waiting on P4 would turn a dependency used by
+      # one scope into a startup dependency for the whole service.
+      case-service:
+        condition: service_started
     restart: unless-stopped
 
   # P2.2 Disposition — retention policy, sweeps, and the run ledger. Reads P2's slim archive

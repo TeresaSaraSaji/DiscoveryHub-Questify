@@ -73,6 +73,19 @@ export class ExportsPage {
   protected readonly exportRows = valueOr(this.exports, [] as ExportJob[]);
   protected readonly tracked = signal<ExportJob | null>(null);
 
+  /**
+   * What is actually on the selected case, read before anyone presses the button.
+   *
+   * A case with nothing filed on it is a job that fails a few seconds later with "no evidence
+   * items", which is a poor way to learn something the UI could have said up front. Idle until a
+   * case is chosen, and P4 being unreachable only costs the count — the export itself is P5's
+   * business and still submits.
+   */
+  private readonly caseEvidence = this.casesApi.evidenceResource(this.caseId);
+  protected readonly caseEvidenceCount = computed(() =>
+    this.caseEvidence.hasValue() ? this.caseEvidence.value().length : null,
+  );
+
   protected readonly verifying = signal<string | null>(null);
   protected readonly verification = signal<VerificationResult | null>(null);
   protected readonly verifyFailure = signal<Failure | null>(null);
@@ -94,9 +107,9 @@ export class ExportsPage {
     if (this.scope() === 'messages') {
       return this.parsedMessageIds().length > 0;
     }
-    // A case export still needs a concrete scope: P5 takes messageIds or a custodianId, and a
-    // caseId alone is a label on the job, not a selection.
-    return Boolean(this.caseId() && this.custodianId().trim());
+    // A case is a scope on its own now: P5 resolves it to the case's evidence items. A custodian
+    // narrows that to one person's messages within the matter, and is optional.
+    return Boolean(this.caseId());
   });
 
   protected request(): void {
@@ -113,6 +126,8 @@ export class ExportsPage {
       .requestExport({
         caseId: this.scope() === 'case' ? this.caseId() || null : null,
         messageIds: explicit ? this.parsedMessageIds() : [],
+        // Blank rather than omitted would read as "a custodian called empty string" to a service
+        // that now treats the field as optional, so it is normalised to null here.
         custodianId: explicit ? null : this.custodianId().trim() || null,
         from: explicit ? null : toInstant(this.from()),
         to: explicit ? null : toInstant(this.to()),

@@ -36,6 +36,15 @@ public class ExportJobEntity {
     @Column(name = "item_count", nullable = false)
     private int itemCount;
 
+    /**
+     * Messages the scope named that the archive no longer held when the package was built —
+     * normally zero, and non-zero when a case names evidence retention has since destroyed. The
+     * manifest names them individually; this is the count, so the absence is visible without
+     * opening the package.
+     */
+    @Column(name = "missing_count", nullable = false)
+    private int missingCount;
+
     @Column(name = "object_key", length = 255)
     private String objectKey;
 
@@ -85,6 +94,9 @@ public class ExportJobEntity {
 
     public int getItemCount() { return itemCount; }
     public void setItemCount(int itemCount) { this.itemCount = itemCount; }
+
+    public int getMissingCount() { return missingCount; }
+    public void setMissingCount(int missingCount) { this.missingCount = missingCount; }
 
     public String getObjectKey() { return objectKey; }
     public void setObjectKey(String objectKey) { this.objectKey = objectKey; }
