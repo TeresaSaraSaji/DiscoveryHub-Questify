@@ -374,6 +374,12 @@ export interface BulkEvidenceResult {
   requested: number;
   added: number;
   alreadyPresent: number;
+  /**
+   * Matched by the search but no longer in the archive, so refused rather than filed. Non-zero
+   * means the index was still serving messages disposition had destroyed — the evidence row would
+   * have pointed at nothing.
+   */
+  notInArchive: number;
 }
 
 // ---------------------------------------------------------------- P4 legal hold
