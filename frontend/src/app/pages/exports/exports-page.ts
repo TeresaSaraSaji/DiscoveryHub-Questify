@@ -94,9 +94,9 @@ export class ExportsPage {
     if (this.scope() === 'messages') {
       return this.parsedMessageIds().length > 0;
     }
-    // A case export still needs a concrete scope: P5 takes messageIds or a custodianId, and a
-    // caseId alone is a label on the job, not a selection.
-    return Boolean(this.caseId() && this.custodianId().trim());
+    // A case is a scope on its own now: P5 resolves it to the case's evidence items. A custodian
+    // narrows that to one person's messages within the matter, and is optional.
+    return Boolean(this.caseId());
   });
 
   protected request(): void {
@@ -113,6 +113,8 @@ export class ExportsPage {
       .requestExport({
         caseId: this.scope() === 'case' ? this.caseId() || null : null,
         messageIds: explicit ? this.parsedMessageIds() : [],
+        // Blank rather than omitted would read as "a custodian called empty string" to a service
+        // that now treats the field as optional, so it is normalised to null here.
         custodianId: explicit ? null : this.custodianId().trim() || null,
         from: explicit ? null : toInstant(this.from()),
         to: explicit ? null : toInstant(this.to()),

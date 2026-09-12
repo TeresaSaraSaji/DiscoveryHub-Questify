@@ -18,7 +18,7 @@
       <label class="field field--inline">
         <span>Scope by</span>
         <select [value]="scope()" (change)="scope.set($any($event.target).value)">
-          <option value="case">Case + custodian</option>
+          <option value="case">Case evidence</option>
           <option value="custodian">Custodian</option>
           <option value="messages">Specific messages</option>
         </select>
@@ -40,14 +40,19 @@
 
       @if (scope() === 'case' || scope() === 'custodian') {
         <label class="field">
-          <span>Custodian</span>
+          <span>
+            Custodian
+            @if (scope() === 'case') {
+              <span class="dim">· optional</span>
+            }
+          </span>
           <input
             type="text"
             class="mono"
             [ngModel]="custodianId()"
             (ngModelChange)="custodianId.set($event)"
             name="custodianId"
-            placeholder="cust-004"
+            [placeholder]="scope() === 'case' ? 'all custodians' : 'cust-004'"
             autocomplete="off"
           />
         </label>
@@ -90,8 +95,19 @@
         <span class="dim">
           @if (scope() === 'messages') {
             Add at least one message id.
+          } @else if (scope() === 'case') {
+            Choose a case.
           } @else {
-            A custodian is required — a case id alone labels the job, it does not select anything.
+            A custodian is required.
+          }
+        </span>
+      }
+      @if (scope() === 'case' && caseId()) {
+        <span class="dim">
+          @if (custodianId().trim()) {
+            Exports this case's evidence from {{ custodianId().trim() }} only.
+          } @else {
+            Exports every evidence item on this case.
           }
         </span>
       }
