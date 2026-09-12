@@ -31,6 +31,7 @@ class ExportServiceTest {
 
     @Mock ExportJobRepository jobs;
     @Mock ArchiveClient archive;
+    @Mock CaseClient cases;
     @Mock PackageBuilder packageBuilder;
     @Mock ObjectStorageClient storage;
     @Mock ExportKafkaPublisher publisher;
@@ -41,12 +42,12 @@ class ExportServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ExportService(jobs, archive, packageBuilder, storage, publisher, events, json);
+        service = new ExportService(jobs, archive, cases, packageBuilder, storage, publisher, events, json);
     }
 
     @Test
     void submitRejectsARequestWithNoScope() {
-        assertThatThrownBy(() -> service.submit(new ExportRequest("case-1", List.of(), null, null, null)))
+        assertThatThrownBy(() -> service.submit(new ExportRequest(null, List.of(), null, null, null)))
                 .isInstanceOf(ResponseStatusException.class);
         verify(jobs, never()).save(any());
         verify(publisher, never()).publishJobRequested(anyString());
