@@ -37,6 +37,12 @@ discoveryhub:
       # stores nothing of its own until a package is finished.
       base-url: ${ARCHIVE_BASE_URL:http://localhost:8082}
       timeout: 10s
+    cases:
+      # P4 case-service, asked for a case's evidence items when an export is scoped by case
+      # (FR-6.1). Read at the moment the job runs, not when it was requested, so an export
+      # reflects the case as it stands when the package is built.
+      base-url: ${CASES_BASE_URL:http://localhost:8084}
+      timeout: 10s
     storage:
       endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
       access-key: ${MINIO_ACCESS_KEY:minioadmin}

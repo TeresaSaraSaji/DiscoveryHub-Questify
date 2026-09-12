@@ -1,6 +1,7 @@
 package com.discoveryhub.export;
 
 import com.discoveryhub.export.config.ArchiveClientProperties;
+import com.discoveryhub.export.config.CaseClientProperties;
 import com.discoveryhub.export.config.ObjectStorageProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -16,7 +17,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * a row once written.
  */
 @SpringBootApplication
-@EnableConfigurationProperties({ ArchiveClientProperties.class, ObjectStorageProperties.class })
+@EnableConfigurationProperties({ ArchiveClientProperties.class, CaseClientProperties.class,
+        ObjectStorageProperties.class })
 public class ExportApplication {
 
     public static void main(String[] args) {
