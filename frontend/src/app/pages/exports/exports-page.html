@@ -104,8 +104,12 @@
       }
       @if (scope() === 'case' && caseId()) {
         <span class="dim">
-          @if (custodianId().trim()) {
+          @if (caseEvidenceCount() === 0) {
+            This case has no evidence filed on it yet — file some from the Search page first.
+          } @else if (custodianId().trim()) {
             Exports this case's evidence from {{ custodianId().trim() }} only.
+          } @else if (caseEvidenceCount(); as count) {
+            Exports all {{ count | number }} evidence item{{ count === 1 ? '' : 's' }} on this case.
           } @else {
             Exports every evidence item on this case.
           }
@@ -125,6 +129,14 @@
         <dl class="pairs">
           <dt>items</dt>
           <dd>{{ job.itemCount | number }}</dd>
+          @if (job.missingCount > 0) {
+            <dt>not exported</dt>
+            <dd>
+              <span class="tag tag--warn">{{ job.missingCount | number }}</span>
+              no longer in the archive — named in the package's manifest, and each one's fate is on
+              the <a class="link" routerLink="/audit">audit trail</a>
+            </dd>
+          }
           <dt>size</dt>
           <dd>{{ sizeLabel(job.packageSizeBytes) }}</dd>
           @if (job.packageSha256) {
@@ -212,7 +224,14 @@
                 <span class="tag">{{ job.attempts }} attempts</span>
               }
             </td>
-            <td class="num">{{ job.itemCount | number }}</td>
+            <td class="num">
+              {{ job.itemCount | number }}
+              @if (job.missingCount > 0) {
+                <span class="tag tag--warn" title="named in the scope but no longer in the archive">
+                  −{{ job.missingCount }}
+                </span>
+              }
+            </td>
             <td>
               <span [class]="statusClass(job.status)">{{ job.status }}</span>
             </td>

@@ -441,6 +441,12 @@ export interface ExportJob {
   requestedScope: string;
   status: ExportStatus;
   itemCount: number;
+  /**
+   * Messages the scope named that the archive no longer held when the package was built — a case
+   * naming evidence that retention has since destroyed. Normally 0. The manifest inside the
+   * package names them individually.
+   */
+  missingCount: number;
   objectKey: string | null;
   /** SHA-256 of the .zip. What makes the package defensible. */
   packageSha256: string | null;

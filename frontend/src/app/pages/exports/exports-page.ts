@@ -73,6 +73,19 @@ export class ExportsPage {
   protected readonly exportRows = valueOr(this.exports, [] as ExportJob[]);
   protected readonly tracked = signal<ExportJob | null>(null);
 
+  /**
+   * What is actually on the selected case, read before anyone presses the button.
+   *
+   * A case with nothing filed on it is a job that fails a few seconds later with "no evidence
+   * items", which is a poor way to learn something the UI could have said up front. Idle until a
+   * case is chosen, and P4 being unreachable only costs the count — the export itself is P5's
+   * business and still submits.
+   */
+  private readonly caseEvidence = this.casesApi.evidenceResource(this.caseId);
+  protected readonly caseEvidenceCount = computed(() =>
+    this.caseEvidence.hasValue() ? this.caseEvidence.value().length : null,
+  );
+
   protected readonly verifying = signal<string | null>(null);
   protected readonly verification = signal<VerificationResult | null>(null);
   protected readonly verifyFailure = signal<Failure | null>(null);
