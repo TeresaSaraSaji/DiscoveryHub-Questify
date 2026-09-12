@@ -53,6 +53,15 @@ class ExportServiceTest {
         verify(publisher, never()).publishJobRequested(anyString());
     }
 
+    /** FR-6.1's first half: a case on its own is a scope, not just a label on the job. */
+    @Test
+    void submitAcceptsACaseWithNoCustodian() {
+        ExportJobEntity job = service.submit(new ExportRequest("case-1", List.of(), null, null, null));
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.QUEUED);
+        verify(publisher).publishJobRequested(job.getJobId());
+    }
+
     @Test
     void submitPersistsAQueuedJobAndPublishesTheWakeUp() {
         ExportRequest request = new ExportRequest("case-1", List.of("m-1", "m-2"), null, null, null);
@@ -81,6 +90,59 @@ class ExportServiceTest {
         assertThat(job.getPackageSha256()).isEqualTo("deadbeef");
         assertThat(job.getItemCount()).isEqualTo(3);
         verify(publisher).publishAudit(any());
+    }
+
+    /** A case with nothing else packages exactly what P4 says is on it. */
+    @Test
+    void processPackagesEveryEvidenceItemOfACase() throws Exception {
+        ExportJobEntity job = queuedJob("job-c1", new ExportRequest("case-1", List.of(), null, null, null));
+        when(jobs.findById("job-c1")).thenReturn(Optional.of(job));
+        when(cases.evidenceMessageIds("case-1")).thenReturn(List.of("m-1", "m-2", "m-3"));
+        when(packageBuilder.build(eq("job-c1"), any(), eq(List.of("m-1", "m-2", "m-3"))))
+                .thenReturn(new PackageResult("zip".getBytes(), "sha", 3, 0));
+
+        service.process("job-c1");
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.COMPLETED);
+        // The archive is never asked to resolve a scope: P4 already named the messages.
+        verify(archive, never()).resolveCustodianScope(anyString(), any(), any());
+    }
+
+    /**
+     * A custodian narrows a case rather than replacing it — the difference between "this
+     * custodian's evidence in this matter" and "everything this custodian ever sent".
+     */
+    @Test
+    void processNarrowsACaseToOneCustodian() throws Exception {
+        ExportJobEntity job = queuedJob("job-c2",
+                new ExportRequest("case-1", List.of(), "cust-7", null, null));
+        when(jobs.findById("job-c2")).thenReturn(Optional.of(job));
+        when(cases.evidenceMessageIds("case-1")).thenReturn(List.of("m-1", "m-2", "m-3"));
+        // m-2 belongs to someone else; m-9 is the custodian's but was never filed on the case.
+        when(archive.resolveCustodianScope("cust-7", null, null)).thenReturn(List.of("m-1", "m-3", "m-9"));
+        when(packageBuilder.build(eq("job-c2"), any(), eq(List.of("m-1", "m-3"))))
+                .thenReturn(new PackageResult("zip".getBytes(), "sha", 2, 0));
+
+        service.process("job-c2");
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.COMPLETED);
+        assertThat(job.getItemCount()).isEqualTo(2);
+    }
+
+    /** A case whose evidence is all outside the date range has nothing to package, and says so. */
+    @Test
+    void processFailsACaseExportThatFiltersDownToNothing() throws Exception {
+        ExportJobEntity job = queuedJob("job-c3",
+                new ExportRequest("case-1", List.of(), "cust-7", null, null));
+        when(jobs.findById("job-c3")).thenReturn(Optional.of(job));
+        when(cases.evidenceMessageIds("case-1")).thenReturn(List.of("m-1"));
+        when(archive.resolveCustodianScope("cust-7", null, null)).thenReturn(List.of("m-9"));
+
+        service.process("job-c3");
+
+        assertThat(job.getStatus()).isEqualTo(ExportStatus.FAILED);
+        assertThat(job.getError()).contains("zero messages");
+        verify(packageBuilder, never()).build(anyString(), any(), any());
     }
 
     @Test
