@@ -44,6 +44,7 @@ ENV KAFKA_BOOTSTRAP=kafka:19092 \
     DB_URL=jdbc:postgresql://postgres-audit:5432/audit \
     ARCHIVE_BASE_URL=http://storage-service:8082 \
     MINIO_ENDPOINT=http://minio:9000 \
+    MINIO_PUBLIC_ENDPOINT=http://localhost:9000 \
     MINIO_ACCESS_KEY=minioadmin \
     MINIO_SECRET_KEY=minioadmin \
     SERVER_PORT=8085 \

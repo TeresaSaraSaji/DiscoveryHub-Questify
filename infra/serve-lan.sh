@@ -48,6 +48,13 @@ fi
 # whole of the CORS change: no rebuild, no edit to any CorsConfig.
 export DISCOVERYHUB_WEB_CORS_ALLOWED_ORIGINS="http://localhost:[*],http://127.0.0.1:[*],http://${HOST_IP}:[*]"
 
+# P5 signs the export download link for the host that will fetch it, and that is the visitor's
+# browser, not this machine. Left at its default the link says "localhost:9000", which resolves
+# on the visitor's own laptop and fails there. The signature covers the host header, so the link
+# cannot be repaired client-side — it has to be signed for this address in the first place.
+# MinIO itself needs no change: the container already publishes 9000 on every interface.
+export MINIO_PUBLIC_ENDPOINT="${MINIO_PUBLIC_ENDPOINT:-http://${HOST_IP}:9000}"
+
 # Checked here rather than at the end: node is usually on PATH through nvm, which a non-login
 # shell does not source, and finding that out after seven services have started is a waste.
 if ! command -v npx >/dev/null 2>&1; then
@@ -90,6 +97,8 @@ cat <<EOF
 Share this with the team:
 
     http://${HOST_IP}:4200
+
+Export downloads are signed for http://${HOST_IP}:9000 — override with MINIO_PUBLIC_ENDPOINT.
 
 Service logs are in /tmp/dh-logs. Ctrl-C stops the services and the UI.
 

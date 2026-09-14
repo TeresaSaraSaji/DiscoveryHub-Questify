@@ -45,6 +45,16 @@ discoveryhub:
       timeout: 10s
     storage:
       endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+      # Where a *browser* reaches MinIO, for the presigned download link. Blank means "same as
+      # endpoint", which is right when this service runs from a jar. In Docker it is not: the
+      # service talks to minio:9000 while the browser needs localhost:9000, and the signature
+      # covers the host, so the link has to be signed for the host that will request it.
+      # On a LAN-shared stack set this to the host's address, as with the CORS origins.
+      public-endpoint: ${MINIO_PUBLIC_ENDPOINT:}
+      # Pinned so presigning stays a local computation. Left unset, the SDK calls
+      # GetBucketLocation on the public endpoint before signing — which this process may well
+      # not be able to reach. MinIO's own default is us-east-1.
+      region: ${MINIO_REGION:us-east-1}
       access-key: ${MINIO_ACCESS_KEY:minioadmin}
       secret-key: ${MINIO_SECRET_KEY:minioadmin}
       staging-bucket: export-staging

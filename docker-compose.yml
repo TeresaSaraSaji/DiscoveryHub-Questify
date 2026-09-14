@@ -475,6 +475,11 @@ services:
       # service — an export by explicit ids or by custodian does not touch P4 at all.
       CASES_BASE_URL: http://case-service:8084
       MINIO_ENDPOINT: http://minio:9000
+      # The presigned download link is handed to a browser, which is not on this network and
+      # cannot resolve "minio". Signing commits to the host, so the link must be minted for the
+      # host that will fetch it — rewriting it client-side gives SignatureDoesNotMatch. Override
+      # with the machine's LAN address when serving the stack to other people.
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:9000}
       SERVER_PORT: 8085
     depends_on:
       kafka:

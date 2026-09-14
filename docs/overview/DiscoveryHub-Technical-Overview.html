@@ -1,0 +1,364 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>DiscoveryHub — An eDiscovery platform — complete technical walkthrough</title>
+<style>
+@page { size: A4; margin: 16mm 15mm 18mm 15mm; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 10.2pt; line-height: 1.5; color: #1a1d21; margin: 0;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
+/* cover */
+.cover { height: 247mm; display: flex; flex-direction: column; justify-content: center;
+         page-break-after: always; border-left: 5px solid #1f4e79; padding-left: 14mm; }
+.cover h1 { font-size: 40pt; margin: 0; letter-spacing: -1.2px; color: #14304a; }
+.cover .sub { font-size: 15pt; color: #37506a; margin-top: 10px; font-weight: 500; }
+.cover .by  { font-size: 10.5pt; color: #667a8c; margin-top: 26px; }
+.cover .rule { width: 70px; border-top: 3px solid #c9a227; margin: 26px 0; }
+.cover .meta { font-size: 9pt; color: #8a97a3; margin-top: 40px; line-height: 1.8; }
+
+/* contents */
+.toc { page-break-after: always; }
+.toc h2 { font-size: 19pt; color: #14304a; margin: 0 0 16px; }
+.toc ol { padding-left: 22px; }
+.toc li { margin: 5px 0; font-size: 10.5pt; }
+.toc a { color: #1f4e79; text-decoration: none; }
+
+/* sections */
+section { page-break-before: always; }
+h2 { font-size: 17pt; color: #14304a; margin: 0 0 4px; letter-spacing: -0.3px;
+     border-bottom: 2px solid #c9a227; padding-bottom: 7px; }
+.num { color: #a8b4bf; font-weight: 600; margin-right: 9px; }
+p { margin: 9px 0; }
+.lede { font-size: 11.6pt; color: #2c3e50; font-weight: 500; line-height: 1.45;
+        border-left: 3px solid #c9d4de; padding-left: 12px; margin: 12px 0 14px; }
+ul { margin: 9px 0; padding-left: 19px; }
+li { margin: 5px 0; }
+strong { color: #14304a; }
+code { background: #f1f4f7; padding: 1px 4px; border-radius: 3px; font-size: 8.9pt;
+       color: #9c2c4e; }
+
+pre.code { background: #17222e; color: #dbe6f0; padding: 11px 13px; border-radius: 5px;
+           font-size: 8.5pt; line-height: 1.45; overflow: hidden; white-space: pre;
+           page-break-inside: avoid; }
+pre.diagram { background: #f7f9fb; border: 1px solid #dde5ec; color: #2c3e50;
+              padding: 11px; border-radius: 5px; font-size: 8pt; line-height: 1.3;
+              white-space: pre; page-break-inside: avoid; }
+
+table { border-collapse: collapse; width: 100%; margin: 11px 0; font-size: 9pt;
+        page-break-inside: avoid; }
+th { background: #1f4e79; color: #fff; text-align: left; padding: 6px 8px;
+     font-weight: 600; font-size: 8.8pt; }
+td { border-bottom: 1px solid #e3e9ee; padding: 6px 8px; vertical-align: top; }
+tr:nth-child(even) td { background: #f8fafc; }
+table.grid td { border-bottom: 1px solid #e3e9ee; }
+table.grid td:nth-child(odd) { color: #5a6b7b; width: 22%; }
+table.grid td:nth-child(even) { font-weight: 600; color: #14304a; width: 28%; }
+
+.note { background: #fffaf0; border-left: 4px solid #c9a227; padding: 9px 12px;
+        margin: 12px 0; font-size: 9.6pt; page-break-inside: avoid; }
+.note strong { color: #7a5c00; }
+</style></head><body>
+<div class='cover'>
+<h1>DiscoveryHub</h1>
+<div class='rule'></div>
+<div class='sub'>An eDiscovery platform — complete technical walkthrough</div>
+<div class='by'>Team Questify · 7 services, 10 datastores, 9 Kafka topics</div>
+<div class='meta'>Verified against the code and a running stack.<br>Where a document in the repository disagrees with the code, the code won and the disagreement is called out.</div>
+</div>
+<div class='toc'><h2>Contents</h2><ol>
+<li><a href="#problem">The problem: what eDiscovery actually is</a></li>
+<li><a href="#lifecycle">The lifecycle the system models</a></li>
+<li><a href="#architecture">Architecture at a glance</a></li>
+<li><a href="#numbers">The system by the numbers</a></li>
+<li><a href="#contract">The shared contract: the message schema</a></li>
+<li><a href="#identifiers">Two identifiers, and why dedupe is subtle</a></li>
+<li><a href="#p1">P1 — Ingestion  :8081</a></li>
+<li><a href="#p2">P2 — Storage / Archive  :8082</a></li>
+<li><a href="#p3">P3 — Search  :8083</a></li>
+<li><a href="#p4">P4 — Case  :8084  and  Hold  :8086</a></li>
+<li><a href="#holds">Legal hold: five guards between a candidate and deletion</a></li>
+<li><a href="#p22">P2.2 — Retention and Disposition  :8087</a></li>
+<li><a href="#p22-api">P2.2 — API and watching a sweep</a></li>
+<li><a href="#p5">P5 — Evidence Export and Chain of Custody  :8085</a></li>
+<li><a href="#topics">Kafka: the nine topics and what flows over them</a></li>
+<li><a href="#data">Datastores and who owns them</a></li>
+<li><a href="#frontend">The frontend: designed around services being down</a></li>
+<li><a href="#corpus">The corpus, and the traps it plants on purpose</a></li>
+<li><a href="#running">Running it — two modes, and when to use each</a></li>
+<li><a href="#sharing">Sharing one stack — and the delete button you are sharing with it</a></li>
+<li><a href="#traps">Traps that have already cost real time</a></li>
+<li><a href="#testing">Testing and verification</a></li>
+<li><a href="#state">Current state of your running stack</a></li>
+<li><a href="#demo">A demo script that exercises the whole system</a></li>
+<li><a href="#closing">Design decisions worth defending</a></li>
+</ol></div>
+<section id="problem">
+<h2><span class='num'>01</span>The problem: what eDiscovery actually is</h2>
+<p class="lede">When an organisation is sued or investigated, it must produce its own internal communications as evidence. DiscoveryHub is the system that makes that possible, and — just as importantly — provable.</p>
+<p>The hard part is not storing email. It is that four obligations pull against each other, and the system has to satisfy all of them at once:</p>
+<table class=""><thead><tr><th>Obligation</th><th>What it demands</th><th>What it fights with</th></tr></thead><tbody><tr><td>Preservation</td><td>Once litigation is foreseeable, relevant messages must not be destroyed</td><td>Retention — which exists to destroy data on a schedule</td></tr><tr><td>Retention</td><td>Data past its legal retention period must be disposed of</td><td>Preservation — a hold freezes the clock</td></tr><tr><td>Production</td><td>Hand the other side a complete, unaltered evidence set</td><td>Volume — 12,000 messages is a small matter</td></tr><tr><td>Defensibility</td><td>Prove what you did, when, and who did it</td><td>Everything — every action has to leave a record</td></tr></tbody></table>
+<p>The consequence of getting this wrong is not a bug report. Destroying evidence under a legal hold is spoliation: sanctions, adverse inference instructions, in some jurisdictions criminal exposure. That is why so much of this system&#x27;s design is about refusing to act when it is not certain.</p>
+<div class="note">The single design rule that explains most of the codebase: when the system cannot verify whether a message is protected, it treats the message as protected. Every hold path fails closed. Over-preserving costs storage; under-preserving costs the case.</div>
+</section>
+<section id="lifecycle">
+<h2><span class='num'>02</span>The lifecycle the system models</h2>
+<p>Every service exists to serve one step of a single end-to-end flow. This is the demo script, and it is also the architecture:</p>
+<pre class="diagram">  generate  ──▶  ingest  ──▶  archive  ──▶  index
+  (corpus)       (P1)         (P2)          (P3)
+                                              │
+                                           search
+                                              │
+                                              ▼
+                                      create a case  (P4 case)
+                                              │
+                                     place a legal hold  (P4 hold)
+                                              │
+                            ┌─────────────────┴─────────────────┐
+                            ▼                                   ▼
+                  deletion is refused                  export a package
+                      (P2, P2.2)                            (P5)
+                            │                                   │
+                            └────────────┬──────────────────────┘
+                                         ▼
+                             verify checksums · audit trail
+                                        (P5)</pre>
+<table class=""><thead><tr><th>Step</th><th>Service</th><th>Port</th><th>Requirement</th></tr></thead><tbody><tr><td>Accept communications, dedupe, publish</td><td>P1 ingestion-service</td><td>8081</td><td>FR-1</td></tr><tr><td>Store durably — system of record</td><td>P2 storage-service</td><td>8082</td><td>FR-1, FR-4.6</td></tr><tr><td>Index and full-text search</td><td>P3 search-service</td><td>8083</td><td>FR-3</td></tr><tr><td>Case lifecycle, custodians, evidence</td><td>P4 case-service</td><td>8084</td><td>FR-2</td></tr><tr><td>Legal hold, scope resolution</td><td>P4 hold-service</td><td>8086</td><td>FR-4</td></tr><tr><td>Evidence export + chain of custody</td><td>P5 export-service</td><td>8085</td><td>FR-6, FR-7</td></tr><tr><td>Retention and disposition</td><td>P2.2 disposition-service</td><td>8087</td><td>FR-5</td></tr><tr><td>Operator UI</td><td>frontend (Angular)</td><td>4200</td><td>FR-8</td></tr></tbody></table>
+</section>
+<section id="architecture">
+<h2><span class='num'>03</span>Architecture at a glance</h2>
+<p class="lede">Seven Spring Boot services, each owning its own datastore, coordinating over Kafka for anything asynchronous and HTTP for anything that must be answered now.</p>
+<pre class="diagram">                             ┌──────────────────────────┐
+                             │   Angular UI  :4200      │
+                             └────────────┬─────────────┘
+         ┌──────────┬──────────┬──────────┼──────────┬──────────┬──────────┐
+         ▼          ▼          ▼          ▼          ▼          ▼          ▼
+      ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐
+      │ P1  │    │ P2  │    │ P3  │    │ P4c │    │ P4h │    │ P5  │    │P2.2 │
+      │8081 │    │8082 │    │8083 │    │8084 │    │8086 │    │8085 │    │8087 │
+      └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘    └──┬──┘
+         │          │          │          │          │          │          │
+      Redis      Mongo       Elastic   Postgres   Postgres   Postgres   Postgres
+      Postgres   Postgres    search     cases      holds      audit    disposition
+      ingestion  archive-                                     + MinIO
+                 meta
+         │          │          │          │          │          │          │
+         └──────────┴──────────┴────┬─────┴──────────┴──────────┴──────────┘
+                                    ▼
+                      Kafka — 9 topics, auto-create OFF</pre>
+<ul><li><strong>Stateless at the edge.</strong> P1 accepts and publishes but never stores. FR-1.4 requires that the component accepting messages is not the component storing them, so an archive outage queues in Kafka instead of losing data.</li><li><strong>One datastore, one owner (NFR-1).</strong> Six separate PostgreSQL <em>containers</em>, not six schemas in one database. No connection string lets one service read another&#x27;s tables.</li><li><strong>Async where it can be, sync where it must be.</strong> Ingest, indexing, hold fan-out, disposition and export all flow over Kafka. The hold check before a deletion is a synchronous HTTP call, because a stale answer there destroys evidence.</li><li><strong>The contracts module is a library, not a service.</strong> It sits outside <code>services/</code> deliberately — every service compiles against it and nothing deploys it.</li></ul>
+</section>
+<section id="numbers">
+<h2><span class='num'>04</span>The system by the numbers</h2>
+<table class="grid"><tbody><tr><td>Java modules</td><td>9 + parent</td><td>Java source</td><td>~17,300 lines</td></tr><tr><td>Java tests</td><td>515 @Test in 61 files</td><td>Frontend source</td><td>~4,400 lines TS</td></tr><tr><td>Frontend spec files</td><td>8</td><td>Kafka topics</td><td>9</td></tr><tr><td>PostgreSQL instances</td><td>6</td><td>Other datastores</td><td>Mongo, Elasticsearch, Redis, MinIO</td></tr><tr><td>Flyway migrations</td><td>16 across 6 services</td><td>REST controllers</td><td>13</td></tr><tr><td>Corpus messages</td><td>12,000 (+25 re-sends)</td><td>Custodians</td><td>24</td></tr></tbody></table>
+<p>Corpus composition, from <code>fixtures/manifest.json</code> and reproducible with <code>--stats</code>:</p>
+<table class=""><thead><tr><th>Property</th><th>Value</th><th>Why it is that value</th></tr></thead><tbody><tr><td>Unique messages</td><td>12,000</td><td>FR-1.2 floor is 10,000</td></tr><tr><td>Deliberate re-sends</td><td>25</td><td>So a healthy load sends 12,025 and stores 12,000 — FR-1.6 visible</td></tr><tr><td>Custodians</td><td>24, 337–879 messages each</td><td>FR-1.2 floor is 20</td></tr><tr><td>Email / chat</td><td>7,199 / 4,801 (60/40)</td><td>Steered per thread, not sampled — chat threads run longer</td></tr><tr><td>With attachments</td><td>1,304 (10.87%)</td><td>FR-1.3 floor is 5%; real bytes with real SHA-256</td></tr><tr><td>Distinct threads</td><td>2,880</td><td>Type is constant within a thread</td></tr><tr><td>Date range</td><td>2017-01-03 → 2026-09-04</td><td>Spans the retention cutoffs on purpose</td></tr><tr><td>Past 7-year retention</td><td>2,115</td><td>So disposition has something to delete</td></tr><tr><td>Privileged messages</td><td>5</td><td>So the search filter has something real to exclude</td></tr></tbody></table>
+<div class="note">The generator is deterministic: output is a pure function of <code>--seed</code>, <code>--count</code>, <code>--custodians</code> and <code>--duplicates</code>. <code>messages.ndjson</code> must hash to <code>8e35f5b9…31493a</code>. That is what lets a demo script reference a specific message and still work on somebody else&#x27;s laptop.</div>
+</section>
+<section id="contract">
+<h2><span class='num'>05</span>The shared contract: the message schema</h2>
+<p class="lede">One frozen wire format, defined once in <code>contracts/Message.java</code>, read by P1, P2, P3 and P5. Renaming or retyping a field is a breaking change needing every owner&#x27;s agreement.</p>
+<table class=""><thead><tr><th>Field</th><th>Type</th><th>Req</th><th>Notes</th></tr></thead><tbody><tr><td>messageId</td><td>UUID</td><td>yes</td><td>Ours. Derived from externalId, never random</td></tr><tr><td>externalId</td><td>string</td><td>yes</td><td>Source system&#x27;s id. <strong>The idempotency key</strong></td></tr><tr><td>source</td><td>string</td><td>yes</td><td>EXCHANGE, TEAMS</td></tr><tr><td>type</td><td>enum</td><td>yes</td><td>EMAIL | CHAT</td></tr><tr><td>custodianId</td><td>string</td><td>yes</td><td>Owner of the mailbox this copy came from — <em>not</em> the sender</td></tr><tr><td>from / to / cc</td><td>string / string[]</td><td>yes</td><td>Arrays always present, possibly []</td></tr><tr><td>subject</td><td>string</td><td>no</td><td>Absent on CHAT</td></tr><tr><td>body</td><td>string</td><td>yes</td><td>Plain text; replies may quote history</td></tr><tr><td>sentAt</td><td>ISO-8601 UTC</td><td>yes</td><td>Drives every retention decision</td></tr><tr><td>threadId / inReplyTo</td><td>UUID</td><td>yes / no</td><td>Conversation grouping; inReplyTo absent on openers</td></tr><tr><td>attachments</td><td>Attachment[]</td><td>yes</td><td>May be empty</td></tr><tr><td>labels</td><td>string[]</td><td>yes</td><td>PRIVILEGED, SENSITIVE</td></tr></tbody></table>
+<ul><li><strong>Absent and empty are different on the wire.</strong> Optional fields are omitted entirely rather than sent as <code>null</code>; array fields are always present.</li><li><strong><code>contentBase64</code> is ingestion-path only.</strong> Once P2 has the bytes it is dropped, and from then on <code>sha256</code> is what everything downstream reasons about. It must never appear in search results, in P2&#x27;s read API, or in an audit event.</li><li><strong>Attachment filenames are untrusted.</strong> Not unique, not sanitised — treat as hostile when building export paths.</li></ul>
+</section>
+<section id="identifiers">
+<h2><span class='num'>06</span>Two identifiers, and why dedupe is subtle</h2>
+<p><code>externalId</code> is the source system&#x27;s key and the only thing dedupe operates on. <code>messageId</code> is ours, and it is what cases, holds, search hits, export manifests and audit records all reference. It is derived, never generated:</p>
+<pre class="code">messageId = UUID.nameUUIDFromBytes(&quot;message:&quot; + externalId)   // Ids.messageId()</pre>
+<p>Two independent keys can each make a message a duplicate. Either way it is dropped, the drop is an audit event, and the API returns 2xx — a source system re-sending is normal operation, not a client fault.</p>
+<table class=""><thead><tr><th>Key</th><th>Catches</th><th>Enforced where</th></tr></thead><tbody><tr><td>externalId</td><td>The same record submitted twice</td><td>Redis SETNX in P1 (fast path); UNIQUE constraint in P2 (guarantee)</td></tr><tr><td>contentHash</td><td>The same message under a <em>different</em> source key — a re-export, a re-crawl, two connectors on one mailbox</td><td>ContentHash.of() in contracts, called by both P1 and P2</td></tr></tbody></table>
+<p>The fingerprint covers custodianId, source, type, from, to, cc, subject, body, sentAt, threadId, inReplyTo and each attachment&#x27;s filename, size and sha256. Fields are length-prefixed so content cannot forge a field boundary. It excludes the two identifiers, and it excludes <code>labels</code> because classification is mutable.</p>
+<div class="note"><strong><code>custodianId</code> is inside the fingerprint, and that is the whole design.</strong> The same conversation captured from two mailboxes is <em>not</em> a duplicate: two externalIds, two messageIds, identical body. Both must be kept, because a hold on one custodian has to preserve their copy independently of the other&#x27;s. Hashing content alone would collapse them and silently destroy evidence. The corpus plants this case on the narrative&#x27;s smoking-gun message specifically so a naive dedupe breaks loudly.</div>
+<table class=""><thead><tr><th>Scenario</th><th>Outcome</th></tr></thead><tbody><tr><td>Same content, same mailbox, different externalId</td><td>Duplicate — dropped</td></tr><tr><td>Same content, <strong>different mailbox</strong></td><td>Two records — both kept</td></tr></tbody></table>
+</section>
+<section id="p1">
+<h2><span class='num'>07</span>P1 — Ingestion  :8081</h2>
+<p class="lede">Accepts communications, validates them, dedupes them, publishes them. It does not store them.</p>
+<table class=""><thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead><tbody><tr><td>POST /messages</td><td>JSON array batch. Not atomic — per-item outcomes</td></tr><tr><td>POST /messages/upload</td><td>multipart; JSON array or NDJSON</td></tr><tr><td>POST /messages/upload?async=true</td><td>202 with a job id, for large files</td></tr><tr><td>GET /messages/uploads/{jobId}</td><td>Poll an async upload</td></tr><tr><td>GET /messages/{externalId}/status</td><td>Has this id been ingested?</td></tr><tr><td>GET /messages/stats</td><td>Counts since this instance started</td></tr></tbody></table>
+<table class=""><thead><tr><th>Outcome</th><th>Meaning</th><th>HTTP</th></tr></thead><tbody><tr><td>ACCEPTED</td><td>Published to messages.ingested</td><td>200</td></tr><tr><td>DUPLICATE</td><td>externalId already seen. Dropped, audited, <strong>not an error</strong></td><td>200</td></tr><tr><td>REJECTED</td><td>Failed validation, with a reason</td><td>200</td></tr><tr><td>FAILED</td><td>Infrastructure failure; retry the message</td><td>503</td></tr></tbody></table>
+<ul><li><strong>A batch is not atomic.</strong> A duplicate in the middle of a batch must not reject the other 199. Even an element Jackson cannot decode becomes one REJECTED with the offending field named, and its externalId is recovered from the raw JSON so a loader knows what to fix.</li><li><strong>Dedupe is claim-then-publish.</strong> If publishing fails after a claim, the claim is <em>released</em> — otherwise a transient broker error would mark the id as seen and silently swallow the retry.</li><li><strong>Redis fails open.</strong> P1 still starts without Redis, health still reports UP, and duplicates pass through to be caught by P2&#x27;s unique constraint. Slower dedupe beats refused traffic.</li><li><strong>Attachments are verified at the boundary.</strong> sha256 is recomputed from contentBase64 and sizeBytes checked against the decoded length. Trusting the client&#x27;s hash would surface much later as a failed export verification.</li><li><strong>Size caps are refused whole, with 413.</strong> Over <code>max-batch-size</code> (1000) or <code>max-request-bytes</code> (16 MB). A client given a partial result cannot tell which messages were dropped. The body cap counts bytes when there is no Content-Length, because a chunked request declares none and a cap that only reads the header is no cap at all.</li></ul>
+<div class="note"><strong>Point probes at <code>/actuator/health/readiness</code>, not <code>/actuator/health</code>.</strong> Only Kafka can make P1 unready — publishing blocks on the broker ack before the API says ACCEPTED. Redis deliberately cannot: the dedupe store fails open, so its indicator stays UP and reports <code>dedupe: degraded</code>. Boot&#x27;s stock Redis contributor is disabled because it does the opposite, and a probe reading it would evict the very instance that failing open exists to keep serving.</div>
+<table class=""><thead><tr><th>Measured against the full corpus</th><th></th></tr></thead><tbody><tr><td>Accepted / deduped / rejected / failed</td><td>12,000 / 25 / 0 / 0</td></tr><tr><td>Throughput</td><td>~151 msg/s (80 s for the full load)</td></tr><tr><td>Second identical load</td><td>0 new messages published; 12,025 deduped in 1.9 s</td></tr></tbody></table>
+<p>That 80 s → 1.9 s gap locates the bottleneck precisely: <code>publishIngested</code> blocks on the broker ack for every message, and the dedupe short-circuit skips it entirely. Batching the sends is the obvious optimisation, and it does not matter yet.</p>
+</section>
+<section id="p2">
+<h2><span class='num'>08</span>P2 — Storage / Archive  :8082</h2>
+<p class="lede">The system of record. Consumes ingested messages, stores them durably, and enforces the legal-hold guard on every path that deletes anything.</p>
+<table class=""><thead><tr><th>What</th><th>Where</th><th>Why there</th></tr></thead><tbody><tr><td>Message content — headers, body, labels, thread, attachments <em>including bytes</em></td><td>MongoDB, one document per message</td><td>Write-once, never updated</td></tr><tr><td>Hold state + retention bookkeeping — on_hold, hold_count, retention_override_at</td><td>PostgreSQL, one slim row per message</td><td>Changes on every hold; queried by every sweep</td></tr></tbody></table>
+<p>The split is deliberate. Keeping hold state out of the Mongo document means a hold update never has to touch — or race with — the message content, and the slim Postgres row keeps the disposition candidate query cheap regardless of message size.</p>
+<ul><li><strong>Mongo document first, Postgres row second, on write.</strong> <code>save</code> keyed by messageId is an idempotent upsert, so losing a race on <code>UNIQUE(external_id)</code> afterwards leaves nothing incorrect behind. The other order risks a hold-status row claiming a message no document backs.</li><li><strong>Postgres row first, Mongo document second, on delete.</strong> The row goes inside the transaction and the document after; if the Mongo delete throws, the transaction rolls back and the row returns. The two stores are never left disagreeing about whether a message exists.</li><li><strong><code>findByIdForUpdate</code>, not <code>findById</code>.</strong> Without the row lock, a concurrent hold event could land between the P4 check returning &#x27;not held&#x27; and the delete that follows.</li><li><strong>No update endpoint, by design.</strong> An archived message is write-once.</li></ul>
+<p>Resiliency — an outage must not lose messages (NFR-2):</p>
+<ul><li><code>ack-mode: record</code> — an offset is committed only after its listener returns normally.</li><li>A <code>DefaultErrorHandler</code> with <strong>unbounded</strong> fixed backoff (retry every 3 s, forever). A transient failure parks the consumer on the failing record rather than skipping ahead, so retained records are processed in order once the service is healthy.</li><li>Expected &#x27;bad&#x27; records never reach the error handler: malformed JSON is logged and skipped, and a <code>DataIntegrityViolationException</code> from the unique constraint is recorded as a dedupe — the idempotency guarantee working, not a failure.</li></ul>
+<div class="note"><strong>The Mongo config prefix is <code>spring.mongodb</code>, not <code>spring.data.mongodb</code>.</strong> Boot 4.1 renamed it. The old prefix still parses as valid YAML, shows up in <code>/actuator/env</code>, starts clean and connects — and every write silently lands in the driver&#x27;s fallback <code>test</code> database instead of the configured one.</div>
+<div class="note"><strong>Never delete from one store by hand.</strong> <code>DELETE FROM message_hold_status</code> in psql leaves the Mongo document, so the archive still serves content the sweep no longer knows about. Every deletion must go through <code>MessageDeletionService</code> or <code>DispositionCommandListener</code> — the only two places that keep the stores in step and the only two that enforce the hold guard.</div>
+</section>
+<section id="p3">
+<h2><span class='num'>09</span>P3 — Search  :8083</h2>
+<p class="lede">Consumes <code>messages.archived</code>, indexes into Elasticsearch, and serves the query surface the investigator actually works in.</p>
+<table class=""><thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead><tbody><tr><td>GET /search · POST /search</td><td>Query. Criteria: q, custodianIds, type, from, labels, sentAfter, sentBefore, hasAttachment, onHold</td></tr><tr><td>GET /search/history · DELETE /search/history</td><td>Executed searches, newest first</td></tr><tr><td>POST /search/saved · GET /search/saved · GET,DELETE /search/saved/{id}</td><td>Saved searches</td></tr><tr><td>POST /search/saved/{id}/run</td><td>Re-run a saved search</td></tr><tr><td>POST /search/add-to-case · POST /search/add-selected-to-case</td><td>File results as evidence (via Kafka to P4)</td></tr></tbody></table>
+<ul><li><strong>A criterion-less query is a 400, not everything.</strong> The index holds the whole corpus; a screen that opens with 12,000 messages has answered a question nobody asked and buried the one you came to ask.</li><li><strong>History is a side effect of searching, not a POST.</strong> P3 writes to its own <code>search-history</code> index when a search executes — first pages only, since paging is the same question again. There is no write endpoint, so a client cannot invent history it never executed.</li><li><strong>Filing to a case is eventually consistent.</strong> <code>add-to-case</code> publishes an event that case-service consumes; the response counts what was collected, not what has been written. The UI says &#x27;queued&#x27; rather than implying otherwise.</li></ul>
+<div class="note"><strong>Elasticsearch is pinned to 9.4.x</strong> to match the client Spring Boot 4.1.1 ships. The client enforces a server version check, so an 8.x server rejects it outright.</div>
+</section>
+<section id="p4">
+<h2><span class='num'>10</span>P4 — Case  :8084  and  Hold  :8086</h2>
+<p class="lede">P4 is two deployables, not one. Case and hold are separate bounded contexts with separate databases, coordinating over <code>cases.events</code> and one synchronous endpoint.</p>
+<table class=""><thead><tr><th>case-service :8084</th><th>hold-service :8086</th></tr></thead><tbody><tr><td>POST/GET /cases, GET/PATCH /cases/{id}</td><td>POST /holds, GET /holds/{id}</td></tr><tr><td>POST /cases/{id}/transitions</td><td>POST /holds/{id}/release</td></tr><tr><td>GET/POST /cases/{id}/custodians</td><td>GET /holds/check?messageId= — the guard P2 calls</td></tr><tr><td>GET/POST /cases/{id}/evidence, POST .../evidence/batch</td><td>GET /holds/covering?messageId=</td></tr><tr><td>DELETE /cases/{id}/evidence/{messageId}</td><td>GET /holds/active — holds as <em>scope</em></td></tr><tr><td>POST /cases/evidence/lookup, GET /cases/stats</td><td>POST /holds/evidence-check, GET /holds/stats</td></tr></tbody></table>
+<p>The split is why the UI shows two badges rather than one &#x27;P4&#x27;. A case list that loads while every hold check fails is a real state, and one badge could not express it. Closing a case publishes to <code>cases.events</code>; hold-service consumes it and releases that case&#x27;s holds.</p>
+<p><strong>Overlapping holds — the part that is easy to get wrong.</strong></p>
+<p>Two holds routinely cover the same message: &#x27;Rahul&#x27;s mailbox&#x27; and &#x27;the Phoenix investigation&#x27; are different scopes on different cases that overlap on whatever Rahul sent about Phoenix. Releasing one does not unprotect the message; only the last release does. P4 owns that decision in one place, <code>HoldReleasePlan</code>: a release publishes <code>held=false</code> only for messages no other ACTIVE hold covers, and the <code>hold.released</code> audit records both <code>unprotectedMessages</code> and <code>stillHeldMessages</code>.</p>
+<ul><li><strong><code>held=false</code> is state, not a decrement.</strong> P2&#x27;s mirror sets <code>on_hold = false, hold_count = 0</code> outright, because P4 has already established nothing else covers the message. A decrementing mirror would never reach zero for a message that was ever held twice — it would sit at 1, permanently on hold, permanently exempt from retention.</li><li><strong><code>GET /holds/check</code> was always right about overlap.</strong> It joins coverage to ACTIVE holds, so it refused deletes even while the published events were wrong. That is why the bug was survivable — and why it was invisible: nothing was ever deleted, the flags were just quietly wrong.</li><li><strong><code>GET /holds/covering</code> answers the question that follows.</strong> An investigator who releases their hold and finds the message still held wants to know <em>which</em> hold is responsible.</li></ul>
+<div class="note"><strong>A new hold protects nothing yet.</strong> <code>POST /holds</code> returns 202 and a <code>RESOLVING</code> hold; a worker expands the scope over <code>holds.commands</code> and flips it to ACTIVE with a messageCount. FR-4.3 requires this propagation to be asynchronous — which is precisely what creates the window that disposition guard 2 exists to close.</div>
+</section>
+<section id="holds">
+<h2><span class='num'>11</span>Legal hold: five guards between a candidate and deletion</h2>
+<p class="lede">They are redundant on purpose. Each catches something the others structurally cannot.</p>
+<table class=""><thead><tr><th>#</th><th>Guard</th><th>Where</th><th>Catches</th></tr></thead><tbody><tr><td>1</td><td><code>on_hold</code> flag</td><td>P2&#x27;s row, mirrored from holds.events</td><td>Almost everything, for free</td></tr><tr><td>2</td><td><strong>Active hold scope</strong></td><td>GET /holds/active — once per run</td><td>A hold on a case P4 has not yet expanded to messages</td></tr><tr><td>3</td><td><strong>Held-case evidence</strong></td><td>POST /holds/evidence-check — once per run</td><td>A message attached to a held case that the hold&#x27;s own scope does not cover</td></tr><tr><td>4</td><td><code>GET /holds/check</code></td><td>Synchronous, per message</td><td>The backstop for anything neither run-level answer expressed</td></tr><tr><td>5</td><td><code>AND on_hold = false</code></td><td>Inside the DELETE statement</td><td>A hold placed <em>after</em> the check, milliseconds before the write</td></tr></tbody></table>
+<p>Only the fifth is evaluated atomically with the write, which is why it exists even though four checks already passed. A message refused there is recorded as <code>SKIPPED_HOLD</code> and audited as <code>disposition.refused</code> — the demonstrable proof FR-4.6 asks for.</p>
+<p><strong>Why guard 2 exists.</strong> Guards 1, 3 and 4 all read per-message state, and FR-4.3 makes propagation asynchronous. Between an investigator placing a hold and every message in scope being flagged, every per-message signal correctly reports &#x27;not held&#x27;. A sweep landing in that window would destroy exactly the evidence the hold was placed to preserve. Guard 2 evaluates the hold&#x27;s <em>scope</em> — custodians, dates, case — so the hold is enough, expanded or not.</p>
+<ul><li><strong>Custodians match exactly, and an <em>empty</em> custodian set means every custodian</strong> — a hold placed without narrowing to people covers the whole corpus. If you mean &#x27;no one&#x27;, do not return the hold.</li><li><strong>Date ranges are exact and inclusive</strong>, either end may be unbounded.</li><li><strong>Search terms are not evaluated.</strong> This service has identities and timestamps, not bodies. A term-scoped hold therefore protects everything within its custodian and date range — over-protecting by design. Under-protecting means deleting evidence and being unable to say so; over-protecting means a message survives one cycle longer. Not comparable costs.</li></ul>
+<p><strong>Why guard 3 exists.</strong> A hold&#x27;s scope and a case&#x27;s contents are different sets. A hold is written as custodians plus dates, but FR-2.4 lets an investigator add <em>any</em> message to a case. A hold covering two custodians for 2019–2021 genuinely does not cover a 2024 message from a third custodian — and yet if a human pulled that message into the matter, deleting it destroys part of a production someone already selected. Scope alone would delete out-of-scope evidence; evidence alone would delete everything a broad custodian hold was placed to freeze before anyone reviewed it.</p>
+<div class="note"><strong>Evidence membership protects only while the case is under hold.</strong> A message in a case with no hold stays deletable — otherwise adding anything to any case would silently switch retention off for it, and retention would decay to nothing as the system got used.</div>
+<div class="note"><strong>Fail closed, and partial knowledge counts as no knowledge.</strong> <code>HoldContext</code> keeps &#x27;nothing is under hold&#x27; and &#x27;P4 could not be asked&#x27; as distinct states in the type, because an empty collection is the most dangerous available reading of a network error. If the scopes come back but the evidence check fails, the whole context is unavailable — knowing scopes but not evidence membership would let the sweep delete an out-of-scope evidence item with full confidence.</div>
+</section>
+<section id="p22">
+<h2><span class='num'>12</span>P2.2 — Retention and Disposition  :8087</h2>
+<p class="lede">Owns the retention policy, the sweep that destroys expired messages, and the ledger that proves what it did.</p>
+<ul><li>Reads the retention period per communication type from <strong>its own database</strong> (FR-5.1).</li><li>Asks P2&#x27;s archive for messages whose <code>sentAt</code> is past their type&#x27;s cutoff.</li><li>Checks every hold guard; skips anything covered.</li><li>Deletes the rest and records every decision — deleted, skipped, failed — in a ledger that outlives the messages themselves.</li></ul>
+<p>Eligibility is computed per run, never stored per message. Change a retention period and the next sweep picks it up with no backfill. The policy lives in the <code>retention_policies</code> table rather than <code>application.yml</code>, because a restart to change a number is not configurable in any useful sense, and a value that exists only in a container&#x27;s environment cannot be shown in the UI or audited when it changes.</p>
+<pre class="code">curl localhost:8087/retention/policies
+
+# ISO-8601 durations. P2555D = seven years, PT2M = two minutes.
+curl -X PUT &quot;localhost:8087/retention/policies/EMAIL?actor=saketh&quot; \
+  -H &#x27;Content-Type: application/json&#x27; -d &#x27;{&quot;period&quot;:&quot;PT2M&quot;}&#x27;</pre>
+<p><strong>How it deletes — the command/receipt loop.</strong> P2 owns the messages, and NFR-1 says one datastore one owner, so P2.2 does not write to them:</p>
+<pre class="diagram">P2.2 sweep ──DeleteCommand──▶ disposition.commands ──▶ P2 DispositionCommandListener
+                                                        ├ on_hold flag?       refuse
+                                                        ├ P4 held/unreachable? refuse
+                                                        └ otherwise           DELETE
+P2.2 DeleteReceiptListener ◀── disposition.results ◀──DeleteReceipt──┘</pre>
+<p>The sweep records <code>DELETE_REQUESTED</code>, which is all it can honestly claim at that moment — the message is not gone, it has been asked about. The receipt settles the row to what P2 actually did.</p>
+<table class=""><thead><tr><th>Receipt</th><th>Ledger becomes</th><th>Reading</th></tr></thead><tbody><tr><td>DELETED</td><td>DELETED</td><td>Gone, confirmed</td></tr><tr><td>REFUSED_HOLD</td><td>SKIPPED_HOLD</td><td>A hold landed between the check and the delete, and P2&#x27;s own guard caught it. The rarest and most reassuring outcome in the system</td></tr><tr><td>NOT_FOUND</td><td>DELETED</td><td>Already absent. The desired state holds; recording a failure would make the next run look like it is retrying something broken</td></tr><tr><td>FAILED</td><td>FAILED</td><td>Still there. The next sweep finds it expired again and retries</td></tr></tbody></table>
+<ul><li><strong>Settling is guarded.</strong> Only a row still awaiting a receipt can move, so a redelivered receipt on an at-least-once topic cannot turn a recorded refusal back into a deletion.</li><li><strong>A row still at DELETE_REQUESTED hours later means P2 is not consuming.</strong></li><li><strong>The sweep is deliberately not <code>@Transactional</code>.</strong> A rollback would erase the ledger record of deletions that already happened in P2&#x27;s database, which no transaction of ours can undo. The ledger has to survive the failure that makes it interesting.</li><li><strong>A second concurrent run is refused with 409, not queued.</strong> Two sweeps would evaluate the same candidates and race on the same rows, and whatever a dropped tick skipped is still expired at the next one.</li></ul>
+</section>
+<section id="p22-api">
+<h2><span class='num'>13</span>P2.2 — API and watching a sweep</h2>
+<table class=""><thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead><tbody><tr><td>POST /disposition/runs</td><td>Sweep now, synchronously. <code>?dryRun=true</code> decides everything, deletes nothing</td></tr><tr><td>POST /disposition/runs?async=true</td><td>202 with a QUEUED run id</td></tr><tr><td>GET /disposition/runs/stream</td><td>Live progress as server-sent events; closes when the run finishes</td></tr><tr><td>GET /disposition/runs/progress</td><td>The same snapshot, polled once</td></tr><tr><td>GET /disposition/runs · /runs/{id} · /runs/{id}/items</td><td>History, summary, per-message ledger. <code>?outcome=SKIPPED_HOLD</code> is the &#x27;what did holds save?&#x27; view</td></tr><tr><td>GET /disposition/messages/{messageId}</td><td>Every decision ever recorded about one message. <strong>Survives the message</strong></td></tr><tr><td>GET /disposition/cases/{caseId}/protected</td><td>Everything this case&#x27;s holds have saved, across every run</td></tr><tr><td>GET /retention/policies · PUT /retention/policies/{type}</td><td>Retention policy (FR-5.1)</td></tr><tr><td>GET /disposition/stats · /stats/candidates</td><td>Dashboard counts; what the next sweep would touch</td></tr></tbody></table>
+<p>A sweep makes one HTTP call to P4 per candidate and considers up to <code>batch-size</code> of them, so the synchronous form holds the connection for the length of the work — over the full corpus that is exactly the bulk operation NFR-3 says must not time out the UI. Start it asynchronously and watch it:</p>
+<pre class="code">curl -X POST &quot;localhost:8087/disposition/runs?async=true&amp;actor=sahithi&quot;
+curl -N localhost:8087/disposition/runs/stream
+
+event:progress
+data:{&quot;runId&quot;:&quot;37956dfd…&quot;,&quot;status&quot;:&quot;RUNNING&quot;,&quot;processed&quot;:3,&quot;total&quot;:5,
+      &quot;deleted&quot;:1,&quot;skippedHold&quot;:2,&quot;percent&quot;:60,&quot;terminal&quot;:false}</pre>
+<ul><li>The current snapshot is sent on connect, so a client attaching mid-sweep — or just after one finished — sees state immediately rather than an empty stream.</li><li>Progress is in memory and for the current run only. The ledger is the durable record; a per-message counter written to the chain-of-custody table would be write traffic for something nobody reads tomorrow.</li><li><code>blocking_hold_id</code> and <code>blocking_case_id</code> are <strong>copied onto the ledger row</strong>, not joined from P4, so the protection record outlives both the release of the hold and the closing of the case.</li></ul>
+<div class="note"><strong><code>/cases/{caseId}/protected</code> is the money endpoint for a demo.</strong> It answers &#x27;what did this hold actually save?&#x27; with per-message evidence, across every run, after the fact.</div>
+</section>
+<section id="p5">
+<h2><span class='num'>14</span>P5 — Evidence Export and Chain of Custody  :8085</h2>
+<p class="lede">Two responsibilities, one owner, one datastore: prove what happened (FR-7), and hand over a package that can be proven unaltered (FR-6).</p>
+<p><strong>Chain of custody.</strong> Every service publishes to <code>audit.events</code>; P5 is the only consumer and the only durable store. It is insert-only — there is no update or delete endpoint anywhere in the service, and that absence is the entire enforcement mechanism for FR-7.3.</p>
+<p><strong>Export, and why it can never produce a partial package:</strong></p>
+<ul><li><code>POST /exports</code> does the minimum synchronous work: validate, persist a QUEUED row, publish the job id, return 202 with a Location header. The build happens on the <code>export.jobs</code> consumer thread.</li><li><code>process</code> is idempotent against redelivery — a job already past QUEUED is left alone, so a rebalance cannot rebuild or clobber an existing package.</li><li>The packages bucket gains an object only once the whole package is built successfully <em>and</em> copied server-side from <code>export-staging</code> to <code>export-packages</code>. If anything fails before that copy, the job is FAILED, staged objects are discarded, and nothing ever appears under the job&#x27;s key.</li><li><code>POST /exports/{jobId}/retry</code> is accepted only for a FAILED job and starts the build over. It cannot duplicate or corrupt, because there is nothing to conflict with until the retry itself succeeds.</li></ul>
+<p><strong>Checksums — the part that makes it evidence rather than a zip file:</strong></p>
+<ul><li>Every attachment&#x27;s bytes are <strong>re-fetched from P2 and re-hashed</strong>, never trusted from the archive&#x27;s own metadata. If the fetched bytes do not match the recorded sha256, the export refuses outright — that is the chain of custody breaking.</li><li><code>manifest.json</code> inside the package lists every message and attachment with the checksum computed from the exact bytes written into the package.</li><li><code>GET /exports/{jobId}/verify</code> re-downloads the package and re-derives every checksum <strong>from its own bytes, with no call back to P2</strong>. That independence is what makes tampering detectable rather than merely claimed to be detectable.</li></ul>
+<pre class="code">JOB=$(curl -s -X POST localhost:8085/exports -H &#x27;Content-Type: application/json&#x27; \
+  -d &#x27;{&quot;caseId&quot;:&quot;demo&quot;,&quot;custodianId&quot;:&quot;cust-001&quot;}&#x27; | jq -r .jobId)
+curl -s localhost:8085/exports/$JOB          # QUEUED → RUNNING → COMPLETED
+curl -s localhost:8085/exports/$JOB/verify   # re-hash from the delivered bytes
+curl -s &quot;localhost:8085/audit?action=export.completed&quot;</pre>
+</section>
+<section id="topics">
+<h2><span class='num'>15</span>Kafka: the nine topics and what flows over them</h2>
+<table class=""><thead><tr><th>Topic</th><th>From → To</th><th>Carries</th><th>Parts</th></tr></thead><tbody><tr><td>messages.ingested</td><td>P1 → P2</td><td>Accepted, deduped, not yet stored</td><td>6</td></tr><tr><td>messages.archived</td><td>P2 → P3</td><td>Written to the archive, ready to index</td><td>6</td></tr><tr><td>holds.commands</td><td>P4 → its own workers</td><td>Fan-out over a hold scope too large to resolve synchronously</td><td>3</td></tr><tr><td>holds.events</td><td>P4 → P2, P3</td><td>A custodian or message came under hold, or came off it</td><td>3</td></tr><tr><td>disposition.commands</td><td>P2.2 → P2</td><td>One message past retention, to be removed. <strong>A request, not a warrant</strong></td><td>3</td></tr><tr><td>disposition.results</td><td>P2 → P2.2</td><td>What actually became of a DeleteCommand</td><td>3</td></tr><tr><td>cases.events</td><td>case-service → hold-service</td><td>Case created, transitioned, closed → release its holds</td><td>3</td></tr><tr><td>export.jobs</td><td>P5 → its own workers</td><td>One export job to build</td><td>3</td></tr><tr><td>audit.events</td><td>everyone → P5</td><td>Chain of custody</td><td>6</td></tr></tbody></table>
+<ul><li><strong>Auto-create is off.</strong> A typo fails loudly instead of quietly creating a one-partition topic nothing produces to. New topics go in <code>infra/kafka/create-topics.sh</code> <em>and</em> in <code>Topics.java</code>.</li><li><strong>Kafka advertises two listeners:</strong> <code>kafka:19092</code> for containers, <code>localhost:9092</code> for services run from your IDE. Use the right one for where the process actually lives.</li><li><strong>A Homebrew Kafka on 9092 is a silent disaster.</strong> Two brokers means your producer succeeds, your consumer receives nothing, and both configs look correct. <code>brew services stop kafka</code>.</li></ul>
+<div class="note"><strong><code>disposition.commands</code> is a loaded gun if you are not careful.</strong> During testing, a ten-second cron completed two sweeps of <code>candidates=500, deleted=499</code> before anyone could intervene. It was in KAFKA mode, so the commands were <em>published</em> rather than executed and the corpus survived — then sat on the topic waiting for whoever added P2&#x27;s consumer with <code>auto-offset-reset: earliest</code>. The topic had to be deleted and recreated. That consumer now exists, so the reprieve is gone: a stray command is a real deletion, subject only to P2&#x27;s hold guard.</div>
+</section>
+<section id="data">
+<h2><span class='num'>16</span>Datastores and who owns them</h2>
+<table class=""><thead><tr><th>Port</th><th>Store</th><th>Owner</th><th>Holds</th></tr></thead><tbody><tr><td>5437</td><td>PostgreSQL <code>ingestion</code></td><td>P1</td><td>message_id_map — the idempotency backstop</td></tr><tr><td>6379</td><td>Redis</td><td>P1</td><td>Dedupe keys, 7-day TTL. Fails open</td></tr><tr><td>27017</td><td>MongoDB <code>archive</code></td><td>P2</td><td>Message content, attachment bytes included</td></tr><tr><td>5433</td><td>PostgreSQL <code>archive</code></td><td>P2</td><td>message_hold_status — hold state + retention bookkeeping only</td></tr><tr><td>9200</td><td>Elasticsearch</td><td>P3</td><td>communications, search-history, saved-searches</td></tr><tr><td>5434</td><td>PostgreSQL <code>cases</code></td><td>P4 case</td><td>Cases, custodians, evidence items</td></tr><tr><td>5436</td><td>PostgreSQL <code>holds</code></td><td>P4 hold</td><td>Holds and hold_coverage</td></tr><tr><td>5435</td><td>PostgreSQL <code>audit</code></td><td>P5</td><td>Audit log (insert-only) and export jobs</td></tr><tr><td>9000</td><td>MinIO</td><td>P5</td><td>export-staging, export-packages, archive-attachments</td></tr><tr><td>5438</td><td>PostgreSQL <code>disposition</code></td><td>P2.2</td><td>Retention policies, runs, the per-message ledger</td></tr></tbody></table>
+<ul><li><strong>Schema comes from Flyway migrations, never from Hibernate.</strong> <code>ddl-auto</code> stays at <code>validate</code>, so booting the context is itself an assertion that migrations and entities agree.</li><li><strong>Inside the compose network every Postgres is on 5432.</strong> Only the <em>host</em> ports differ, so no service&#x27;s connection string ever moved when they were renumbered.</li><li><strong><code>down -v</code> deletes your data. Plain <code>down</code> keeps the volumes.</strong></li></ul>
+<div class="note"><strong>The two host ports that catch people out: 5437 and 5438.</strong> 5437 belonged to disposition before P1 gained a database and took it; disposition moved to 5438. A branch that predates the move will quietly point P2.2 at P1&#x27;s Postgres — and it will start, because the failure is semantic rather than a connection error.</div>
+</section>
+<section id="frontend">
+<h2><span class='num'>17</span>The frontend: designed around services being down</h2>
+<p class="lede">Angular on :4200, five pages, talking to seven ports. It works with any subset of the services running, including none.</p>
+<table class=""><thead><tr><th>Page</th><th>Route</th><th>Reads</th></tr></thead><tbody><tr><td>Dashboard</td><td>/home</td><td>All of them, for counts and recent activity</td></tr><tr><td>Search</td><td>/search</td><td>P3 :8083</td></tr><tr><td>Cases &amp; Legal Hold</td><td>/cases</td><td>P4 case :8084, P4 hold :8086, P2.2 :8087</td></tr><tr><td>Retention &amp; Disposition</td><td>/retention</td><td>P2.2 :8087, P2 :8082</td></tr><tr><td>Exports &amp; Audit</td><td>/export-audit</td><td>P5 :8085, P4 case :8084</td></tr></tbody></table>
+<ul><li><strong>One request per panel, and the panel owns its failure.</strong> Every region is an <code>&lt;app-panel&gt;</code> wrapping one <code>httpResource</code>, rendering its own loading, error and retry. Six panels against three services means five working and one explaining itself. No global error handler, no toast.</li><li><strong>No route resolvers.</strong> A resolver fetches before activating a route, so one slow service would hold up a page whose other panels are fine.</li><li><strong>Everything has a deadline.</strong> 8 seconds by default, 3 for search, 30 for package verification because it re-hashes a zip. A service that is <em>down</em> fails in milliseconds; one that is <em>wedged</em> holds a spinner forever.</li><li><strong>Live progress degrades to polling.</strong> A sweep&#x27;s SSE stream that fails before delivering anything falls back to <code>/disposition/runs/progress</code>, so a buffering proxy costs latency rather than the progress bar.</li></ul>
+<div class="note"><strong>&#x27;Empty&#x27; and &#x27;could not ask&#x27; are never the same thing.</strong> This is a correctness property, not a UX one. Upstream, an unreachable hold-service means <em>held</em> — both P2 and P2.2 fail closed. So a hold panel rendering a failed request as &#x27;no holds are in force&#x27; would state the exact inverse of what the system is acting on. <code>failure.ts</code> classifies a refused connection as <em>unreachable</em> and names the service and port.</div>
+<div class="note"><strong><code>Resource.value()</code> throws in the error state, and <code>defaultValue</code> does not cover it</strong> — it only covers idle and loading. Angular instantiates projected content eagerly, so a panel&#x27;s table is evaluated while the panel is showing a failure, and the throw blanks the whole page. Every list goes through <code>valueOr()</code>, and <code>pages.spec.ts</code> mounts every page with every service down to keep it that way. This has been introduced three times.</div>
+<p><strong>CORS is two settings, not one.</strong> Every service allows any loopback port in its own <code>CorsConfig</code> — do not pin 4200, because an IDE preview pane and <code>ng serve --port 4201</code> are different origins. Actuator endpoints use a <em>separate handler mapping</em> that ignores <code>addCorsMappings</code>, so <code>management.endpoints.web.cors</code> is set in every <code>application.yml</code> too. Miss that one and the status strip shows every service DOWN while every panel loads fine.</p>
+</section>
+<section id="corpus">
+<h2><span class='num'>18</span>The corpus, and the traps it plants on purpose</h2>
+<p>There is no real communications source, so the corpus is generated — deterministically, and seeded with cases that make specific bugs visible instead of silent.</p>
+<table class=""><thead><tr><th>#</th><th>Planted case</th><th>The bug it exposes</th></tr></thead><tbody><tr><td>1</td><td>25 deliberate re-sends at the end of the file</td><td>A load that stores 12,025 has broken dedupe. Posting the file twice must still leave 12,000</td></tr><tr><td>2</td><td>The same conversation captured from <strong>two mailboxes</strong></td><td>Any dedupe keyed on body hash, or on from+subject+sentAt, collapses them and destroys evidence. Planted on the smoking-gun message so the demo breaks loudly</td></tr><tr><td>3</td><td>A PRIVILEGED-labelled thread</td><td>Gives the search filter something real to exclude</td></tr><tr><td>4</td><td>2,115 messages past the 7-year default, under custodians who later go on hold</td><td>Gives disposition something to delete and the hold guard something to refuse</td></tr></tbody></table>
+<p><strong>Project Halyard</strong> — the demo narrative, planted across 7 threads in 2024. Meridian Dynamics bids for the Northgate transit contract, obtains the incumbent&#x27;s indicative figures through a recent hire, prices just underneath, wins, and is then asked to &#x27;do some housekeeping&#x27; on the evidence. Legal is looped in late, and that exchange is privileged.</p>
+<ul><li>Principals: Dana Whitfield (cust-001), Marcus Ellery (cust-002), Priya Raghunathan (cust-003), Owen Castellanos (cust-004), Renee Toussaint (cust-005).</li><li>Searching <code>Halyard</code> surfaces the spine of it — 8 mentions.</li><li>The centrepiece for export and checksum verification is <code>bridgeline-indicative-figures.csv</code>.</li><li>The smoking gun — subject <code>Housekeeping</code>, 11 May 2024 21:37 UTC — was sent at the weekend and <strong>exists in two mailboxes</strong>.</li></ul>
+<p>That narrative is why the demo has something specific to point at in every step: generate → ingest → search → create case → place hold → prove deletion is blocked → export → verify checksums → show the audit trail.</p>
+</section>
+<section id="running">
+<h2><span class='num'>19</span>Running it — two modes, and when to use each</h2>
+<p><strong>Everything in Docker.</strong> One command, nothing installed but Docker. Best for a demo, a clean-machine check, or sharing a stack.</p>
+<pre class="code">docker compose --profile app up -d --build
+# builds 8 images, starts 20 containers, UI on http://localhost:4200</pre>
+<p><strong>Datastores in Docker, services from jars.</strong> Best when you are editing code: a change costs a restart instead of an image rebuild, and you can attach a debugger.</p>
+<pre class="code">docker compose up -d          # datastores only
+./infra/smoke-test.sh         # reachable *from the host* — where your jar runs
+mvn -q package -DskipTests
+
+for s in ingestion storage search case hold export disposition; do
+  java -jar services/$s-service/target/$s-service-0.1.0-SNAPSHOT.jar &amp;
+done
+
+cd frontend &amp;&amp; npm start      # ng serve, live reload</pre>
+<p>Load the corpus once P1 is up — 12,000 messages, about 90 seconds through Kafka into P2 and P3:</p>
+<pre class="code">curl -F &quot;file=@tools/corpus-generator/fixtures/messages.ndjson&quot; \
+  &quot;http://localhost:8081/messages/upload?async=true&quot;</pre>
+<div class="note"><strong><code>smoke-test.sh</code> checks the host ports specifically</strong>, and that is the point. A container reporting healthy only proves it can talk to itself. A container can be healthy with its port <em>unpublished</em> — if a bind loses a race, <code>docker port</code> prints nothing while every jar dies on &#x27;connection refused&#x27;. <code>docker restart</code> does not repair it; <code>docker compose up -d --force-recreate &lt;svc&gt;</code> does, and the named volume means no data is lost.</div>
+</section>
+<section id="sharing">
+<h2><span class='num'>20</span>Sharing one stack — and the delete button you are sharing with it</h2>
+<p>Nothing syncs between machines. <code>docker compose up</code> on a second laptop creates a second, empty set of databases in its own volumes — Docker packages services, it does not connect hosts. A case is shared only because everybody is pointed at the one machine that owns it.</p>
+<pre class="code">docker compose up -d &lt;datastores&gt;
+./infra/serve-lan.sh          # prints the URL to hand round</pre>
+<ul><li><code>frontend/public/api-config.js</code> derives the service host from <code>window.location.hostname</code>, so a visitor&#x27;s browser calls the host&#x27;s services instead of their own empty machine.</li><li><code>DISCOVERYHUB_WEB_CORS_ALLOWED_ORIGINS</code> adds the host&#x27;s LAN address to the allowed origins — one variable covers both the panels and the actuator status strip.</li></ul>
+<div class="note"><strong>Sharing the link shares the delete button.</strong> The retention page runs a real sweep. This has already happened once: a MANUAL, non-dry-run sweep took 486 messages out of the archive, and holds saved only the 14 they covered. The deletion is permanent, and P1 refuses the re-upload as duplicate because dedupe outlives the message. Restoring means clearing Redis <em>and</em> deleting the orphaned <code>message_id_map</code> rows in postgres-ingestion, then re-uploading.</div>
+<p>There is no configuration that makes this safe. <code>schedule.enabled</code> is already false and that only stops the <em>timer</em> — <code>POST /disposition/runs</code> still sweeps on demand, which is exactly what the button does. <code>dryRun</code> is a query parameter on the request, not a setting, so nothing on the host can force it. There is also no authentication anywhere in the stack: whoever can reach the port can delete a case. Say so before handing the URL round, and keep it on a network you trust.</p>
+</section>
+<section id="traps">
+<h2><span class='num'>21</span>Traps that have already cost real time</h2>
+<table class=""><thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead><tbody><tr><td>You edit a component and nothing changes</td><td>The <code>discoveryhub-frontend</code> container serves a stale prebuilt dist on <code>[::]:4200</code> while ng serve binds <code>127.0.0.1:4200</code>; both start happily</td><td><code>docker stop discoveryhub-frontend</code> before <code>ng serve</code></td></tr><tr><td>Health checks pass but you are debugging the wrong process</td><td>A service whose port was taken logged APPLICATION FAILED TO START and exited; something else answers that port</td><td><code>lsof -nP -iTCP:8086 -sTCP:LISTEN</code>, compare the PID&#x27;s start time</td></tr><tr><td>Every service dies on &#x27;connection refused&#x27; to a healthy container</td><td>The port bind lost a race; the container is healthy with its port unpublished</td><td><code>docker compose up -d --force-recreate &lt;svc&gt;</code></td></tr><tr><td>Status strip shows every service DOWN, every panel loads fine</td><td>Actuator has its own CORS handler mapping</td><td>Set <code>management.endpoints.web.cors</code> too</td></tr><tr><td>The whole page blanks</td><td><code>Resource.value()</code> threw in the error state inside eagerly-instantiated projected content</td><td>Route every list through <code>valueOr()</code></td></tr><tr><td>Producer succeeds, consumer receives nothing, both configs look right</td><td>A Homebrew Kafka is also on 9092</td><td><code>brew services stop kafka</code></td></tr><tr><td>Writes succeed but the data is nowhere</td><td><code>spring.data.mongodb</code> instead of <code>spring.mongodb</code> under Boot 4.1 — lands in the fallback <code>test</code> database</td><td>Rename the prefix</td></tr><tr><td>Search returns messages the archive does not have</td><td>A sweep deletes from P2 without removing the document from P3</td><td>Rebuild the index</td></tr></tbody></table>
+<div class="note"><strong>A sweep that deleted nothing is not evidence that holds work.</strong> Every hold path fails closed, so an unreachable or misconfigured P4 produces the <em>exact same result</em> as holds doing their job: every candidate skipped, refusals throughout the audit trail, no errors anywhere. Before believing a quiet sweep, check <code>holdScopeAvailable</code> in the candidates preview and P2&#x27;s logs for <code>hold check failed</code>. The first end-to-end run of the delete loop refused all five test messages for exactly this reason — <code>CASES_BASE_URL</code> was unset in P2&#x27;s container.</div>
+<ul><li><strong>We do not inherit <code>spring-boot-starter-parent</code></strong>, so its defaults are missing and each absence fails late, looking like something else. Three so far: the <code>repackage</code> goal unbound (&#x27;no main manifest attribute&#x27;), <code>spring-boot-flyway</code> absent so migrations silently never ran, and <code>-parameters</code> off so every <code>@PathVariable</code> threw a 500 at request time. Expect more of the same shape.</li><li><strong>Spring Boot 4 splits auto-configuration into per-technology modules.</strong> A library on the classpath is not enough — check it is actually <em>doing</em> something, not merely present. <code>DataSourceProperties</code> also moved package, and the failure is a bare &#x27;cannot find symbol&#x27; that looks like a missing dependency.</li><li><strong>Declaring a <code>DataSource</code> bean disables Boot&#x27;s datasource auto-configuration entirely</strong>, so both of P2.2&#x27;s datasources must be declared by hand. Omitting <code>@Primary</code> surfaces as an <code>EntityManagerFactory</code> failure mentioning nothing about datasources.</li></ul>
+</section>
+<section id="testing">
+<h2><span class='num'>22</span>Testing and verification</h2>
+<pre class="code">mvn -q package -DskipTests      # build all modules
+mvn package                     # build and run every test
+cd frontend &amp;&amp; npm run check    # ng build &amp;&amp; ng test --no-watch
+./infra/smoke-test.sh           # datastores reachable from the host</pre>
+<div class="note"><strong>Java tests log ERROR lines on purpose</strong> — several assert failure paths (&#x27;archive unreachable&#x27;, &#x27;P2 unreachable&#x27;, a deliberately injected broker failure). Grep for <code>BUILD SUCCESS</code>, not for the absence of errors.</div>
+<table class=""><thead><tr><th>Test</th><th>What it actually proves</th></tr></thead><tbody><tr><td>DispositionIntegrationTest</td><td>The sweep against two real Postgres instances via Testcontainers. Booting the context is itself the assertion that Flyway and the entities agree under <code>ddl-auto: validate</code></td></tr><tr><td>DeleteLoopKafkaIntegrationTest</td><td>The delete loop against a real broker. The test plays P2: consumes the command, answers with a receipt, asserts the ledger settles — and that a redelivered receipt cannot rewrite it</td></tr><tr><td>DispositionCommandIntegrationTest</td><td>P2&#x27;s half: a command on the topic, a row gone from a real archive, a receipt back — and a held message still there</td></tr><tr><td>JdbcMessageDeleterTest</td><td><code>AND on_hold = false</code> enforced by a real database (H2 with P2&#x27;s own DDL). No amount of mocking would show that it works</td></tr><tr><td>…BeforeP4HasExpandedIt</td><td>The propagation window — guard 2</td></tr><tr><td>…EvenWhenItIsOutsideThatHoldsScope</td><td>The scope-versus-contents gap — guard 3</td></tr><tr><td>pages.spec.ts</td><td>Every page mounted with <strong>every</strong> service down, asserting it still renders and names what is missing</td></tr><tr><td>resilience.spec.ts</td><td>One service failing leaves the others resolved; a failed panel recovers on reload</td></tr></tbody></table>
+<p>One detail worth copying: <code>DispositionIntegrationTest</code> builds the archive schema from <strong>P2&#x27;s own migration file</strong>, read out of <code>services/storage-service</code>, rather than from a copy. <code>JdbcArchiveGateway</code> hand-writes SQL against another service&#x27;s table, so the failure it is exposed to is P2 renaming a column — which compiles fine and breaks at run time. A copied fixture would keep passing after such a rename; the real file means the build breaks the moment the contract does.</p>
+</section>
+<section id="state">
+<h2><span class='num'>23</span>Current state of your running stack</h2>
+<p>Observed live on 2026-09-14, with all 20 containers up via <code>--profile app</code>:</p>
+<table class=""><thead><tr><th>Observation</th><th>Value</th><th>Reading</th></tr></thead><tbody><tr><td>Messages in the archive (Mongo)</td><td>8,495</td><td>Below 12,000 — sweeps have run</td></tr><tr><td>Documents in the Elasticsearch index</td><td>12,009</td><td><strong>Drifted from the archive</strong></td></tr><tr><td>Disposition runs recorded</td><td>13</td><td>totalDeleted 28, totalSkippedByHold 0</td></tr><tr><td>Candidates in the next sweep</td><td>0</td><td>The expired backlog has already been swept</td></tr><tr><td>Retention periods in force</td><td>EMAIL PT61320H (7y), CHAT PT26280H (3y)</td><td>Defaults, unmodified</td></tr><tr><td>holdScopeAvailable</td><td>true</td><td>P4 is reachable — a quiet sweep would be genuine</td></tr><tr><td>Delete mode / hold check</td><td>KAFKA / required</td><td>The safe configuration</td></tr><tr><td>Active holds</td><td>0</td><td>Nothing is currently protected</td></tr></tbody></table>
+<div class="note"><strong>The 8,495 / 12,009 gap is the known P2↔P3 drift</strong>, not something you broke. A sweep deletes from the archive without removing the document from the search index, so Elasticsearch keeps returning hits for messages P2 no longer holds. Expect &#x27;message not found&#x27; on some search results until the index is rebuilt.</div>
+<p>One documentation discrepancy worth knowing, since it would mislead you: <code>frontend/README.md</code> states that <code>GET /holds/active</code> and <code>POST /holds/evidence-check</code> <em>do not exist</em> and that hold-service answers 404 and 405. That is stale. Both were verified answering 200 on your stack, and <code>holdScopeAvailable</code> reads <code>true</code>. The root README and <code>DISPOSITION.md</code> are correct; the frontend README is behind.</p>
+</section>
+<section id="demo">
+<h2><span class='num'>24</span>A demo script that exercises the whole system</h2>
+<p>Each step proves a different requirement, and the Halyard narrative gives every one of them something specific to point at.</p>
+<table class=""><thead><tr><th>#</th><th>Step</th><th>What it proves</th></tr></thead><tbody><tr><td>1</td><td>Upload <code>messages.ndjson</code>; watch accepted 12,000 / duplicates 25</td><td>FR-1.6 dedupe, at scale</td></tr><tr><td>2</td><td>Post the identical file again — zero new messages</td><td>Idempotency is real, not claimed</td></tr><tr><td>3</td><td>Search <code>Halyard</code></td><td>FR-3 index, and the narrative&#x27;s spine</td></tr><tr><td>4</td><td>Open the Housekeeping message — two copies, two custodians</td><td>Content-hash dedupe did <em>not</em> collapse them</td></tr><tr><td>5</td><td>Create a case, add those results as evidence</td><td>FR-2.4, and the &#x27;queued&#x27; honesty of async filing</td></tr><tr><td>6</td><td>Place a hold on a custodian; watch RESOLVING → ACTIVE</td><td>FR-4.3 asynchronous propagation</td></tr><tr><td>7</td><td><code>DELETE /messages/{id}</code> on a held message → 409</td><td>FR-4.6, demonstrably</td></tr><tr><td>8</td><td>Drop EMAIL retention to PT2M, run <code>?dryRun=true</code></td><td>FR-5.1 runtime policy, and the blast radius before it happens</td></tr><tr><td>9</td><td>Run the sweep for real; inspect <code>/runs/{id}/items?outcome=SKIPPED_HOLD</code></td><td>FR-5.3 ledger, and what holds saved</td></tr><tr><td>10</td><td><code>/disposition/cases/{caseId}/protected</code></td><td>The protection record, after the fact</td></tr><tr><td>11</td><td>Export the case; poll to COMPLETED; <code>/verify</code></td><td>FR-6.3/6.5 checksums re-derived from delivered bytes</td></tr><tr><td>12</td><td><code>GET /audit</code> filtered by action</td><td>FR-7 chain of custody, insert-only</td></tr></tbody></table>
+<div class="note"><strong>Stop hold-service before step 9 and run it again.</strong> Every candidate is skipped and the audit fills with refusals — identical to holds working perfectly. Then show <code>holdScopeAvailable: false</code> in the candidates preview, which is the only thing that tells the two apart. That contrast is the single best demonstration of the system&#x27;s central design decision.</div>
+</section>
+<section id="closing">
+<h2><span class='num'>25</span>Design decisions worth defending</h2>
+<ul><li><strong>Fail closed, everywhere, without exception.</strong> An unreachable hold service means <em>held</em>. Five redundant guards stand between a candidate and deletion, and only the last is atomic with the write — which is exactly why it exists.</li><li><strong>&#x27;Empty&#x27; and &#x27;could not ask&#x27; are different facts</strong>, kept apart in the type system (<code>HoldContext</code>), in the UI (<code>failure.ts</code>), and in the ledger (<code>hold_scope_available</code>). Collapsing them is the most dangerous available reading of a network error.</li><li><strong>One datastore, one owner.</strong> P2.2 decides what is past retention; P2 decides whether to act and re-checks holds against data it owns. Neither half can be wrong on its own, and with P2 down the commands simply queue.</li><li><strong>Derived identifiers, not random ones.</strong> The same corpus on five laptops produces five identical sets of ids, which is what makes fixtures and demo scripts portable at all.</li><li><strong>Record the honest claim, then settle it.</strong> A sweep records DELETE_REQUESTED because that is all it knows; the receipt settles it to what actually happened. The ledger outlives the message.</li><li><strong>Insert-only is enforced by absence.</strong> There is no update or delete endpoint in the audit service. That is the whole mechanism, and it is stronger than a permission check.</li><li><strong>The UI tells the truth about asynchrony.</strong> &#x27;Resolving&#x27;, not a reassuring count of zero. &#x27;Queued&#x27;, not &#x27;added&#x27;. A hold whose custodian scope never reaches the wire is named as such rather than rendered as an empty list.</li></ul>
+<div class="note">The thread running through all of it: this is a system whose worst failure is not downtime but <em>quiet, confident, incorrect action</em>. Almost every design decision above trades availability or convenience for the ability to say, afterwards and with evidence, exactly what happened.</div>
+</section>
+</body></html>
