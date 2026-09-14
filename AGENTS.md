@@ -76,6 +76,14 @@ Two things make that work, and both are configuration rather than code:
 - `DISCOVERYHUB_WEB_CORS_ALLOWED_ORIGINS` adds the host's LAN address to the allowed origins.
   `@Value` and the actuator placeholder both resolve it from the environment, so the one variable
   covers the panels and the status strip. No `CorsConfig` needs editing.
+- `MINIO_PUBLIC_ENDPOINT` is the host P5 signs the export download link *for*. `serve-lan.sh`
+  sets it to the LAN address; with `--profile app` it defaults to `localhost:9000` and has to be
+  passed explicitly if anyone else is downloading. The presigned signature covers the `host`
+  header, so a link minted for the wrong host cannot be fixed by rewriting it — the browser gets
+  `SignatureDoesNotMatch`, or a DNS failure if the name was `minio`. Note also that presigning
+  only stays local because the region is pinned (`MINIO_REGION`, default `us-east-1`); unset, the
+  SDK calls `GetBucketLocation` on an endpoint it may well be unable to reach and the download
+  500s with a bare connection refused.
 
 **Sharing the link shares the delete button.** The retention page runs a real sweep, and on a
 shared host a visitor who clicks it destroys the host's data, not their own. This has already

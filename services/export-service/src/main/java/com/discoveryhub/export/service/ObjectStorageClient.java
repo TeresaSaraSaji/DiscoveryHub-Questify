@@ -9,6 +9,7 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.http.Method;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
@@ -26,10 +27,14 @@ import java.io.InputStream;
 public class ObjectStorageClient {
 
     private final MinioClient client;
+    private final MinioClient presigningClient;
     private final ObjectStorageProperties props;
 
-    public ObjectStorageClient(MinioClient client, ObjectStorageProperties props) {
+    public ObjectStorageClient(MinioClient client,
+                               @Qualifier("presigningMinioClient") MinioClient presigningClient,
+                               ObjectStorageProperties props) {
         this.client = client;
+        this.presigningClient = presigningClient;
         this.props = props;
     }
 
@@ -92,10 +97,17 @@ public class ObjectStorageClient {
         }
     }
 
-    /** An expiring download link (FR-6.4) — never a permanent one, since packages can be re-run. */
+    /**
+     * An expiring download link (FR-6.4) — never a permanent one, since packages can be re-run.
+     *
+     * <p>Signed by {@code presigningClient}, which is pointed at the endpoint a <i>browser</i>
+     * can reach rather than the one this service uses. In Docker those differ, and the signature
+     * commits to the {@code host} header, so a link minted against {@code http://minio:9000} is
+     * unusable off the compose network and cannot be repaired by rewriting the hostname.
+     */
     public String presignedDownloadUrl(String key) {
         try {
-            return client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return presigningClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(props.packagesBucket())
                     .object(key)
